@@ -1,0 +1,30 @@
+MONGODB ATLAS SETUP GUIDE
+=========================
+
+1. LOGIN: https://cloud.mongodb.com
+   - Use your MongoDB credentials
+
+2. NAVIGATE to IP Whitelist:
+   - Left Sidebar: Click "Security"
+   - Then click: "Database & Network Access"
+
+3. CHECK Current IPs:
+   - Look at the table
+   - You need either:
+     * 0.0.0.0/0 (Allow from anywhere)
+     * OR your specific IP address
+
+4. ADD IP if missing:
+   - Click GREEN "Add IP Address" button
+   - Click "Allow Access from Anywhere"
+   - Click "Confirm"
+
+5. WAIT 3 minutes
+
+6. TEST Connection:
+   python backend/test_mongo_final.py
+
+Common Issues:
+- Forgot to click "Confirm"
+- Didn't wait long enough
+- Wrong MongoDB account
