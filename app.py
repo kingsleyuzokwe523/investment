@@ -29,6 +29,34 @@ CORS(app, supports_credentials=True, origins=[
     "https://investment-gto3.onrender.com"
 ])
 
+
+# ==================== ADD THESE EXPLICIT CORS HEADERS ====================
+@app.after_request
+def after_request(response):
+    """Add CORS headers to all responses"""
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        'http://localhost:5000',
+        'http://127.0.0.1:5000',
+        'https://velox-trades.onrender.com',
+        'https://investment-gto3.onrender.com'
+    ]
+
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+
+    # Handle preflight requests
+    if request.method == 'OPTIONS':
+        response.status_code = 200
+
+    return response
+
+
+# ==========================================================================
+
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
