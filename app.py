@@ -19,38 +19,21 @@ import atexit
 load_dotenv()
 
 app = Flask(__name__, static_folder='static', template_folder='static')
+# At the top with other imports
+from flask_cors import CORS
 
-# CORS Configuration with production URLs
+# After creating your app
+app = Flask(__name__, static_folder='static', template_folder='static')
+
+# CORS Configuration - SINGLE SOURCE OF TRUTH
 CORS(app, supports_credentials=True, origins=[
     "http://localhost:5000",
     "http://127.0.0.1:5000",
-    "https://frontend-ugb2.onrender.com",  # ✅ FIXED: Removed extra 'm'
+    "https://frontend-ugb2.onrender.com",
     "https://investment-gto3.onrender.com"
 ])
 
-# ==================== ADD THESE EXPLICIT CORS HEADERS ====================
-@app.after_request
-def after_request(response):
-    """Add CORS headers to all responses"""
-    origin = request.headers.get('Origin')
-    allowed_origins = [
-        'http://localhost:5000',
-        'http://127.0.0.1:5000',
-        'https://frontend-ugb2.onrender.com',
-        'https://investment-gto3.onrender.com'
-    ]
-
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-
-    # Handle preflight requests
-    if request.method == 'OPTIONS':
-        response.status_code = 200
-
-    return response
+# NO ADDITIONAL CORS HEADERS ANYWHERE IN THE FILE
 # ==========================================================================
 
 # Configuration
@@ -179,7 +162,9 @@ def get_user_from_request():
         return user
     except Exception:
         return None
-
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    return register()  # Call the existing register function
 def require_admin(f):
     def decorated_function(*args, **kwargs):
         user = get_user_from_request()
