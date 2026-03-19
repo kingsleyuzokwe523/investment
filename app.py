@@ -26,7 +26,7 @@ CORS(app, supports_credentials=True, origins=[
     "http://localhost:5000",
     "http://127.0.0.1:5000",
     "https://velox-trades.onrender.com",
-    "https://investment-gto3.onrender.com"
+    "https://frontend-ugb2.onrender.comm"
 ])
 
 
@@ -38,7 +38,7 @@ def after_request(response):
     allowed_origins = [
         'http://localhost:5000',
         'http://127.0.0.1:5000',
-        'https://velox-trades.onrender.com',
+        'https://frontend-ugb2.onrender.com',
         'https://investment-gto3.onrender.com'
     ]
 
@@ -68,7 +68,7 @@ app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb68
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
 # Production URLs
-FRONTEND_URL = 'https://velox-trades.onrender.com'
+FRONTEND_URL = 'https://frontend-ugb2.onrender.com'
 BACKEND_URL = 'https://investment-gto3.onrender.com'
 
 # Session configuration
