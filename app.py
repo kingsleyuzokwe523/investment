@@ -497,7 +497,525 @@ def handle_options_request():
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
         return response
+# ==================== ADMIN API ENDPOINTS (ADD THESE) ====================
 
+@app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_users():
+    """Get all users with pagination and search"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        search = request.args.get('search', '')
+        
+        skip = (page - 1) * limit
+        
+        query = {}
+        if search:
+            query['$or'] = [
+                {'username': {'$regex': search, '$options': 'i'}},
+                {'email': {'$regex': search, '$options': 'i'}},
+                {'full_name': {'$regex': search, '$options': 'i'}}
+            ]
+        
+        total = users_collection.count_documents(query)
+        users = list(users_collection.find(
+            query,
+            {'password': 0}
+        ).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for user in users:
+            user['_id'] = str(user['_id'])
+            if user.get('created_at'):
+                user['created_at'] = user['created_at'].isoformat()
+            if user.get('last_login'):
+                user['last_login'] = user['last_login'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'users': users,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit
+            }
+        })
+    except Exception as e:
+        print(f"❌ Admin users error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/users/<user_id>', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_user(user_id):
+    """Get single user details"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        user = users_collection.find_one(
+            {'_id': ObjectId(user_id)},
+            {'password': 0}
+        )
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        user['_id'] = str(user['_id'])
+        if user.get('created_at'):
+            user['created_at'] = user['created_at'].isoformat()
+        if user.get('last_login'):
+            user['last_login'] = user['last_login'].isoformat()
+        
+        # Get user's recent transactions
+        transactions = list(transactions_collection.find(
+            {'user_id': user_id}
+        ).sort('created_at', -1).limit(20))
+        
+        for tx in transactions:
+            tx['_id'] = str(tx['_id'])
+            if tx.get('created_at'):
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'user': user,
+                'transactions': transactions
+            }
+        })
+    except Exception as e:
+        print(f"❌ Get user error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
+@require_admin
+def adjust_user_balance(user_id):
+    """Manually adjust user balance"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        admin = get_user_from_request()
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        reason = data.get('reason', 'Manual adjustment')
+        
+        if amount == 0:
+            return jsonify({'success': False, 'message': 'Amount cannot be zero'}), 400
+        
+        # Update user balance
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$inc': {'wallet.balance': amount}}
+        )
+        
+        # Create transaction record
+        transaction = {
+            'user_id': user_id,
+            'type': 'admin_credit' if amount > 0 else 'admin_debit',
+            'amount': amount,
+            'status': 'completed',
+            'description': f'{reason} (by admin)',
+            'admin_id': str(admin['_id']),
+            'created_at': datetime.utcnow()
+        }
+        transactions_collection.insert_one(transaction)
+        
+        # Notify user
+        create_notification(
+            ObjectId(user_id),
+            'Balance Updated',
+            f'Your balance has been {"credited" if amount > 0 else "debited"} by ${abs(amount):,.2f}. Reason: {reason}',
+            'info'
+        )
+        
+        return jsonify({'success': True, 'message': 'Balance adjusted successfully'})
+    except Exception as e:
+        print(f"❌ Balance adjustment error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/users/<user_id>/toggle-ban', methods=['POST', 'OPTIONS'])
+@require_admin
+def toggle_user_ban(user_id):
+    """Ban or unban a user"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        admin = get_user_from_request()
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        new_status = not user.get('is_banned', False)
+        
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$set': {'is_banned': new_status}}
+        )
+        
+        action = 'banned' if new_status else 'unbanned'
+        
+        # Notify user
+        create_notification(
+            ObjectId(user_id),
+            f'Account {action.capitalize()}',
+            f'Your account has been {action} by an administrator.',
+            'warning'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'User {action} successfully'
+        })
+    except Exception as e:
+        print(f"❌ Toggle ban error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/users/<user_id>/reset-password', methods=['POST', 'OPTIONS'])
+@require_admin
+def reset_user_password(user_id):
+    """Reset user password (admin only)"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        admin = get_user_from_request()
+        data = request.get_json()
+        new_password = data.get('new_password')
+        
+        if not new_password or len(new_password) < 6:
+            return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+        
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$set': {'password': hash_password(new_password)}}
+        )
+        
+        # Notify user
+        create_notification(
+            ObjectId(user_id),
+            'Password Reset',
+            'Your password has been reset by an administrator.',
+            'warning'
+        )
+        
+        return jsonify({'success': True, 'message': 'Password reset successfully'})
+    except Exception as e:
+        print(f"❌ Reset password error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_stats():
+    """Get admin dashboard statistics"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        total_users = users_collection.count_documents({})
+        total_deposits = payments_collection.count_documents({'payment_status': 'finished'})
+        total_deposit_amount = sum(p.get('amount', 0) for p in payments_collection.find({'payment_status': 'finished'}))
+        
+        total_withdrawals = withdrawals_collection.count_documents({'status': 'completed'})
+        total_withdrawal_amount = sum(w.get('amount', 0) for w in withdrawals_collection.find({'status': 'completed'}))
+        
+        total_investments = investments_collection.count_documents({})
+        active_investments = investments_collection.count_documents({'status': 'active'})
+        
+        pending_deposits = payments_collection.count_documents({'payment_status': 'waiting'})
+        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
+        
+        # Recent users for quick view
+        recent_users = list(users_collection.find(
+            {},
+            {'username': 1, 'full_name': 1, 'email': 1, 'created_at': 1, 'wallet': 1, 'is_banned': 1}
+        ).sort('created_at', -1).limit(10))
+        
+        for user in recent_users:
+            user['_id'] = str(user['_id'])
+            if user.get('created_at'):
+                user['created_at'] = user['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'total_users': total_users,
+                'total_deposits': total_deposits,
+                'total_deposit_amount': total_deposit_amount,
+                'total_withdrawals': total_withdrawals,
+                'total_withdrawal_amount': total_withdrawal_amount,
+                'total_investments': total_investments,
+                'active_investments': active_investments,
+                'pending_deposits': pending_deposits,
+                'pending_withdrawals': pending_withdrawals,
+                'recent_users': recent_users
+            }
+        })
+    except Exception as e:
+        print(f"❌ Admin stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_deposits():
+    """Get all deposits with pagination"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', '')
+        
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status and status != 'all':
+            query['payment_status'] = status
+        
+        total = payments_collection.count_documents(query)
+        deposits = list(payments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for dep in deposits:
+            dep['_id'] = str(dep['_id'])
+            # Get user info
+            user = users_collection.find_one(
+                {'_id': ObjectId(dep['user_id'])},
+                {'username': 1, 'email': 1}
+            )
+            dep['user'] = {
+                'username': user.get('username') if user else 'Unknown',
+                'email': user.get('email') if user else 'Unknown'
+            }
+            if dep.get('created_at'):
+                dep['created_at'] = dep['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'deposits': deposits,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit
+            }
+        })
+    except Exception as e:
+        print(f"❌ Admin deposits error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_withdrawals():
+    """Get all withdrawals with pagination"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', '')
+        
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status and status != 'all':
+            query['status'] = status
+        
+        total = withdrawals_collection.count_documents(query)
+        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for wd in withdrawals:
+            wd['_id'] = str(wd['_id'])
+            # Get user info
+            user = users_collection.find_one(
+                {'_id': ObjectId(wd['user_id'])},
+                {'username': 1, 'email': 1}
+            )
+            wd['user'] = {
+                'username': user.get('username') if user else 'Unknown',
+                'email': user.get('email') if user else 'Unknown'
+            }
+            if wd.get('created_at'):
+                wd['created_at'] = wd['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'withdrawals': withdrawals,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit
+            }
+        })
+    except Exception as e:
+        print(f"❌ Admin withdrawals error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
+@require_admin
+def process_withdrawal_request(withdrawal_id):
+    """Process (approve/reject) a withdrawal"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        admin = get_user_from_request()
+        data = request.get_json()
+        action = data.get('action')
+        transaction_id = data.get('transaction_id', '')
+        reason = data.get('reason', '')
+        
+        withdrawal = withdrawals_collection.find_one({'_id': ObjectId(withdrawal_id)})
+        if not withdrawal:
+            return jsonify({'success': False, 'message': 'Withdrawal not found'}), 404
+        
+        if withdrawal['status'] != 'pending':
+            return jsonify({'success': False, 'message': 'Withdrawal already processed'}), 400
+        
+        if action == 'approve':
+            withdrawals_collection.update_one(
+                {'_id': ObjectId(withdrawal_id)},
+                {
+                    '$set': {
+                        'status': 'completed',
+                        'processed_at': datetime.utcnow(),
+                        'processed_by': str(admin['_id']),
+                        'transaction_id': transaction_id
+                    }
+                }
+            )
+            
+            # Update user's pending withdrawal
+            users_collection.update_one(
+                {'_id': ObjectId(withdrawal['user_id'])},
+                {
+                    '$inc': {
+                        'wallet.pending_withdrawal': -withdrawal['amount'],
+                        'wallet.total_withdrawn': withdrawal['amount']
+                    }
+                }
+            )
+            
+            create_notification(
+                ObjectId(withdrawal['user_id']),
+                'Withdrawal Approved',
+                f'Your withdrawal request for ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.',
+                'success'
+            )
+            
+            message = 'Withdrawal approved successfully'
+            
+        elif action == 'reject':
+            withdrawals_collection.update_one(
+                {'_id': ObjectId(withdrawal_id)},
+                {
+                    '$set': {
+                        'status': 'rejected',
+                        'processed_at': datetime.utcnow(),
+                        'processed_by': str(admin['_id']),
+                        'rejection_reason': reason
+                    }
+                }
+            )
+            
+            # Return funds to user
+            users_collection.update_one(
+                {'_id': ObjectId(withdrawal['user_id'])},
+                {
+                    '$inc': {
+                        'wallet.balance': withdrawal['amount'],
+                        'wallet.pending_withdrawal': -withdrawal['amount']
+                    }
+                }
+            )
+            
+            create_notification(
+                ObjectId(withdrawal['user_id']),
+                'Withdrawal Rejected',
+                f'Your withdrawal request for ${withdrawal["amount"]:,.2f} has been rejected. Reason: {reason or "Not specified"}',
+                'warning'
+            )
+            
+            message = 'Withdrawal rejected'
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
+        
+        return jsonify({'success': True, 'message': message})
+    except Exception as e:
+        print(f"❌ Process withdrawal error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
+@require_admin
+def get_admin_transactions():
+    """Get all transactions with pagination"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))
+        tx_type = request.args.get('type', '')
+        
+        skip = (page - 1) * limit
+        
+        query = {}
+        if tx_type and tx_type != 'all':
+            query['type'] = tx_type
+        
+        total = transactions_collection.count_documents(query)
+        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for tx in transactions:
+            tx['_id'] = str(tx['_id'])
+            # Get user info
+            user = users_collection.find_one(
+                {'_id': ObjectId(tx['user_id'])},
+                {'username': 1, 'email': 1}
+            )
+            tx['user'] = {
+                'username': user.get('username') if user else 'Unknown',
+                'email': user.get('email') if user else 'Unknown'
+            }
+            if tx.get('created_at'):
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'transactions': transactions,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit
+            }
+        })
+    except Exception as e:
+        print(f"❌ Admin transactions error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 # ==================== INIT DATABASE ====================
 
 def init_database():
