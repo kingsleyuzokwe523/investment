@@ -6,6 +6,7 @@ import string
 import hmac
 import hashlib
 import requests
+import secrets
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from flask import Flask, request, jsonify, send_from_directory
@@ -30,13 +31,13 @@ CORS(app, supports_credentials=True, origins=[
 ])
 
 # Configuration
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
-app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
+app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', secrets.token_hex(32))
 
 # NOWPayments Configuration
-app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4WJMKC1-G41XRH2-DNA8HRZ')
-app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb6805f6-dbbb-442d-b31c-255dd3078628')
+app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', '')
+app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', '')
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
 # Production URLs
@@ -47,7 +48,7 @@ BACKEND_URL = 'https://investment-gto3.onrender.com'
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_DOMAIN'] = None
+app.config['SESSION_COOKIE_DOMAIN'] = '.onrender.com'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # Investment Plans
@@ -121,7 +122,7 @@ def create_jwt_token(user_id, username, is_admin=False):
         'user_id': str(user_id),
         'username': username,
         'is_admin': is_admin,
-        'exp': datetime.utcnow() + timedelta(days=7)
+        'exp': datetime.now(timezone.utc) + timedelta(days=7)
     }
     token = jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
     return token
@@ -173,7 +174,7 @@ def create_notification(user_id, title, message, type='info'):
         'message': message,
         'type': type,
         'read': False,
-        'created_at': datetime.utcnow()
+        'created_at': datetime.now(timezone.utc)
     }
     return notifications_collection.insert_one(notification)
 
@@ -183,7 +184,7 @@ def log_admin_action(admin_id, action, details):
         'action': action,
         'details': details,
         'ip_address': request.remote_addr,
-        'created_at': datetime.utcnow()
+        'created_at': datetime.now(timezone.utc)
     }
     admin_logs_collection.insert_one(log)
 
@@ -225,7 +226,7 @@ def simple_health_check():
         'success': True,
         'status': 'healthy',
         'message': 'Veloxtrades API is running',
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
 @app.route('/api/health', methods=['GET', 'OPTIONS'])
@@ -236,7 +237,7 @@ def health_check():
     return jsonify({
         'success': True,
         'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'mongo': 'connected',
         'nowpayments': 'configured',
         'frontend_url': FRONTEND_URL,
@@ -301,7 +302,7 @@ def register():
             'is_active': True,
             'is_banned': False,
             'two_factor_enabled': False,
-            'created_at': datetime.utcnow(),
+            'created_at': datetime.now(timezone.utc),
             'last_login': None,
             'referral_code': referral_code,
             'referred_by': data.get('referral_code', '').upper(),
@@ -365,7 +366,7 @@ def login():
 
         users_collection.update_one(
             {'_id': user['_id']},
-            {'$set': {'last_login': datetime.utcnow()}}
+            {'$set': {'last_login': datetime.now(timezone.utc)}}
         )
 
         user_data = {
@@ -394,7 +395,8 @@ def login():
             secure=True,
             samesite='Lax',
             max_age=7 * 24 * 60 * 60,
-            path='/'
+            path='/',
+            domain='.onrender.com'
         )
 
         return response, 200
@@ -410,7 +412,7 @@ def logout():
         return response
     
     response = jsonify({'success': True, 'message': 'Logged out successfully'})
-    response.set_cookie('veloxtrades_token', '', expires=0, path='/')
+    response.set_cookie('veloxtrades_token', '', expires=0, path='/', domain='.onrender.com')
     return response
 
 @app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
@@ -625,7 +627,7 @@ def adjust_user_balance(user_id):
             'status': 'completed',
             'description': f'{reason} (by admin)',
             'admin_id': str(admin['_id']),
-            'created_at': datetime.utcnow()
+            'created_at': datetime.now(timezone.utc)
         }
         transactions_collection.insert_one(transaction)
         
@@ -900,7 +902,7 @@ def process_withdrawal_request(withdrawal_id):
                 {
                     '$set': {
                         'status': 'completed',
-                        'processed_at': datetime.utcnow(),
+                        'processed_at': datetime.now(timezone.utc),
                         'processed_by': str(admin['_id']),
                         'transaction_id': transaction_id
                     }
@@ -933,7 +935,7 @@ def process_withdrawal_request(withdrawal_id):
                 {
                     '$set': {
                         'status': 'rejected',
-                        'processed_at': datetime.utcnow(),
+                        'processed_at': datetime.now(timezone.utc),
                         'processed_by': str(admin['_id']),
                         'rejection_reason': reason
                     }
@@ -1049,7 +1051,7 @@ def init_database():
                 'is_active': True,
                 'is_banned': False,
                 'two_factor_enabled': False,
-                'created_at': datetime.utcnow(),
+                'created_at': datetime.now(timezone.utc),
                 'last_login': None,
                 'referral_code': 'ADMIN2024',
                 'referrals': [],
@@ -1082,7 +1084,7 @@ def init_database():
                 'is_active': True,
                 'is_banned': False,
                 'two_factor_enabled': False,
-                'created_at': datetime.utcnow(),
+                'created_at': datetime.now(timezone.utc),
                 'last_login': None,
                 'referral_code': 'DEMO123',
                 'referrals': [],
