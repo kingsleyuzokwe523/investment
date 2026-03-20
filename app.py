@@ -18,11 +18,7 @@ import atexit
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__, static_folder='static', template_folder='static')
-# At the top with other imports
-from flask_cors import CORS
-
-# After creating your app
+# Create Flask app - SINGLE INITIALIZATION
 app = Flask(__name__, static_folder='static', template_folder='static')
 
 # CORS Configuration - SINGLE SOURCE OF TRUTH
@@ -32,9 +28,6 @@ CORS(app, supports_credentials=True, origins=[
     "https://frontend-ugb2.onrender.com",
     "https://investment-gto3.onrender.com"
 ])
-
-# NO ADDITIONAL CORS HEADERS ANYWHERE IN THE FILE
-# ==========================================================================
 
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
@@ -162,9 +155,7 @@ def get_user_from_request():
         return user
     except Exception:
         return None
-@app.route('/api/auth/register', methods=['POST'])
-def auth_register():
-    return register()  # Call the existing register function
+
 def require_admin(f):
     def decorated_function(*args, **kwargs):
         user = get_user_from_request()
@@ -215,7 +206,7 @@ def serve_index():
         'success': True,
         'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
-        'endpoints': ['/health', '/api/health', '/api/register', '/api/login']
+        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register']
     })
 
 @app.route('/<path:filename>')
@@ -224,9 +215,12 @@ def serve_frontend(filename):
 
 # ==================== HEALTH CHECK ENDPOINTS ====================
 
-@app.route('/health', methods=['GET'])
+@app.route('/health', methods=['GET', 'OPTIONS'])
 def simple_health_check():
     """Simple health check endpoint for frontend"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
     return jsonify({
         'success': True,
         'status': 'healthy',
@@ -234,8 +228,11 @@ def simple_health_check():
         'timestamp': datetime.utcnow().isoformat()
     })
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
 def health_check():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
     return jsonify({
         'success': True,
         'status': 'healthy',
@@ -246,10 +243,20 @@ def health_check():
         'backend_url': BACKEND_URL
     })
 
+# Helper function for preflight requests
+def handle_preflight():
+    response = jsonify({'success': True})
+    return response
+
 # ==================== AUTHENTICATION API ====================
 
-@app.route('/api/register', methods=['POST'])
+@app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
+    # Handle preflight request
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+
     try:
         data = request.get_json()
         if not data:
@@ -263,6 +270,7 @@ def register():
         if not all([full_name, email, username, password]):
             return jsonify({'success': False, 'message': 'All fields are required'}), 400
 
+        # Check if user exists
         if users_collection.find_one({'email': email}):
             return jsonify({'success': False, 'message': 'Email already registered'}), 400
 
@@ -320,8 +328,21 @@ def register():
         print(f"❌ Registration error: {e}")
         return jsonify({'success': False, 'message': 'Registration failed'}), 500
 
-@app.route('/api/login', methods=['POST'])
+# Add OPTIONS handler for /api/auth/register
+@app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
+def auth_register():
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    return register()  # Call the register function
+
+@app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
+    # Handle preflight request
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+
     try:
         data = request.get_json()
         username_or_email = data.get('username', '').strip().lower()
@@ -382,14 +403,22 @@ def login():
         print(f"❌ Login error: {e}")
         return jsonify({'success': False, 'message': 'Login failed'}), 500
 
-@app.route('/api/logout', methods=['POST'])
+@app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
     response = jsonify({'success': True, 'message': 'Logged out successfully'})
     response.set_cookie('veloxtrades_token', '', expires=0, path='/')
     return response
 
-@app.route('/api/auth/profile', methods=['GET'])
+@app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
 def get_profile():
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
@@ -414,8 +443,12 @@ def get_profile():
 
 # ==================== USER DASHBOARD API ====================
 
-@app.route('/api/user/dashboard', methods=['GET'])
+@app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
 def get_dashboard():
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
+    
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
@@ -457,525 +490,13 @@ def get_dashboard():
         'data': dashboard_data
     })
 
-# ==================== NOWPAYMENTS INTEGRATION ====================
-
-@app.route('/api/create-payment', methods=['POST'])
-def create_payment():
-    """Create a NOWPayments payment"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    data = request.get_json()
-    amount = float(data.get('amount', 0))
-    currency = data.get('currency', 'btc')
-
-    if amount < 10:
-        return jsonify({'success': False, 'message': 'Minimum deposit is $10'}), 400
-
-    # Currency mapping for NOWPayments
-    currency_map = {
-        'btc': 'btc',
-        'eth': 'eth',
-        'usdt': 'usdttrc20',
-        'sol': 'sol',
-        'ltc': 'ltc'
-    }
-
-    pay_currency = currency_map.get(currency, 'btc')
-
-    try:
-        # Create payment with NOWPayments
-        payment_data = {
-            'price_amount': amount,
-            'price_currency': 'usd',
-            'pay_currency': pay_currency,
-            'ipn_callback_url': f'{BACKEND_URL}/api/nowpayments-webhook',
-            'order_id': f"ORDER_{user['_id']}_{int(datetime.utcnow().timestamp())}",
-            'order_description': f"Veloxtrades deposit for {user['username']}",
-            'success_url': f'{FRONTEND_URL}/dashboard.html',
-            'cancel_url': f'{FRONTEND_URL}/dashboard.html'
-        }
-
-        headers = {
-            'x-api-key': app.config['NOWPAYMENTS_API_KEY'],
-            'Content-Type': 'application/json'
-        }
-
-        response = requests.post(
-            f"{app.config['NOWPAYMENTS_API_URL']}/payment",
-            json=payment_data,
-            headers=headers,
-            timeout=30
-        )
-
-        if response.status_code != 200 and response.status_code != 201:
-            print(f"❌ NOWPayments error: {response.status_code} - {response.text}")
-            return jsonify({'success': False, 'message': 'Payment creation failed'}), 500
-
-        result = response.json()
-
-        # Save payment to database
-        payment_record = {
-            'user_id': str(user['_id']),
-            'payment_id': result.get('payment_id'),
-            'amount': amount,
-            'currency': currency,
-            'pay_currency': pay_currency,
-            'payment_status': 'waiting',
-            'payment_url': result.get('invoice_url') or result.get('payment_url'),
-            'created_at': datetime.utcnow(),
-            'updated_at': datetime.utcnow()
-        }
-        payments_collection.insert_one(payment_record)
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'payment_id': result.get('payment_id'),
-                'payment_url': result.get('invoice_url') or result.get('payment_url'),
-                'amount': amount
-            }
-        })
-
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Payment creation network error: {e}")
-        return jsonify({'success': False, 'message': 'Network error during payment creation'}), 500
-    except Exception as e:
-        print(f"❌ Payment creation error: {e}")
-        return jsonify({'success': False, 'message': 'Payment creation failed'}), 500
-
-@app.route('/api/nowpayments-webhook', methods=['POST'])
-def nowpayments_webhook():
-    """Handle NOWPayments IPN webhook"""
-    try:
-        # Get signature from header
-        signature = request.headers.get('x-nowpayments-sig')
-
-        # Get raw request data for verification
-        raw_data = request.get_data()
-
-        # Verify webhook signature
-        if not verify_nowpayments_ipn(raw_data, signature):
-            print("❌ Invalid webhook signature")
-            return jsonify({'success': False}), 400
-
-        data = request.json
-        payment_id = data.get('payment_id')
-        payment_status = data.get('payment_status')
-
-        print(f"📨 Webhook received: Payment {payment_id} - Status: {payment_status}")
-
-        if not payment_id:
-            return jsonify({'success': False, 'message': 'No payment ID'}), 400
-
-        # Find payment in database
-        payment = payments_collection.find_one({'payment_id': payment_id})
-        if not payment:
-            print(f"❌ Payment not found: {payment_id}")
-            return jsonify({'success': False}), 404
-
-        # Update payment status
-        payments_collection.update_one(
-            {'payment_id': payment_id},
-            {'$set': {
-                'payment_status': payment_status,
-                'updated_at': datetime.utcnow()
-            }}
-        )
-
-        # If payment is finished, credit user
-        if payment_status == 'finished':
-            user_id = payment['user_id']
-            amount = payment['amount']
-
-            # Update user wallet
-            users_collection.update_one(
-                {'_id': ObjectId(user_id)},
-                {
-                    '$inc': {
-                        'wallet.balance': amount,
-                        'wallet.total_deposited': amount
-                    }
-                }
-            )
-
-            # Create transaction record
-            transaction = {
-                'user_id': user_id,
-                'type': 'deposit',
-                'amount': amount,
-                'currency': payment['currency'],
-                'status': 'completed',
-                'reference': payment_id,
-                'description': f"Deposit via {payment['currency'].upper()}",
-                'created_at': datetime.utcnow()
-            }
-            transactions_collection.insert_one(transaction)
-
-            # Create notification
-            create_notification(
-                ObjectId(user_id),
-                'Deposit Confirmed',
-                f'Your deposit of ${amount:,.2f} has been confirmed and credited to your wallet.',
-                'success'
-            )
-
-            print(f"✅ User {user_id} credited with ${amount}")
-
-        return jsonify({'success': True}), 200
-
-    except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        return jsonify({'success': False}), 500
-
-@app.route('/api/payment-status/<payment_id>', methods=['GET'])
-def get_payment_status(payment_id):
-    """Check payment status from NOWPayments"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    try:
-        headers = {'x-api-key': app.config['NOWPAYMENTS_API_KEY']}
-        response = requests.get(
-            f"{app.config['NOWPAYMENTS_API_URL']}/payment/{payment_id}",
-            headers=headers,
-            timeout=30
-        )
-
-        if response.status_code != 200:
-            return jsonify({'success': False, 'message': 'Failed to get status'}), 500
-
-        data = response.json()
-
-        # Update local database
-        payments_collection.update_one(
-            {'payment_id': payment_id},
-            {'$set': {
-                'payment_status': data.get('payment_status'),
-                'updated_at': datetime.utcnow()
-            }}
-        )
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'payment_status': data.get('payment_status'),
-                'pay_address': data.get('pay_address'),
-                'pay_amount': data.get('pay_amount'),
-                'actually_paid': data.get('actually_paid')
-            }
-        })
-
-    except Exception as e:
-        print(f"❌ Status check error: {e}")
-        return jsonify({'success': False, 'message': 'Status check failed'}), 500
-
-# ==================== INVESTMENT API ====================
-
-@app.route('/api/investments', methods=['GET'])
-def get_investments():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    investments = list(investments_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1))
-
-    for inv in investments:
-        inv['_id'] = str(inv['_id'])
-
-    return jsonify({
-        'success': True,
-        'data': {'investments': investments}
-    })
-
-@app.route('/api/investments', methods=['POST'])
-def create_investment():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    data = request.get_json()
-    plan_key = data.get('plan')
-    amount = float(data.get('amount', 0))
-
-    if plan_key not in INVESTMENT_PLANS:
-        return jsonify({'success': False, 'message': 'Invalid investment plan'}), 400
-
-    plan = INVESTMENT_PLANS[plan_key]
-
-    if amount < plan['min_deposit'] or amount > plan['max_deposit']:
-        return jsonify({'success': False,
-                        'message': f'Amount must be between ${plan["min_deposit"]} and ${plan["max_deposit"]}'}), 400
-
-    current_balance = user.get('wallet', {}).get('balance', 0)
-    if current_balance < amount:
-        return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
-
-    # Calculate expected profit
-    expected_profit = (amount * plan['roi']) / 100
-    expected_return = amount + expected_profit
-
-    # Create investment
-    investment = {
-        'user_id': str(user['_id']),
-        'plan_key': plan_key,
-        'plan_name': plan['name'],
-        'amount': amount,
-        'roi': plan['roi'],
-        'expected_profit': expected_profit,
-        'expected_return': expected_return,
-        'status': 'active',
-        'start_date': datetime.utcnow(),
-        'end_date': datetime.utcnow() + timedelta(hours=plan['duration_hours']),
-        'profit_paid': False,
-        'created_at': datetime.utcnow()
-    }
-
-    result = investments_collection.insert_one(investment)
-
-    # Deduct from wallet
-    users_collection.update_one(
-        {'_id': user['_id']},
-        {
-            '$inc': {
-                'wallet.balance': -amount,
-                'wallet.total_invested': amount
-            }
-        }
-    )
-
-    # Create transaction
-    transaction = {
-        'user_id': str(user['_id']),
-        'type': 'investment',
-        'amount': amount,
-        'plan': plan['name'],
-        'status': 'completed',
-        'description': f'Investment in {plan["name"]}',
-        'reference': str(result.inserted_id),
-        'created_at': datetime.utcnow()
-    }
-    transactions_collection.insert_one(transaction)
-
-    return jsonify({
-        'success': True,
-        'message': f'Investment of ${amount:,.2f} created successfully'
-    })
-
-# ==================== DEPOSIT API ====================
-
-@app.route('/api/deposits', methods=['GET'])
-def get_deposits():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    deposits = list(payments_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1))
-
-    for dep in deposits:
-        dep['_id'] = str(dep['_id'])
-
-    return jsonify({'success': True, 'data': deposits})
-
-# ==================== WITHDRAWAL API ====================
-
-@app.route('/api/withdrawals', methods=['GET'])
-def get_withdrawals():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    withdrawals = list(withdrawals_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1))
-
-    for wd in withdrawals:
-        wd['_id'] = str(wd['_id'])
-
-    return jsonify({'success': True, 'data': withdrawals})
-
-@app.route('/api/withdrawals', methods=['POST'])
-def create_withdrawal():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    data = request.get_json()
-    amount = float(data.get('amount', 0))
-    currency = data.get('currency', 'btc')
-    wallet_address = data.get('wallet_address', '').strip()
-
-    if amount < 50:
-        return jsonify({'success': False, 'message': 'Minimum withdrawal is $50'}), 400
-
-    if not wallet_address:
-        return jsonify({'success': False, 'message': 'Please provide wallet address'}), 400
-
-    current_balance = user.get('wallet', {}).get('balance', 0)
-    if current_balance < amount:
-        return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
-
-    # Calculate fee (1%)
-    fee = amount * 0.01
-    net_amount = amount - fee
-
-    withdrawal = {
-        'user_id': str(user['_id']),
-        'amount': amount,
-        'currency': currency,
-        'wallet_address': wallet_address,
-        'fee': fee,
-        'net_amount': net_amount,
-        'status': 'pending',
-        'created_at': datetime.utcnow()
-    }
-
-    result = withdrawals_collection.insert_one(withdrawal)
-
-    # Deduct from balance (hold funds)
-    users_collection.update_one(
-        {'_id': user['_id']},
-        {
-            '$inc': {
-                'wallet.balance': -amount,
-                'wallet.pending_withdrawal': amount
-            }
-        }
-    )
-
-    # Create transaction
-    transaction = {
-        'user_id': str(user['_id']),
-        'type': 'withdrawal',
-        'amount': -amount,
-        'currency': currency,
-        'status': 'pending',
-        'description': f'Withdrawal request to {currency.upper()} wallet',
-        'reference': str(result.inserted_id),
-        'created_at': datetime.utcnow()
-    }
-    transactions_collection.insert_one(transaction)
-
-    # Notify user
-    create_notification(
-        user['_id'],
-        'Withdrawal Requested',
-        f'Your withdrawal request for ${amount:,.2f} has been submitted and is pending approval.',
-        'info'
-    )
-
-    return jsonify({
-        'success': True,
-        'message': 'Withdrawal request submitted'
-    })
-
-# ==================== TRANSACTIONS API ====================
-
-@app.route('/api/user/transactions', methods=['GET'])
-def get_user_transactions():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    transactions = list(transactions_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1).limit(50))
-
-    for tx in transactions:
-        tx['_id'] = str(tx['_id'])
-
-    return jsonify({
-        'success': True,
-        'data': {'transactions': transactions}
-    })
-
-# ==================== NOTIFICATIONS API ====================
-
-@app.route('/api/notifications', methods=['GET'])
-def get_user_notifications():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    notifications = list(notifications_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1).limit(20))
-
-    for notif in notifications:
-        notif['_id'] = str(notif['_id'])
-
-    return jsonify({'success': True, 'data': notifications})
-
-@app.route('/api/notifications/mark-read', methods=['POST'])
-def mark_notifications_read():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-
-    notifications_collection.update_many(
-        {'user_id': str(user['_id']), 'read': False},
-        {'$set': {'read': True}}
-    )
-
-    return jsonify({'success': True})
-
-# ==================== ADMIN API ENDPOINTS ====================
-
-@app.route('/api/admin/stats', methods=['GET'])
-@require_admin
-def get_admin_stats():
-    """Get admin dashboard statistics"""
-    try:
-        total_users = users_collection.count_documents({})
-        total_deposits = payments_collection.count_documents({'payment_status': 'finished'})
-        total_deposit_amount = sum(p.get('amount', 0) for p in payments_collection.find({'payment_status': 'finished'}))
-
-        total_withdrawals = withdrawals_collection.count_documents({'status': 'completed'})
-        total_withdrawal_amount = sum(w.get('amount', 0) for w in withdrawals_collection.find({'status': 'completed'}))
-
-        total_investments = investments_collection.count_documents({})
-        active_investments = investments_collection.count_documents({'status': 'active'})
-
-        pending_deposits = payments_collection.count_documents({'payment_status': 'waiting'})
-        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
-
-        # Recent users
-        recent_users = list(users_collection.find(
-            {},
-            {'username': 1, 'full_name': 1, 'email': 1, 'created_at': 1, 'wallet': 1}
-        ).sort('created_at', -1).limit(10))
-
-        for user in recent_users:
-            user['_id'] = str(user['_id'])
-            if user.get('created_at'):
-                user['created_at'] = user['created_at'].isoformat()
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'total_users': total_users,
-                'total_deposits': total_deposits,
-                'total_deposit_amount': total_deposit_amount,
-                'total_withdrawals': total_withdrawals,
-                'total_withdrawal_amount': total_withdrawal_amount,
-                'total_investments': total_investments,
-                'active_investments': active_investments,
-                'pending_deposits': pending_deposits,
-                'pending_withdrawals': pending_withdrawals,
-                'recent_users': recent_users
-            }
-        })
-    except Exception as e:
-        print(f"❌ Admin stats error: {e}")
-        return jsonify({'success': False, 'message': 'Failed to get stats'}), 500
-
-# [REST OF ADMIN ENDPOINTS - keeping them as they were in your original file]
+# ==================== ADD CORS PREFLIGHT FOR ALL ROUTES ====================
+
+@app.before_request
+def handle_options_request():
+    if request.method == 'OPTIONS':
+        response = jsonify({'success': True})
+        return response
 
 # ==================== INIT DATABASE ====================
 
@@ -1057,6 +578,7 @@ def init_database():
     except Exception as e:
         print(f"❌ Database initialization error: {e}")
 
+# Initialize database
 with app.app_context():
     init_database()
 
