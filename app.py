@@ -125,7 +125,27 @@ except Exception as e:
     raise
 
 # ==================== HELPER FUNCTIONS ====================
-
+@app.route('/<path:filename>')
+def serve_static_files(filename):
+    """Serve static files with correct MIME types and no-cache for HTML"""
+    response = make_response(send_from_directory(app.static_folder, filename))
+    
+    if filename.endswith('.js'):
+        response.headers['Content-Type'] = 'application/javascript'
+        # Cache JS for 1 hour
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+    elif filename.endswith('.css'):
+        response.headers['Content-Type'] = 'text/css'
+        # Cache CSS for 1 hour
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+    elif filename.endswith('.html'):
+        response.headers['Content-Type'] = 'text/html'
+        # NO CACHE for HTML files - always get fresh version
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    
+    return response
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
