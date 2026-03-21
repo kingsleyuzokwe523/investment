@@ -65,6 +65,10 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_DOMAIN'] = None  # Don't set domain for cross-origin
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)  # CHANGED: Session lifetime 30 days
 
+# Add this after creating the Flask app
+import mimetypes
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
 # Investment Plans
 INVESTMENT_PLANS = {
     'standard': {
@@ -96,7 +100,27 @@ INVESTMENT_PLANS = {
         'max_deposit': float('inf')
     }
 }
+# Add this after creating the Flask app
+import mimetypes
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('text/html', '.html')
 
+# Add this route to serve static files properly
+@app.route('/<path:filename>')
+def serve_static_files(filename):
+    """Serve static files with correct MIME types"""
+    response = make_response(send_from_directory(app.static_folder, filename))
+    
+    # Set correct content type based on file extension
+    if filename.endswith('.js'):
+        response.headers['Content-Type'] = 'application/javascript'
+    elif filename.endswith('.css'):
+        response.headers['Content-Type'] = 'text/css'
+    elif filename.endswith('.html'):
+        response.headers['Content-Type'] = 'text/html'
+    
+    return response
 # Helper function for UTC now
 def utc_now():
     return datetime.now(timezone.utc)
