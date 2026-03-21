@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Create Flask app - SINGLE INITIALIZATION
+# Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='static')
 
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
-app.config['JWT_EXPIRATION_DAYS'] = 30  # Token valid for 30 days
+app.config['JWT_EXPIRATION_DAYS'] = 30
 
 # NOWPayments Configuration
 app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4WJMKC1-G41XRH2-DNA8HRZ')
@@ -125,27 +125,7 @@ except Exception as e:
     raise
 
 # ==================== HELPER FUNCTIONS ====================
-@app.route('/<path:filename>')
-def serve_static_files(filename):
-    """Serve static files with correct MIME types and no-cache for HTML"""
-    response = make_response(send_from_directory(app.static_folder, filename))
-    
-    if filename.endswith('.js'):
-        response.headers['Content-Type'] = 'application/javascript'
-        # Cache JS for 1 hour
-        response.headers['Cache-Control'] = 'public, max-age=3600'
-    elif filename.endswith('.css'):
-        response.headers['Content-Type'] = 'text/css'
-        # Cache CSS for 1 hour
-        response.headers['Cache-Control'] = 'public, max-age=3600'
-    elif filename.endswith('.html'):
-        response.headers['Content-Type'] = 'text/html'
-        # NO CACHE for HTML files - always get fresh version
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-    
-    return response
+
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
@@ -343,19 +323,37 @@ def serve_index():
         'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
     })
 
+# ==================== STATIC FILE SERVING - SINGLE ROUTE ====================
+
 @app.route('/<path:filename>')
 def serve_static_files(filename):
-    """Serve static files with correct MIME types"""
-    response = make_response(send_from_directory(app.static_folder, filename))
-    
-    if filename.endswith('.js'):
-        response.headers['Content-Type'] = 'application/javascript'
-    elif filename.endswith('.css'):
-        response.headers['Content-Type'] = 'text/css'
-    elif filename.endswith('.html'):
-        response.headers['Content-Type'] = 'text/html'
-    
-    return response
+    """Serve static files with correct MIME types and no-cache for HTML"""
+    try:
+        response = make_response(send_from_directory(app.static_folder, filename))
+        
+        # Set correct content type based on file extension
+        if filename.endswith('.js'):
+            response.headers['Content-Type'] = 'application/javascript'
+            # Cache JS for 1 hour
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+        elif filename.endswith('.css'):
+            response.headers['Content-Type'] = 'text/css'
+            # Cache CSS for 1 hour
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+        elif filename.endswith('.html'):
+            response.headers['Content-Type'] = 'text/html'
+            # NO CACHE for HTML files - always get fresh version
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+        elif filename.endswith('.png') or filename.endswith('.jpg') or filename.endswith('.jpeg') or filename.endswith('.gif') or filename.endswith('.svg'):
+            # Cache images for 1 day
+            response.headers['Cache-Control'] = 'public, max-age=86400'
+        
+        return response
+    except Exception as e:
+        logger.error(f"Error serving static file {filename}: {e}")
+        return jsonify({'success': False, 'message': 'File not found'}), 404
 
 # ==================== HEALTH CHECK ENDPOINTS ====================
 
