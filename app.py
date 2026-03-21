@@ -48,7 +48,7 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# CORS Configuration
+# CORS Configuration - UPDATE THIS SECTION
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -56,7 +56,7 @@ CORS(app,
          "http://127.0.0.1:5000",
          "http://localhost:3000",
          "http://localhost:5500",
-         "https://frontend-ugb2.onrender.com",
+         "https://frontend-ugb2.onrender.com",      # Your CURRENT frontend
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
