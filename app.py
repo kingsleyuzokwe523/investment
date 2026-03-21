@@ -31,7 +31,7 @@ app = Flask(__name__, static_folder='static', template_folder='static')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
-app.config['JWT_EXPIRATION_DAYS'] = 7
+app.config['JWT_EXPIRATION_DAYS'] = 30  # CHANGED: Token valid for 30 days (was 7)
 
 # NOWPayments Configuration
 app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4WJMKC1-G41XRH2-DNA8HRZ')
@@ -63,7 +63,7 @@ app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_DOMAIN'] = None  # Don't set domain for cross-origin
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)  # CHANGED: Session lifetime 30 days
 
 # Investment Plans
 INVESTMENT_PLANS = {
@@ -509,14 +509,14 @@ def login():
             }
         }))
 
-        # Set secure cookie
+        # Set secure cookie with 30 day expiration
         response.set_cookie(
             'veloxtrades_token',
             value=token,
             httponly=True,
             secure=True,
             samesite='Lax',
-            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,
+            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,  # 30 days
             path='/'
         )
 
@@ -584,7 +584,7 @@ def verify_token():
     if not user:
         return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
     
-    # Check if token is about to expire (within 24 hours)
+    # Check if token is about to expire
     token = request.cookies.get('veloxtrades_token')
     if token:
         payload = verify_jwt_token(token)
@@ -592,11 +592,13 @@ def verify_token():
             exp_time = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
             now = datetime.now(timezone.utc)
             hours_until_expiry = (exp_time - now).total_seconds() / 3600
+            days_until_expiry = hours_until_expiry / 24
             
             return jsonify({
                 'success': True,
                 'message': 'Token is valid',
-                'expires_in_hours': hours_until_expiry,
+                'expires_in_hours': round(hours_until_expiry, 1),
+                'expires_in_days': round(days_until_expiry, 1),
                 'user': {
                     'id': str(user['_id']),
                     'username': user['username'],
@@ -840,6 +842,8 @@ if __name__ == '__main__':
     print("   GET    /api/verify-token - Verify JWT token")
     print("   GET    /api/user/dashboard - User dashboard")
     print("   GET    /api/health - Health check")
+    print("=" * 70 + "\n")
+    print("🔐 Token Expiration: 30 DAYS")
     print("=" * 70 + "\n")
 
     # For production on Render, use environment variable PORT
