@@ -8,12 +8,18 @@ import hashlib
 import requests
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
+import logging
+import traceback
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -21,18 +27,11 @@ load_dotenv()
 # Create Flask app - SINGLE INITIALIZATION
 app = Flask(__name__, static_folder='static', template_folder='static')
 
-# CORS Configuration - SINGLE SOURCE OF TRUTH
-CORS(app, supports_credentials=True, origins=[
-    "http://localhost:5000",
-    "http://127.0.0.1:5000",
-    "https://frontend-ugb2.onrender.com",
-    "https://investment-gto3.onrender.com"
-])
-
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
+app.config['JWT_EXPIRATION_DAYS'] = 7
 
 # NOWPayments Configuration
 app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4WJMKC1-G41XRH2-DNA8HRZ')
@@ -40,14 +39,30 @@ app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb68
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
 # Production URLs
-FRONTEND_URL = 'https://frontend-ugb2.onrender.com'
-BACKEND_URL = 'https://investment-gto3.onrender.com'
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://frontend-ugb2.onrender.com')
+BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
+
+# CORS Configuration - COMPLETE FIX
+CORS(app, 
+     supports_credentials=True,
+     origins=[
+         "http://localhost:5000",
+         "http://127.0.0.1:5000",
+         "http://localhost:3000",
+         "http://localhost:5500",
+         "https://frontend-ugb2.onrender.com",
+         "https://investment-gto3.onrender.com"
+     ],
+     allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
+     expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+     max_age=3600)
 
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_DOMAIN'] = None  # Keep None - don't set domain
+app.config['SESSION_COOKIE_DOMAIN'] = None  # Don't set domain for cross-origin
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # Investment Plans
@@ -98,15 +113,10 @@ try:
     notifications_collection = db['notifications']
     payments_collection = db['payments']
     admin_logs_collection = db['admin_logs']
-    print("✅ MongoDB Connected Successfully!")
+    logger.info("✅ MongoDB Connected Successfully!")
 except Exception as e:
-    print(f"❌ MongoDB Connection Error: {e}")
+    logger.error(f"❌ MongoDB Connection Error: {e}")
     raise
-
-# Initialize scheduler for automated tasks
-scheduler = BackgroundScheduler()
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -121,7 +131,7 @@ def create_jwt_token(user_id, username, is_admin=False):
         'user_id': str(user_id),
         'username': username,
         'is_admin': is_admin,
-        'exp': datetime.now(timezone.utc) + timedelta(days=7),
+        'exp': datetime.now(timezone.utc) + timedelta(days=app.config['JWT_EXPIRATION_DAYS']),
         'iat': datetime.now(timezone.utc)
     }
     token = jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
@@ -132,35 +142,37 @@ def verify_jwt_token(token):
         payload = jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
         return payload
     except jwt.ExpiredSignatureError:
-        print("⚠️ Token expired")
+        logger.warning("⚠️ Token expired")
         return None
     except jwt.InvalidTokenError as e:
-        print(f"⚠️ Invalid token: {e}")
+        logger.warning(f"⚠️ Invalid token: {e}")
         return None
     except Exception as e:
-        print(f"⚠️ Token verification error: {e}")
+        logger.warning(f"⚠️ Token verification error: {e}")
         return None
 
 def get_user_from_request():
+    # First try to get token from cookie
     token = request.cookies.get('veloxtrades_token')
-
+    
+    # If not in cookie, try Authorization header
     if not token:
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
-
+    
     if not token:
         return None
-
+    
     payload = verify_jwt_token(token)
     if not payload:
         return None
-
+    
     try:
         user = users_collection.find_one({'_id': ObjectId(payload['user_id'])})
         return user
     except Exception as e:
-        print(f"⚠️ Get user error: {e}")
+        logger.error(f"⚠️ Get user error: {e}")
         return None
 
 def require_admin(f):
@@ -169,7 +181,7 @@ def require_admin(f):
         if not user or not user.get('is_admin', False):
             return jsonify({'success': False, 'message': 'Admin access required'}), 403
         return f(*args, **kwargs)
-
+    
     decorated_function.__name__ = f.__name__
     return decorated_function
 
@@ -205,6 +217,105 @@ def verify_nowpayments_ipn(request_data, signature):
     ).hexdigest()
     return hmac.compare_digest(calculated, signature)
 
+def handle_preflight():
+    """Handle CORS preflight requests"""
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", FRONTEND_URL)
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept,X-Requested-With")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
+    response.headers.add("Access-Control-Allow-Credentials", "true")
+    response.headers.add("Access-Control-Max-Age", "3600")
+    return response
+
+# ==================== AUTO-PROFIT SCHEDULER ====================
+
+def process_investment_profits():
+    """Automatically process investment profits"""
+    try:
+        logger.info("🔄 Processing investment profits...")
+        
+        # Find all active investments that have ended
+        active_investments = list(investments_collection.find({
+            'status': 'active',
+            'end_date': {'$lte': datetime.now(timezone.utc)}
+        }))
+        
+        profit_processed = 0
+        
+        for investment in active_investments:
+            try:
+                # Calculate profit
+                user_id = investment['user_id']
+                amount = investment['amount']
+                expected_profit = investment.get('expected_profit', 0)
+                
+                # Update user wallet
+                result = users_collection.update_one(
+                    {'_id': ObjectId(user_id)},
+                    {
+                        '$inc': {
+                            'wallet.balance': expected_profit,
+                            'wallet.total_profit': expected_profit
+                        }
+                    }
+                )
+                
+                if result.modified_count > 0:
+                    # Mark investment as completed
+                    investments_collection.update_one(
+                        {'_id': investment['_id']},
+                        {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}}
+                    )
+                    
+                    # Create transaction record
+                    transactions_collection.insert_one({
+                        'user_id': user_id,
+                        'type': 'profit',
+                        'amount': expected_profit,
+                        'status': 'completed',
+                        'description': f'Profit from {investment.get("plan_name", "Investment")}',
+                        'investment_id': str(investment['_id']),
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                    
+                    # Create notification
+                    create_notification(
+                        user_id,
+                        'Investment Completed! 🎉',
+                        f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!',
+                        'success'
+                    )
+                    
+                    profit_processed += 1
+                    logger.info(f"✅ Processed profit for investment {investment['_id']} - User: {user_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing investment {investment['_id']}: {e}")
+                logger.error(traceback.format_exc())
+        
+        if profit_processed > 0:
+            logger.info(f"✅ Processed {profit_processed} completed investments")
+        else:
+            logger.info("No investments to process at this time")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in profit processing: {e}")
+        logger.error(traceback.format_exc())
+
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=process_investment_profits,
+    trigger="interval",
+    hours=1,
+    id="profit_processor",
+    name="Process investment profits every hour",
+    replace_existing=True
+)
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
+logger.info("✅ Auto-profit scheduler started")
+
 # ==================== FRONTEND ROUTES ====================
 
 @app.route('/')
@@ -213,7 +324,8 @@ def serve_index():
         'success': True,
         'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
-        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register']
+        'backend': BACKEND_URL,
+        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
     })
 
 @app.route('/<path:filename>')
@@ -250,19 +362,12 @@ def health_check():
         'backend_url': BACKEND_URL
     })
 
-# Helper function for preflight requests
-def handle_preflight():
-    response = jsonify({'success': True})
-    return response
-
 # ==================== AUTHENTICATION API ====================
 
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
-    # Handle preflight request
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
 
     try:
         data = request.get_json()
@@ -332,28 +437,31 @@ def register():
         }), 201
 
     except Exception as e:
-        print(f"❌ Registration error: {e}")
+        logger.error(f"❌ Registration error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': 'Registration failed'}), 500
 
-# Add OPTIONS handler for /api/auth/register
 @app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
 def auth_register():
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
     return register()
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
-    # Handle preflight request
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
 
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No credentials provided'}), 400
+            
         username_or_email = data.get('username', '').strip().lower()
         password = data.get('password', '')
+
+        if not username_or_email or not password:
+            return jsonify({'success': False, 'message': 'Username and password required'}), 400
 
         user = users_collection.find_one({
             '$or': [
@@ -362,14 +470,21 @@ def login():
             ]
         })
 
-        if not user or not verify_password(user['password'], password):
+        if not user:
+            logger.warning(f"Login failed: User not found - {username_or_email}")
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+            
+        if not verify_password(user['password'], password):
+            logger.warning(f"Login failed: Invalid password for {username_or_email}")
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
 
         if user.get('is_banned', False):
             return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
 
+        # Generate token
         token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
 
+        # Update last login
         users_collection.update_one(
             {'_id': user['_id']},
             {'$set': {'last_login': datetime.now(timezone.utc)}}
@@ -384,47 +499,54 @@ def login():
             'is_admin': user.get('is_admin', False)
         }
 
-        response = jsonify({
+        # Create response
+        response = make_response(jsonify({
             'success': True,
             'message': 'Login successful!',
             'data': {
                 'token': token,
                 'user': user_data
             }
-        })
+        }))
 
-        # Set secure cookie for production - NO DOMAIN SPECIFIED
+        # Set secure cookie
         response.set_cookie(
             'veloxtrades_token',
             value=token,
             httponly=True,
             secure=True,
             samesite='Lax',
-            max_age=7 * 24 * 60 * 60,
+            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,
             path='/'
         )
 
+        # Add CORS headers
+        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        
+        logger.info(f"✅ User logged in: {user['username']}")
         return response, 200
 
     except Exception as e:
-        print(f"❌ Login error: {e}")
+        logger.error(f"❌ Login error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': 'Login failed'}), 500
 
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
     
-    response = jsonify({'success': True, 'message': 'Logged out successfully'})
-    response.set_cookie('veloxtrades_token', '', expires=0, path='/')
+    response = make_response(jsonify({'success': True, 'message': 'Logged out successfully'}))
+    response.set_cookie('veloxtrades_token', '', expires=0, path='/', httponly=True, secure=True, samesite='Lax')
+    response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 @app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
 def get_profile():
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -440,12 +562,58 @@ def get_profile():
         'wallet': user.get('wallet', {'balance': 0.00}),
         'is_admin': user.get('is_admin', False),
         'kyc_status': user.get('kyc_status', 'pending'),
+        'is_verified': user.get('is_verified', False),
         'created_at': user.get('created_at').isoformat() if user.get('created_at') else None
     }
 
-    return jsonify({
+    response = make_response(jsonify({
         'success': True,
         'data': {'user': user_data}
+    }))
+    response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
+@app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
+def verify_token():
+    """Endpoint to verify if current token is valid"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
+    
+    # Check if token is about to expire (within 24 hours)
+    token = request.cookies.get('veloxtrades_token')
+    if token:
+        payload = verify_jwt_token(token)
+        if payload:
+            exp_time = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
+            now = datetime.now(timezone.utc)
+            hours_until_expiry = (exp_time - now).total_seconds() / 3600
+            
+            return jsonify({
+                'success': True,
+                'message': 'Token is valid',
+                'expires_in_hours': hours_until_expiry,
+                'user': {
+                    'id': str(user['_id']),
+                    'username': user['username'],
+                    'email': user['email'],
+                    'is_admin': user.get('is_admin', False)
+                }
+            })
+    
+    return jsonify({
+        'success': True,
+        'message': 'Token is valid',
+        'user': {
+            'id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'is_admin': user.get('is_admin', False)
+        }
     })
 
 # ==================== USER DASHBOARD API ====================
@@ -453,60 +621,71 @@ def get_profile():
 @app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
 def get_dashboard():
     if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
-        return response
+        return handle_preflight()
     
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
-    # Get active investments
-    active_investments = list(investments_collection.find({
-        'user_id': str(user['_id']),
-        'status': 'active'
-    }))
-
-    total_active = sum(inv.get('amount', 0) for inv in active_investments)
-    pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments if inv.get('status') == 'active')
-
-    # Get recent transactions
-    recent_transactions = list(transactions_collection.find(
-        {'user_id': str(user['_id'])}
-    ).sort('created_at', -1).limit(10))
-
-    for tx in recent_transactions:
-        tx['_id'] = str(tx['_id'])
-
-    dashboard_data = {
-        'wallet': user.get('wallet', {'balance': 0.00}),
-        'investments': {
-            'total_active': total_active,
-            'total_profit': user.get('wallet', {}).get('total_profit', 0),
-            'pending_profit': pending_profit,
-            'count': len(active_investments)
-        },
-        'recent_transactions': recent_transactions,
-        'notification_count': notifications_collection.count_documents({
+    try:
+        # Get active investments
+        active_investments = list(investments_collection.find({
             'user_id': str(user['_id']),
-            'read': False
-        })
-    }
+            'status': 'active'
+        }))
 
-    return jsonify({
-        'success': True,
-        'data': dashboard_data
-    })
+        total_active = sum(inv.get('amount', 0) for inv in active_investments)
+        pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments if inv.get('status') == 'active')
 
-# ==================== ADD CORS PREFLIGHT FOR ALL ROUTES ====================
+        # Get recent transactions
+        recent_transactions = list(transactions_collection.find(
+            {'user_id': str(user['_id'])}
+        ).sort('created_at', -1).limit(10))
 
-@app.before_request
-def handle_options_request():
-    if request.method == 'OPTIONS':
-        response = jsonify({'success': True})
+        for tx in recent_transactions:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx:
+                tx['created_at'] = tx['created_at'].isoformat()
+
+        dashboard_data = {
+            'wallet': user.get('wallet', {'balance': 0.00}),
+            'investments': {
+                'total_active': total_active,
+                'total_profit': user.get('wallet', {}).get('total_profit', 0),
+                'pending_profit': pending_profit,
+                'count': len(active_investments),
+                'active_investments': [
+                    {
+                        'id': str(inv['_id']),
+                        'amount': inv.get('amount', 0),
+                        'plan_name': inv.get('plan_name', 'Unknown'),
+                        'expected_profit': inv.get('expected_profit', 0),
+                        'end_date': inv.get('end_date').isoformat() if inv.get('end_date') else None
+                    }
+                    for inv in active_investments
+                ]
+            },
+            'recent_transactions': recent_transactions,
+            'notification_count': notifications_collection.count_documents({
+                'user_id': str(user['_id']),
+                'read': False
+            })
+        }
+
+        response = make_response(jsonify({
+            'success': True,
+            'data': dashboard_data
+        }))
+        
+        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        
         return response
-
-# ==================== ADMIN API ENDPOINTS ====================
-# (Keep all your existing admin endpoints - they are fine)
+        
+    except Exception as e:
+        logger.error(f"❌ Dashboard error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': 'Failed to load dashboard'}), 500
 
 # ==================== INIT DATABASE ====================
 
@@ -515,7 +694,11 @@ def init_database():
         # Create indexes
         users_collection.create_index('email', unique=True)
         users_collection.create_index('username', unique=True)
-        print("✅ Database indexes created")
+        users_collection.create_index('referral_code', unique=True)
+        investments_collection.create_index('user_id')
+        investments_collection.create_index('status')
+        transactions_collection.create_index('user_id')
+        logger.info("✅ Database indexes created")
 
         # Create admin user if not exists
         admin_email = 'admin@veloxtrades.com'
@@ -548,7 +731,7 @@ def init_database():
                 'kyc_status': 'verified'
             }
             users_collection.insert_one(admin_user)
-            print("✅ Admin user created (username: admin, password: admin123)")
+            logger.info("✅ Admin user created (username: admin, password: admin123)")
 
         # Create demo user
         demo_email = 'demo@veloxtrades.com'
@@ -581,16 +764,56 @@ def init_database():
                 'kyc_status': 'verified'
             }
             users_collection.insert_one(demo_user)
-            print("✅ Demo user created")
+            logger.info("✅ Demo user created")
 
-        print(f"👥 Total users: {users_collection.count_documents({})}")
+        # Create a sample investment for demo user
+        demo_user_obj = users_collection.find_one({'email': demo_email})
+        if demo_user_obj:
+            existing_investment = investments_collection.find_one({
+                'user_id': str(demo_user_obj['_id']),
+                'status': 'active'
+            })
+            
+            if not existing_investment:
+                sample_investment = {
+                    'user_id': str(demo_user_obj['_id']),
+                    'plan_name': 'Standard Plan',
+                    'plan_type': 'standard',
+                    'amount': 2500.00,
+                    'expected_profit': 200.00,
+                    'roi': 8,
+                    'duration_hours': 20,
+                    'status': 'active',
+                    'start_date': datetime.now(timezone.utc),
+                    'end_date': datetime.now(timezone.utc) + timedelta(hours=20),
+                    'created_at': datetime.now(timezone.utc)
+                }
+                investments_collection.insert_one(sample_investment)
+                logger.info("✅ Sample investment created for demo user")
+
+        total_users = users_collection.count_documents({})
+        logger.info(f"👥 Total users: {total_users}")
 
     except Exception as e:
-        print(f"❌ Database initialization error: {e}")
+        logger.error(f"❌ Database initialization error: {e}")
+        logger.error(traceback.format_exc())
 
 # Initialize database
 with app.app_context():
     init_database()
+
+# ==================== ERROR HANDLERS ====================
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'success': False, 'message': 'Resource not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {error}")
+    return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+# ==================== MAIN ====================
 
 if __name__ == '__main__':
     print("\n" + "=" * 70)
@@ -608,8 +831,17 @@ if __name__ == '__main__':
     print("\n📝 Test Accounts:")
     print("   Admin: admin@veloxtrades.com / admin123")
     print("   Demo:  demo@veloxtrades.com / demo123")
+    print("=" * 70)
+    print("\n🔧 API Endpoints:")
+    print("   POST   /api/register - User registration")
+    print("   POST   /api/login - User login")
+    print("   POST   /api/logout - User logout")
+    print("   GET    /api/auth/profile - Get user profile")
+    print("   GET    /api/verify-token - Verify JWT token")
+    print("   GET    /api/user/dashboard - User dashboard")
+    print("   GET    /api/health - Health check")
     print("=" * 70 + "\n")
 
     # For production on Render, use environment variable PORT
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
