@@ -6,6 +6,7 @@ import string
 import hmac
 import hashlib
 import requests
+import mimetypes
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from flask import Flask, request, jsonify, send_from_directory, make_response
@@ -31,7 +32,7 @@ app = Flask(__name__, static_folder='static', template_folder='static')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
-app.config['JWT_EXPIRATION_DAYS'] = 30  # CHANGED: Token valid for 30 days (was 7)
+app.config['JWT_EXPIRATION_DAYS'] = 30  # Token valid for 30 days
 
 # NOWPayments Configuration
 app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4WJMKC1-G41XRH2-DNA8HRZ')
@@ -42,7 +43,12 @@ app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://frontend-ugb2.onrender.com')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 
-# CORS Configuration - COMPLETE FIX
+# Add MIME types for static files
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('text/html', '.html')
+
+# CORS Configuration
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -62,13 +68,9 @@ CORS(app,
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_DOMAIN'] = None  # Don't set domain for cross-origin
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)  # CHANGED: Session lifetime 30 days
+app.config['SESSION_COOKIE_DOMAIN'] = None
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 
-# Add this after creating the Flask app
-import mimetypes
-mimetypes.add_type('application/javascript', '.js')
-mimetypes.add_type('text/css', '.css')
 # Investment Plans
 INVESTMENT_PLANS = {
     'standard': {
@@ -100,27 +102,7 @@ INVESTMENT_PLANS = {
         'max_deposit': float('inf')
     }
 }
-# Add this after creating the Flask app
-import mimetypes
-mimetypes.add_type('application/javascript', '.js')
-mimetypes.add_type('text/css', '.css')
-mimetypes.add_type('text/html', '.html')
 
-# Add this route to serve static files properly
-@app.route('/<path:filename>')
-def serve_static_files(filename):
-    """Serve static files with correct MIME types"""
-    response = make_response(send_from_directory(app.static_folder, filename))
-    
-    # Set correct content type based on file extension
-    if filename.endswith('.js'):
-        response.headers['Content-Type'] = 'application/javascript'
-    elif filename.endswith('.css'):
-        response.headers['Content-Type'] = 'text/css'
-    elif filename.endswith('.html'):
-        response.headers['Content-Type'] = 'text/html'
-    
-    return response
 # Helper function for UTC now
 def utc_now():
     return datetime.now(timezone.utc)
@@ -176,10 +158,8 @@ def verify_jwt_token(token):
         return None
 
 def get_user_from_request():
-    # First try to get token from cookie
     token = request.cookies.get('veloxtrades_token')
     
-    # If not in cookie, try Authorization header
     if not token:
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
@@ -231,7 +211,6 @@ def log_admin_action(admin_id, action, details):
     admin_logs_collection.insert_one(log)
 
 def verify_nowpayments_ipn(request_data, signature):
-    """Verify NOWPayments IPN signature"""
     if not signature:
         return False
     calculated = hmac.new(
@@ -242,7 +221,6 @@ def verify_nowpayments_ipn(request_data, signature):
     return hmac.compare_digest(calculated, signature)
 
 def handle_preflight():
-    """Handle CORS preflight requests"""
     response = make_response()
     response.headers.add("Access-Control-Allow-Origin", FRONTEND_URL)
     response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept,X-Requested-With")
@@ -254,11 +232,9 @@ def handle_preflight():
 # ==================== AUTO-PROFIT SCHEDULER ====================
 
 def process_investment_profits():
-    """Automatically process investment profits"""
     try:
         logger.info("🔄 Processing investment profits...")
         
-        # Find all active investments that have ended
         active_investments = list(investments_collection.find({
             'status': 'active',
             'end_date': {'$lte': datetime.now(timezone.utc)}
@@ -268,12 +244,10 @@ def process_investment_profits():
         
         for investment in active_investments:
             try:
-                # Calculate profit
                 user_id = investment['user_id']
                 amount = investment['amount']
                 expected_profit = investment.get('expected_profit', 0)
                 
-                # Update user wallet
                 result = users_collection.update_one(
                     {'_id': ObjectId(user_id)},
                     {
@@ -285,13 +259,11 @@ def process_investment_profits():
                 )
                 
                 if result.modified_count > 0:
-                    # Mark investment as completed
                     investments_collection.update_one(
                         {'_id': investment['_id']},
                         {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}}
                     )
                     
-                    # Create transaction record
                     transactions_collection.insert_one({
                         'user_id': user_id,
                         'type': 'profit',
@@ -302,7 +274,6 @@ def process_investment_profits():
                         'created_at': datetime.now(timezone.utc)
                     })
                     
-                    # Create notification
                     create_notification(
                         user_id,
                         'Investment Completed! 🎉',
@@ -311,7 +282,7 @@ def process_investment_profits():
                     )
                     
                     profit_processed += 1
-                    logger.info(f"✅ Processed profit for investment {investment['_id']} - User: {user_id}")
+                    logger.info(f"✅ Processed profit for investment {investment['_id']}")
                 
             except Exception as e:
                 logger.error(f"❌ Error processing investment {investment['_id']}: {e}")
@@ -353,14 +324,23 @@ def serve_index():
     })
 
 @app.route('/<path:filename>')
-def serve_frontend(filename):
-    return send_from_directory(app.static_folder, filename)
+def serve_static_files(filename):
+    """Serve static files with correct MIME types"""
+    response = make_response(send_from_directory(app.static_folder, filename))
+    
+    if filename.endswith('.js'):
+        response.headers['Content-Type'] = 'application/javascript'
+    elif filename.endswith('.css'):
+        response.headers['Content-Type'] = 'text/css'
+    elif filename.endswith('.html'):
+        response.headers['Content-Type'] = 'text/html'
+    
+    return response
 
 # ==================== HEALTH CHECK ENDPOINTS ====================
 
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def simple_health_check():
-    """Simple health check endpoint for frontend"""
     if request.method == 'OPTIONS':
         return handle_preflight()
     
@@ -406,7 +386,6 @@ def register():
         if not all([full_name, email, username, password]):
             return jsonify({'success': False, 'message': 'All fields are required'}), 400
 
-        # Check if user exists
         if users_collection.find_one({'email': email}):
             return jsonify({'success': False, 'message': 'Email already registered'}), 400
 
@@ -415,7 +394,6 @@ def register():
 
         referral_code = username.upper() + ''.join(random.choices(string.digits, k=4))
 
-        # Create wallet with zero balance
         wallet = {
             'balance': 0.00,
             'total_deposited': 0.00,
@@ -447,7 +425,6 @@ def register():
 
         result = users_collection.insert_one(user_data)
 
-        # Create welcome notification
         create_notification(
             result.inserted_id,
             'Welcome to Veloxtrades!',
@@ -494,21 +471,15 @@ def login():
             ]
         })
 
-        if not user:
-            logger.warning(f"Login failed: User not found - {username_or_email}")
-            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-            
-        if not verify_password(user['password'], password):
-            logger.warning(f"Login failed: Invalid password for {username_or_email}")
+        if not user or not verify_password(user['password'], password):
+            logger.warning(f"Login failed: Invalid credentials for {username_or_email}")
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
 
         if user.get('is_banned', False):
             return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
 
-        # Generate token
         token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
 
-        # Update last login
         users_collection.update_one(
             {'_id': user['_id']},
             {'$set': {'last_login': datetime.now(timezone.utc)}}
@@ -523,7 +494,6 @@ def login():
             'is_admin': user.get('is_admin', False)
         }
 
-        # Create response
         response = make_response(jsonify({
             'success': True,
             'message': 'Login successful!',
@@ -533,18 +503,16 @@ def login():
             }
         }))
 
-        # Set secure cookie with 30 day expiration
         response.set_cookie(
             'veloxtrades_token',
             value=token,
             httponly=True,
             secure=True,
             samesite='Lax',
-            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,  # 30 days
+            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,
             path='/'
         )
 
-        # Add CORS headers
         response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         
@@ -600,7 +568,6 @@ def get_profile():
 
 @app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
 def verify_token():
-    """Endpoint to verify if current token is valid"""
     if request.method == 'OPTIONS':
         return handle_preflight()
     
@@ -608,7 +575,6 @@ def verify_token():
     if not user:
         return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
     
-    # Check if token is about to expire
     token = request.cookies.get('veloxtrades_token')
     if token:
         payload = verify_jwt_token(token)
@@ -654,16 +620,14 @@ def get_dashboard():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
 
     try:
-        # Get active investments
         active_investments = list(investments_collection.find({
             'user_id': str(user['_id']),
             'status': 'active'
         }))
 
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
-        pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments if inv.get('status') == 'active')
+        pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
 
-        # Get recent transactions
         recent_transactions = list(transactions_collection.find(
             {'user_id': str(user['_id'])}
         ).sort('created_at', -1).limit(10))
@@ -717,7 +681,6 @@ def get_dashboard():
 
 def init_database():
     try:
-        # Create indexes
         users_collection.create_index('email', unique=True)
         users_collection.create_index('username', unique=True)
         users_collection.create_index('referral_code', unique=True)
@@ -726,7 +689,7 @@ def init_database():
         transactions_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
-        # Create admin user if not exists
+        # Create admin user
         admin_email = 'admin@veloxtrades.com'
         admin_exists = users_collection.find_one({'email': admin_email})
 
@@ -792,7 +755,7 @@ def init_database():
             users_collection.insert_one(demo_user)
             logger.info("✅ Demo user created")
 
-        # Create a sample investment for demo user
+        # Create sample investment for demo user
         demo_user_obj = users_collection.find_one({'email': demo_email})
         if demo_user_obj:
             existing_investment = investments_collection.find_one({
@@ -852,8 +815,6 @@ if __name__ == '__main__':
     print("=" * 70)
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
-    print(f"👤 User Dashboard: {FRONTEND_URL}/dashboard.html")
-    print(f"👑 Admin Dashboard: {FRONTEND_URL}/admin")
     print("\n📝 Test Accounts:")
     print("   Admin: admin@veloxtrades.com / admin123")
     print("   Demo:  demo@veloxtrades.com / demo123")
@@ -870,6 +831,5 @@ if __name__ == '__main__':
     print("🔐 Token Expiration: 30 DAYS")
     print("=" * 70 + "\n")
 
-    # For production on Render, use environment variable PORT
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
