@@ -1191,6 +1191,80 @@ def admin_toggle_ban(user_id):
         logger.error(f"Toggle ban error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/admin/users/<user_id>/ban', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_ban_user(user_id):
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$set': {'is_banned': True}}
+        )
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'ban_user',
+            f'User {user["username"]} was banned'
+        )
+        
+        # Create notification for user
+        create_notification(
+            user_id,
+            'Account Banned',
+            'Your account has been banned. Please contact support for more information.',
+            'error'
+        )
+        
+        return jsonify({'success': True, 'message': 'User banned successfully'})
+    except Exception as e:
+        logger.error(f"Ban user error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/users/<user_id>/unban', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_unban_user(user_id):
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$set': {'is_banned': False}}
+        )
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'unban_user',
+            f'User {user["username"]} was unbanned'
+        )
+        
+        # Create notification for user
+        create_notification(
+            user_id,
+            'Account Unbanned',
+            'Your account has been unbanned. You can now login again.',
+            'success'
+        )
+        
+        return jsonify({'success': True, 'message': 'User unbanned successfully'})
+    except Exception as e:
+        logger.error(f"Unban user error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/admin/users/<user_id>/reset-password', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_reset_password(user_id):
@@ -1293,9 +1367,41 @@ def admin_adjust_balance(user_id):
         logger.error(f"Balance adjustment error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
+@app.route('/api/admin/users/<user_id>/delete', methods=['DELETE', 'OPTIONS'])
 @require_admin
 def admin_delete_user(user_id):
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Delete all user data
+        users_collection.delete_one({'_id': ObjectId(user_id)})
+        investments_collection.delete_many({'user_id': str(user_id)})
+        transactions_collection.delete_many({'user_id': str(user_id)})
+        deposits_collection.delete_many({'user_id': str(user_id)})
+        withdrawals_collection.delete_many({'user_id': str(user_id)})
+        notifications_collection.delete_many({'user_id': str(user_id)})
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'delete_user',
+            f'User {user["username"]} was permanently deleted'
+        )
+        
+        return jsonify({'success': True, 'message': 'User deleted successfully'})
+    except Exception as e:
+        logger.error(f"Delete user error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
+@require_admin
+def admin_delete_user_alt(user_id):
     if request.method == 'OPTIONS':
         return handle_preflight()
     
@@ -1884,9 +1990,12 @@ if __name__ == '__main__':
     print("   GET    /api/admin/users - Admin: List all users")
     print("   GET    /api/admin/users/<id> - Admin: Get user details")
     print("   POST   /api/admin/users/<id>/toggle-ban - Admin: Ban/Unban user")
+    print("   POST   /api/admin/users/<id>/ban - Admin: Ban user")
+    print("   POST   /api/admin/users/<id>/unban - Admin: Unban user")
     print("   POST   /api/admin/users/<id>/reset-password - Admin: Reset user password")
     print("   POST   /api/admin/users/<id>/balance - Admin: Adjust user balance")
-    print("   DELETE /api/admin/users/<id> - Admin: Delete user")
+    print("   DELETE /api/admin/users/<id>/delete - Admin: Delete user")
+    print("   DELETE /api/admin/users/<id> - Admin: Delete user (alt)")
     print("   GET    /api/admin/deposits - Admin: View deposits")
     print("   POST   /api/admin/deposits/<id>/approve - Admin: Approve deposit")
     print("   POST   /api/admin/deposits/<id>/reject - Admin: Reject deposit")
