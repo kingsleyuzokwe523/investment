@@ -48,7 +48,7 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# CORS Configuration - UPDATE THIS SECTION
+# CORS Configuration
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -56,7 +56,7 @@ CORS(app,
          "http://127.0.0.1:5000",
          "http://localhost:3000",
          "http://localhost:5500",
-         "https://frontend-ugb2.onrender.com",      # Your CURRENT frontend
+         "https://frontend-ugb2.onrender.com",
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
@@ -323,7 +323,7 @@ def serve_index():
         'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
     })
 
-# ==================== STATIC FILE SERVING - SINGLE ROUTE ====================
+# ==================== STATIC FILE SERVING ====================
 
 @app.route('/<path:filename>')
 def serve_static_files(filename):
@@ -331,23 +331,18 @@ def serve_static_files(filename):
     try:
         response = make_response(send_from_directory(app.static_folder, filename))
         
-        # Set correct content type based on file extension
         if filename.endswith('.js'):
             response.headers['Content-Type'] = 'application/javascript'
-            # Cache JS for 1 hour
             response.headers['Cache-Control'] = 'public, max-age=3600'
         elif filename.endswith('.css'):
             response.headers['Content-Type'] = 'text/css'
-            # Cache CSS for 1 hour
             response.headers['Cache-Control'] = 'public, max-age=3600'
         elif filename.endswith('.html'):
             response.headers['Content-Type'] = 'text/html'
-            # NO CACHE for HTML files - always get fresh version
             response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
-        elif filename.endswith('.png') or filename.endswith('.jpg') or filename.endswith('.jpeg') or filename.endswith('.gif') or filename.endswith('.svg'):
-            # Cache images for 1 day
+        elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg')):
             response.headers['Cache-Control'] = 'public, max-age=86400'
         
         return response
@@ -695,6 +690,449 @@ def get_dashboard():
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': 'Failed to load dashboard'}), 500
 
+# ==================== TRANSACTIONS API ====================
+
+@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
+def get_transactions():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        # Get all transactions (deposits, withdrawals, investments, profits)
+        deposits = list(deposits_collection.find({'user_id': str(user['_id'])}))
+        withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}))
+        investments = list(investments_collection.find({'user_id': str(user['_id'])}))
+        profits = list(transactions_collection.find({'user_id': str(user['_id']), 'type': 'profit'}))
+        
+        all_transactions = []
+        
+        for d in deposits:
+            all_transactions.append({
+                'type': 'deposit',
+                'amount': d.get('amount', 0),
+                'status': d.get('status', 'pending'),
+                'description': f"Deposit of ${d.get('amount', 0)} via {d.get('crypto', 'crypto')}",
+                'created_at': d.get('created_at', datetime.now(timezone.utc)),
+                'transaction_id': d.get('transaction_id', '')
+            })
+        
+        for w in withdrawals:
+            all_transactions.append({
+                'type': 'withdrawal',
+                'amount': -w.get('amount', 0),
+                'status': w.get('status', 'pending'),
+                'description': f"Withdrawal of ${w.get('amount', 0)} to {w.get('wallet_address', '')[:10]}...",
+                'created_at': w.get('created_at', datetime.now(timezone.utc))
+            })
+        
+        for inv in investments:
+            all_transactions.append({
+                'type': 'investment',
+                'amount': -inv.get('amount', 0),
+                'status': inv.get('status', 'active'),
+                'description': f"Investment in {inv.get('plan_name', 'Plan')}",
+                'created_at': inv.get('created_at', datetime.now(timezone.utc))
+            })
+        
+        for p in profits:
+            all_transactions.append({
+                'type': 'profit',
+                'amount': p.get('amount', 0),
+                'status': 'completed',
+                'description': p.get('description', 'Profit earned'),
+                'created_at': p.get('created_at', datetime.now(timezone.utc))
+            })
+        
+        all_transactions.sort(key=lambda x: x['created_at'], reverse=True)
+        
+        for tx in all_transactions:
+            if isinstance(tx['created_at'], datetime):
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {'transactions': all_transactions}
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Transactions error: {e}")
+        return jsonify({'success': False, 'message': 'Failed to load transactions'}), 500
+
+# ==================== INVESTMENTS API ====================
+
+@app.route('/api/investments', methods=['GET', 'OPTIONS'])
+def get_investments():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+        
+        for inv in investments:
+            inv['_id'] = str(inv['_id'])
+            if 'start_date' in inv and isinstance(inv['start_date'], datetime):
+                inv['start_date'] = inv['start_date'].isoformat()
+            if 'end_date' in inv and isinstance(inv['end_date'], datetime):
+                inv['end_date'] = inv['end_date'].isoformat()
+            if 'created_at' in inv and isinstance(inv['created_at'], datetime):
+                inv['created_at'] = inv['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'data': {'investments': investments}
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Investments error: {e}")
+        return jsonify({'success': False, 'message': 'Failed to load investments'}), 500
+
+# ==================== DEPOSIT API ====================
+
+@app.route('/api/deposit', methods=['POST', 'OPTIONS'])
+def create_deposit():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        
+        deposit = {
+            'user_id': str(user['_id']),
+            'amount': float(data.get('amount', 0)),
+            'crypto': data.get('crypto', ''),
+            'wallet_address': data.get('wallet_address', ''),
+            'transaction_id': data.get('transaction_id', ''),
+            'status': 'pending',
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        result = deposits_collection.insert_one(deposit)
+        
+        # Create notification for admin (will be shown in admin dashboard)
+        create_notification(
+            user['_id'],
+            'New Deposit Request',
+            f'User {user["username"]} requested deposit of ${deposit["amount"]} via {deposit["crypto"]}',
+            'info'
+        )
+        
+        # Also log for admin
+        admin_logs_collection.insert_one({
+            'type': 'deposit_request',
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'amount': deposit['amount'],
+            'crypto': deposit['crypto'],
+            'transaction_id': deposit['transaction_id'],
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        return jsonify({
+            'success': True,
+            'message': 'Deposit request submitted successfully',
+            'data': {'deposit_id': str(result.inserted_id)}
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Deposit creation error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/deposit/confirm', methods=['POST', 'OPTIONS'])
+def confirm_deposit():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        crypto = data.get('crypto', '')
+        
+        # Update user wallet balance
+        result = users_collection.update_one(
+            {'_id': user['_id']},
+            {
+                '$inc': {
+                    'wallet.balance': amount,
+                    'wallet.total_deposited': amount
+                }
+            }
+        )
+        
+        if result.modified_count > 0:
+            # Create transaction record
+            transaction = {
+                'user_id': str(user['_id']),
+                'type': 'deposit',
+                'amount': amount,
+                'status': 'completed',
+                'description': f'Deposit of ${amount} via {crypto}',
+                'created_at': datetime.now(timezone.utc)
+            }
+            transactions_collection.insert_one(transaction)
+            
+            # Update deposit status
+            deposits_collection.update_one(
+                {'user_id': str(user['_id']), 'status': 'pending'},
+                {'$set': {'status': 'completed', 'confirmed_at': datetime.now(timezone.utc)}},
+                sort=[('created_at', -1)]
+            )
+            
+            # Create notification
+            create_notification(
+                user['_id'],
+                'Deposit Confirmed! 🎉',
+                f'Your deposit of ${amount:,.2f} has been confirmed and added to your wallet.',
+                'success'
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Deposit confirmed successfully',
+                'data': {'new_balance': user.get('wallet', {}).get('balance', 0) + amount}
+            })
+        else:
+            return jsonify({'success': False, 'message': 'Failed to update balance'}), 500
+            
+    except Exception as e:
+        logger.error(f"❌ Deposit confirmation error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== WITHDRAWAL API ====================
+
+@app.route('/api/withdrawals', methods=['POST', 'OPTIONS'])
+def create_withdrawal():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        currency = data.get('currency', '')
+        wallet_address = data.get('wallet_address', '')
+        
+        # Check if user has sufficient balance
+        current_balance = user.get('wallet', {}).get('balance', 0)
+        if amount > current_balance:
+            return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
+        
+        if amount < 50:
+            return jsonify({'success': False, 'message': 'Minimum withdrawal is $50'}), 400
+        
+        withdrawal = {
+            'user_id': str(user['_id']),
+            'amount': amount,
+            'currency': currency,
+            'wallet_address': wallet_address,
+            'status': 'pending',
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        result = withdrawals_collection.insert_one(withdrawal)
+        
+        # Create notification for admin
+        create_notification(
+            user['_id'],
+            'New Withdrawal Request',
+            f'User {user["username"]} requested withdrawal of ${amount} to {currency}',
+            'info'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': 'Withdrawal request submitted successfully',
+            'data': {'withdrawal_id': str(result.inserted_id)}
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Withdrawal creation error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== INVEST API ====================
+
+@app.route('/api/invest', methods=['POST', 'OPTIONS'])
+def create_investment():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        plan_type = data.get('plan_type', '')
+        amount = float(data.get('amount', 0))
+        
+        plan = INVESTMENT_PLANS.get(plan_type)
+        if not plan:
+            return jsonify({'success': False, 'message': 'Invalid investment plan'}), 400
+        
+        # Check minimum and maximum
+        if amount < plan['min_deposit']:
+            return jsonify({'success': False, 'message': f'Minimum investment is ${plan["min_deposit"]}'}), 400
+        if amount > plan['max_deposit'] and plan['max_deposit'] != float('inf'):
+            return jsonify({'success': False, 'message': f'Maximum investment is ${plan["max_deposit"]}'}), 400
+        
+        # Check if user has sufficient balance
+        current_balance = user.get('wallet', {}).get('balance', 0)
+        if amount > current_balance:
+            return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
+        
+        # Calculate expected profit
+        expected_profit = amount * plan['roi'] / 100
+        end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
+        
+        # Deduct from wallet and create investment
+        users_collection.update_one(
+            {'_id': user['_id']},
+            {
+                '$inc': {
+                    'wallet.balance': -amount,
+                    'wallet.total_invested': amount
+                }
+            }
+        )
+        
+        investment = {
+            'user_id': str(user['_id']),
+            'plan_name': plan['name'],
+            'plan_type': plan_type,
+            'amount': amount,
+            'expected_profit': expected_profit,
+            'roi': plan['roi'],
+            'duration_hours': plan['duration_hours'],
+            'status': 'active',
+            'start_date': datetime.now(timezone.utc),
+            'end_date': end_date,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        result = investments_collection.insert_one(investment)
+        
+        # Create transaction record
+        transaction = {
+            'user_id': str(user['_id']),
+            'type': 'investment',
+            'amount': amount,
+            'status': 'completed',
+            'description': f'Investment in {plan["name"]}',
+            'investment_id': str(result.inserted_id),
+            'created_at': datetime.now(timezone.utc)
+        }
+        transactions_collection.insert_one(transaction)
+        
+        # Create notification
+        create_notification(
+            user['_id'],
+            'Investment Created! 🚀',
+            f'Your investment of ${amount:,.2f} in {plan["name"]} has been started. Expected profit: ${expected_profit:,.2f}',
+            'success'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': 'Investment created successfully',
+            'data': {'investment_id': str(result.inserted_id)}
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Investment creation error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN API ENDPOINTS ====================
+
+@app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_deposits():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        pending_deposits = list(deposits_collection.find({'status': 'pending'}).sort('created_at', -1))
+        for d in pending_deposits:
+            d['_id'] = str(d['_id'])
+            if 'created_at' in d and isinstance(d['created_at'], datetime):
+                d['created_at'] = d['created_at'].isoformat()
+            # Get user info
+            user = users_collection.find_one({'_id': ObjectId(d['user_id'])})
+            if user:
+                d['username'] = user.get('username', 'Unknown')
+        
+        return jsonify({'success': True, 'data': {'deposits': pending_deposits}})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/deposits/approve', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_approve_deposit():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        data = request.get_json()
+        deposit_id = data.get('deposit_id')
+        user_id = data.get('user_id')
+        amount = float(data.get('amount', 0))
+        
+        # Update user wallet
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {
+                '$inc': {
+                    'wallet.balance': amount,
+                    'wallet.total_deposited': amount
+                }
+            }
+        )
+        
+        # Update deposit status
+        deposits_collection.update_one(
+            {'_id': ObjectId(deposit_id)},
+            {'$set': {'status': 'completed', 'confirmed_at': datetime.now(timezone.utc)}}
+        )
+        
+        # Create transaction
+        transactions_collection.insert_one({
+            'user_id': user_id,
+            'type': 'deposit',
+            'amount': amount,
+            'status': 'completed',
+            'description': f'Deposit of ${amount} confirmed by admin',
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        # Create notification for user
+        create_notification(
+            user_id,
+            'Deposit Approved! ✅',
+            f'Your deposit of ${amount:,.2f} has been approved and added to your wallet.',
+            'success'
+        )
+        
+        return jsonify({'success': True, 'message': 'Deposit approved successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 # ==================== INIT DATABASE ====================
 
 def init_database():
@@ -705,6 +1143,8 @@ def init_database():
         investments_collection.create_index('user_id')
         investments_collection.create_index('status')
         transactions_collection.create_index('user_id')
+        deposits_collection.create_index('user_id')
+        withdrawals_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
         # Create admin user
@@ -773,31 +1213,6 @@ def init_database():
             users_collection.insert_one(demo_user)
             logger.info("✅ Demo user created")
 
-        # Create sample investment for demo user
-        demo_user_obj = users_collection.find_one({'email': demo_email})
-        if demo_user_obj:
-            existing_investment = investments_collection.find_one({
-                'user_id': str(demo_user_obj['_id']),
-                'status': 'active'
-            })
-            
-            if not existing_investment:
-                sample_investment = {
-                    'user_id': str(demo_user_obj['_id']),
-                    'plan_name': 'Standard Plan',
-                    'plan_type': 'standard',
-                    'amount': 2500.00,
-                    'expected_profit': 200.00,
-                    'roi': 8,
-                    'duration_hours': 20,
-                    'status': 'active',
-                    'start_date': datetime.now(timezone.utc),
-                    'end_date': datetime.now(timezone.utc) + timedelta(hours=20),
-                    'created_at': datetime.now(timezone.utc)
-                }
-                investments_collection.insert_one(sample_investment)
-                logger.info("✅ Sample investment created for demo user")
-
         total_users = users_collection.count_documents({})
         logger.info(f"👥 Total users: {total_users}")
 
@@ -844,6 +1259,12 @@ if __name__ == '__main__':
     print("   GET    /api/auth/profile - Get user profile")
     print("   GET    /api/verify-token - Verify JWT token")
     print("   GET    /api/user/dashboard - User dashboard")
+    print("   GET    /api/transactions - Get all transactions")
+    print("   GET    /api/investments - Get user investments")
+    print("   POST   /api/deposit - Create deposit request")
+    print("   POST   /api/deposit/confirm - Confirm deposit (simulated)")
+    print("   POST   /api/withdrawals - Request withdrawal")
+    print("   POST   /api/invest - Create investment")
     print("   GET    /api/health - Health check")
     print("=" * 70 + "\n")
     print("🔐 Token Expiration: 30 DAYS")
