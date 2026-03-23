@@ -47,8 +47,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-
-# CORS Configuration - ADDED NEW FRONTEND URL
+# CORS Configuration - ADD YOUR NEW FRONTEND URL
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -57,14 +56,13 @@ CORS(app,
          "http://localhost:3000",
          "http://localhost:5500",
          "https://frontend-ugb2.onrender.com",
-         "https://elite-eky6.onrender.com",      # NEW FRONTEND URL
+         "https://elite-eky6.onrender.com",      # 👈 ADD THIS LINE
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
-
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
