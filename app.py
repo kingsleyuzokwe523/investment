@@ -39,8 +39,8 @@ app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4W
 app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb6805f6-dbbb-442d-b31c-255dd3078628')
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
-# Production URLs
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://elite-eky6.onrender.com')
+# Production URLs - UPDATED with your new domain
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 
 # Add MIME types for static files
@@ -48,7 +48,7 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# CORS Configuration
+# CORS Configuration - UPDATED with your new domain
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -58,6 +58,9 @@ CORS(app,
          "http://localhost:5500",
          "https://frontend-ugb2.onrender.com",
          "https://elite-eky6.onrender.com",
+         "https://veloxtrades.com.ng",           # Your new domain
+         "https://www.veloxtrades.com.ng",       # www version
+         "https://velox-wnn4.onrender.com",      # Your clean frontend
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
@@ -1051,11 +1054,9 @@ def admin_get_stats():
     try:
         total_users = users_collection.count_documents({})
         
-        # Total deposits (approved)
         approved_deposits = list(deposits_collection.find({'status': 'approved'}))
         total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
         
-        # Total withdrawals (approved)
         approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
         total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
         
