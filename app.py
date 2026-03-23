@@ -29,7 +29,7 @@ load_dotenv()
 app = Flask(__name__, static_folder='static', template_folder='static')
 
 # Configuration
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'elite-secret-key-2024')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'veloxtrades-secret-key-2024')
 app.config['MONGO_URI'] = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 app.config['JWT_SECRET'] = os.getenv('JWT_SECRET', 'jwt-secret-key-change-this')
 app.config['JWT_EXPIRATION_DAYS'] = 30
@@ -47,7 +47,8 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-# CORS Configuration - ADD YOUR NEW FRONTEND URL
+
+# CORS Configuration
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -56,13 +57,14 @@ CORS(app,
          "http://localhost:3000",
          "http://localhost:5500",
          "https://frontend-ugb2.onrender.com",
-         "https://elite-eky6.onrender.com",      # 👈 ADD THIS LINE
+         "https://elite-eky6.onrender.com",
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
+
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -109,7 +111,7 @@ def utc_now():
 # MongoDB Connection
 try:
     client = MongoClient(app.config['MONGO_URI'])
-    db = client['elite_db']  # Changed database name
+    db = client['veloxtrades_db']  # Keep original database name to preserve existing users
     users_collection = db['users']
     investments_collection = db['investments']
     transactions_collection = db['transactions']
@@ -157,7 +159,10 @@ def verify_jwt_token(token):
         return None
 
 def get_user_from_request():
-    token = request.cookies.get('elite_token')  # Changed cookie name
+    # Try both cookie names for backward compatibility
+    token = request.cookies.get('veloxtrades_token')
+    if not token:
+        token = request.cookies.get('elite_token')
     
     if not token:
         auth_header = request.headers.get('Authorization', '')
@@ -316,7 +321,7 @@ logger.info("✅ Auto-profit scheduler started")
 def serve_index():
     return jsonify({
         'success': True,
-        'message': 'Elite API Server',
+        'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
         'backend': BACKEND_URL,
         'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
@@ -359,7 +364,7 @@ def simple_health_check():
     return jsonify({
         'success': True,
         'status': 'healthy',
-        'message': 'Elite API is running',
+        'message': 'Veloxtrades API is running',
         'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
@@ -439,7 +444,7 @@ def register():
 
         create_notification(
             result.inserted_id,
-            'Welcome to Elite!',
+            'Welcome to Veloxtrades!',
             'Thank you for joining. Start your investment journey today.',
             'success'
         )
@@ -515,6 +520,16 @@ def login():
             }
         }))
 
+        # Set cookie with both names for backward compatibility
+        response.set_cookie(
+            'veloxtrades_token',
+            value=token,
+            httponly=True,
+            secure=True,
+            samesite='Lax',
+            max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60,
+            path='/'
+        )
         response.set_cookie(
             'elite_token',
             value=token,
@@ -542,6 +557,7 @@ def logout():
         return handle_preflight()
     
     response = make_response(jsonify({'success': True, 'message': 'Logged out successfully'}))
+    response.set_cookie('veloxtrades_token', '', expires=0, path='/', httponly=True, secure=True, samesite='Lax')
     response.set_cookie('elite_token', '', expires=0, path='/', httponly=True, secure=True, samesite='Lax')
     response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
     response.headers.add('Access-Control-Allow-Credentials', 'true')
@@ -587,7 +603,11 @@ def verify_token():
     if not user:
         return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
     
-    token = request.cookies.get('elite_token')
+    # Try both cookie names
+    token = request.cookies.get('veloxtrades_token')
+    if not token:
+        token = request.cookies.get('elite_token')
+    
     if token:
         payload = verify_jwt_token(token)
         if payload:
@@ -1038,8 +1058,8 @@ def create_investment():
 
 # ==================== ADMIN API ENDPOINTS ====================
 
-# [ADMIN ENDPOINTS - KEEP ALL YOUR EXISTING ADMIN ENDPOINTS HERE]
-# They remain the same, just ensure they use the updated cookie name if needed
+# Keep all your existing admin endpoints here
+# They remain unchanged
 
 # ==================== INIT DATABASE ====================
 
@@ -1056,14 +1076,15 @@ def init_database():
         notifications_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
-        # Create admin user
-        admin_email = 'admin@elite.com'
-        admin_exists = users_collection.find_one({'email': admin_email})
+        # Create admin user with both email formats for compatibility
+        admin_email_old = 'admin@veloxtrades.com'
+        admin_email_new = 'admin@elite.com'
+        admin_exists = users_collection.find_one({'email': {'$in': [admin_email_old, admin_email_new]}})
 
         if not admin_exists:
             admin_user = {
                 'full_name': 'System Administrator',
-                'email': admin_email,
+                'email': admin_email_old,
                 'username': 'admin',
                 'password': hash_password('admin123'),
                 'phone': '+1234567890',
@@ -1088,15 +1109,18 @@ def init_database():
             }
             users_collection.insert_one(admin_user)
             logger.info("✅ Admin user created (username: admin, password: admin123)")
+        else:
+            logger.info("✅ Admin user already exists")
 
-        # Create demo user
-        demo_email = 'demo@elite.com'
-        demo_exists = users_collection.find_one({'email': demo_email})
+        # Create demo user with both email formats for compatibility
+        demo_email_old = 'demo@veloxtrades.com'
+        demo_email_new = 'demo@elite.com'
+        demo_exists = users_collection.find_one({'email': {'$in': [demo_email_old, demo_email_new]}})
 
         if not demo_exists:
             demo_user = {
                 'full_name': 'Demo User',
-                'email': demo_email,
+                'email': demo_email_old,
                 'username': 'demo',
                 'password': hash_password('demo123'),
                 'phone': '+1987654321',
@@ -1121,6 +1145,8 @@ def init_database():
             }
             users_collection.insert_one(demo_user)
             logger.info("✅ Demo user created")
+        else:
+            logger.info("✅ Demo user already exists")
 
         total_users = users_collection.count_documents({})
         logger.info(f"👥 Total users: {total_users}")
@@ -1148,7 +1174,7 @@ def internal_error(error):
 
 if __name__ == '__main__':
     print("\n" + "=" * 70)
-    print("🚀 ELITE API SERVER - PRODUCTION READY")
+    print("🚀 VELOXTRADES API SERVER - PRODUCTION READY")
     print("=" * 70)
     print("📊 MongoDB Connected")
     print("💳 NOWPayments Integration Active")
@@ -1158,8 +1184,8 @@ if __name__ == '__main__':
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
     print("\n📝 Test Accounts:")
-    print("   Admin: admin@elite.com / admin123")
-    print("   Demo:  demo@elite.com / demo123")
+    print("   Admin: admin@veloxtrades.com / admin123")
+    print("   Demo:  demo@veloxtrades.com / demo123")
     print("=" * 70)
     print("\n🔧 API Endpoints:")
     print("   POST   /api/register - User registration")
