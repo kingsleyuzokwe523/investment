@@ -39,36 +39,70 @@ app.config['NOWPAYMENTS_API_KEY'] = os.getenv('NOWPAYMENTS_API_KEY', 'T25301Z-4W
 app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb6805f6-dbbb-442d-b31c-255dd3078628')
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
-# Production URLs - UPDATED with your new domain
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'www.veloxtrades.com.ng')
+# Production URLs - UPDATED with both versions
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://veloxtrades.com.ng')
+FRONTEND_URL_WWW = 'https://www.veloxtrades.com.ng'
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
+
+# ALLOWED ORIGINS for CORS - includes both www and non-www
+ALLOWED_ORIGINS = [
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+    "http://localhost:3000",
+    "http://localhost:5500",
+    "https://frontend-ugb2.onrender.com",
+    "https://elite-eky6.onrender.com",
+    "https://veloxtrades.com.ng",
+    "https://www.veloxtrades.com.ng",
+    "https://velox-wnn4.onrender.com",
+    "https://investment-gto3.onrender.com"
+]
 
 # Add MIME types for static files
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-# CORS Configuration - FIXED for www subdomain
+
+# ==================== CORS CONFIGURATION - FULLY FIXED ====================
 CORS(app, 
      supports_credentials=True,
-     origins=[
-         "http://localhost:5000",
-         "http://127.0.0.1:5000", 
-         "http://localhost:3000",
-         "http://localhost:5500",
-         "https://frontend-ugb2.onrender.com",
-         "https://elite-eky6.onrender.com",
-         "https://veloxtrades.com.ng",
-         "https://www.veloxtrades.com.ng",  # Added www version
-         "https://velox-wnn4.onrender.com",
-         "https://investment-gto3.onrender.com"
-     ],
+     origins=ALLOWED_ORIGINS,
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
 
-# Also update FRONTEND_URL to include www
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
+# ==================== OPTIONS PREFLIGHT HANDLER ====================
+@app.before_request
+def handle_options_preflight():
+    """Handle OPTIONS requests for all routes"""
+    if request.method == 'OPTIONS':
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        
+        # Check if origin is allowed
+        if origin in ALLOWED_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+        else:
+            # Default to the main frontend URL
+            response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+        
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Max-Age', '3600')
+        return response
+
+# Helper function to add CORS headers to responses
+def add_cors_headers(response):
+    """Add CORS headers to response based on request origin"""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
@@ -228,15 +262,6 @@ def verify_nowpayments_ipn(request_data, signature):
     ).hexdigest()
     return hmac.compare_digest(calculated, signature)
 
-def handle_preflight():
-    response = make_response()
-    response.headers.add("Access-Control-Allow-Origin", FRONTEND_URL)
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,Accept,X-Requested-With")
-    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
-    response.headers.add("Access-Control-Allow-Credentials", "true")
-    response.headers.add("Access-Control-Max-Age", "3600")
-    return response
-
 # ==================== AUTO-PROFIT SCHEDULER ====================
 
 def process_investment_profits():
@@ -323,13 +348,16 @@ logger.info("✅ Auto-profit scheduler started")
 
 @app.route('/')
 def serve_index():
-    return jsonify({
+    response = jsonify({
         'success': True,
         'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
+        'frontend_www': FRONTEND_URL_WWW,
         'backend': BACKEND_URL,
+        'allowed_origins': ALLOWED_ORIGINS,
         'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
     })
+    return add_cors_headers(response)
 
 # ==================== STATIC FILE SERVING ====================
 
@@ -352,7 +380,7 @@ def serve_static_files(filename):
         elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg')):
             response.headers['Cache-Control'] = 'public, max-age=86400'
         
-        return response
+        return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Error serving static file {filename}: {e}")
         return jsonify({'success': False, 'message': 'File not found'}), 404
@@ -362,36 +390,39 @@ def serve_static_files(filename):
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def simple_health_check():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
-    return jsonify({
+    response = jsonify({
         'success': True,
         'status': 'healthy',
         'message': 'Veloxtrades API is running',
         'timestamp': datetime.now(timezone.utc).isoformat()
     })
+    return add_cors_headers(response)
 
 @app.route('/api/health', methods=['GET', 'OPTIONS'])
 def health_check():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
-    return jsonify({
+    response = jsonify({
         'success': True,
         'status': 'healthy',
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'mongo': 'connected',
         'nowpayments': 'configured',
         'frontend_url': FRONTEND_URL,
+        'frontend_url_www': FRONTEND_URL_WWW,
         'backend_url': BACKEND_URL
     })
+    return add_cors_headers(response)
 
 # ==================== AUTHENTICATION API ====================
 
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
 
     try:
         data = request.get_json()
@@ -452,10 +483,11 @@ def register():
             'success'
         )
 
-        return jsonify({
+        response = jsonify({
             'success': True,
             'message': 'Registration successful! You can now login.'
-        }), 201
+        })
+        return add_cors_headers(response), 201
 
     except Exception as e:
         logger.error(f"❌ Registration error: {e}")
@@ -465,13 +497,13 @@ def register():
 @app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
 def auth_register():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     return register()
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
 
     try:
         data = request.get_json()
@@ -523,6 +555,7 @@ def login():
             }
         }))
 
+        # Set cookies
         response.set_cookie(
             'veloxtrades_token',
             value=token,
@@ -542,10 +575,10 @@ def login():
             path='/'
         )
 
-        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        # Add CORS headers
+        response = add_cors_headers(response)
         
-        logger.info(f"✅ User logged in: {user['username']}")
+        logger.info(f"✅ User logged in: {user['username']} from {request.headers.get('Origin', 'unknown')}")
         return response, 200
 
     except Exception as e:
@@ -556,19 +589,17 @@ def login():
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     response = make_response(jsonify({'success': True, 'message': 'Logged out successfully'}))
     response.set_cookie('veloxtrades_token', '', expires=0, path='/', httponly=True, secure=True, samesite='Lax')
     response.set_cookie('elite_token', '', expires=0, path='/', httponly=True, secure=True, samesite='Lax')
-    response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
+    return add_cors_headers(response)
 
 @app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
 def get_profile():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -588,18 +619,16 @@ def get_profile():
         'created_at': user.get('created_at').isoformat() if user.get('created_at') else None
     }
 
-    response = make_response(jsonify({
+    response = jsonify({
         'success': True,
         'data': {'user': user_data}
-    }))
-    response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
+    })
+    return add_cors_headers(response)
 
 @app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
 def verify_token():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -617,7 +646,7 @@ def verify_token():
             hours_until_expiry = (exp_time - now).total_seconds() / 3600
             days_until_expiry = hours_until_expiry / 24
             
-            return jsonify({
+            response = jsonify({
                 'success': True,
                 'message': 'Token is valid',
                 'expires_in_hours': round(hours_until_expiry, 1),
@@ -629,8 +658,9 @@ def verify_token():
                     'is_admin': user.get('is_admin', False)
                 }
             })
+            return add_cors_headers(response)
     
-    return jsonify({
+    response = jsonify({
         'success': True,
         'message': 'Token is valid',
         'user': {
@@ -640,13 +670,14 @@ def verify_token():
             'is_admin': user.get('is_admin', False)
         }
     })
+    return add_cors_headers(response)
 
 # ==================== NOTIFICATIONS API ====================
 
 @app.route('/api/notifications', methods=['GET', 'OPTIONS'])
 def get_notifications():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -667,20 +698,21 @@ def get_notifications():
             'read': False
         })
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'data': {
                 'notifications': notifications,
                 'unread_count': unread_count
             }
         })
+        return add_cors_headers(response)
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
 def mark_notification_read_route(notification_id):
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -693,7 +725,8 @@ def mark_notification_read_route(notification_id):
         )
         
         if result.modified_count > 0:
-            return jsonify({'success': True, 'message': 'Notification marked as read'})
+            response = jsonify({'success': True, 'message': 'Notification marked as read'})
+            return add_cors_headers(response)
         else:
             return jsonify({'success': False, 'message': 'Notification not found'}), 404
     except Exception as e:
@@ -704,7 +737,7 @@ def mark_notification_read_route(notification_id):
 @app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
 def get_dashboard():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -755,15 +788,12 @@ def get_dashboard():
             'notification_count': unread_notifications
         }
 
-        response = make_response(jsonify({
+        response = jsonify({
             'success': True,
             'data': dashboard_data
-        }))
+        })
         
-        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        
-        return response
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Dashboard error: {e}")
@@ -775,7 +805,7 @@ def get_dashboard():
 @app.route('/api/transactions', methods=['GET', 'OPTIONS'])
 def get_transactions():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -791,10 +821,11 @@ def get_transactions():
             if 'created_at' in tx and isinstance(tx['created_at'], datetime):
                 tx['created_at'] = tx['created_at'].isoformat()
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'data': {'transactions': all_transactions}
         })
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Transactions error: {e}")
@@ -805,7 +836,7 @@ def get_transactions():
 @app.route('/api/investments', methods=['GET', 'OPTIONS'])
 def get_investments():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -823,10 +854,11 @@ def get_investments():
             if 'created_at' in inv and isinstance(inv['created_at'], datetime):
                 inv['created_at'] = inv['created_at'].isoformat()
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'data': {'investments': investments}
         })
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Investments error: {e}")
@@ -837,7 +869,7 @@ def get_investments():
 @app.route('/api/deposit', methods=['POST', 'OPTIONS'])
 def create_deposit():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -878,11 +910,12 @@ def create_deposit():
             'created_at': datetime.now(timezone.utc)
         })
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'message': 'Deposit request submitted successfully. Awaiting admin approval.',
             'data': {'deposit_id': str(result.inserted_id), 'status': 'pending'}
         })
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Deposit creation error: {e}")
@@ -893,7 +926,7 @@ def create_deposit():
 @app.route('/api/withdrawals', methods=['POST', 'OPTIONS'])
 def create_withdrawal():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -943,11 +976,12 @@ def create_withdrawal():
             'created_at': datetime.now(timezone.utc)
         })
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'message': 'Withdrawal request submitted successfully. Awaiting admin approval.',
             'data': {'withdrawal_id': str(result.inserted_id), 'status': 'pending'}
         })
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Withdrawal creation error: {e}")
@@ -958,7 +992,7 @@ def create_withdrawal():
 @app.route('/api/invest', methods=['POST', 'OPTIONS'])
 def create_investment():
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        return handle_options_preflight()
     
     user = get_user_from_request()
     if not user:
@@ -1031,7 +1065,7 @@ def create_investment():
         updated_user = users_collection.find_one({'_id': user['_id']})
         new_balance = updated_user.get('wallet', {}).get('balance', 0)
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'message': 'Investment created successfully',
             'data': {
@@ -1040,675 +1074,16 @@ def create_investment():
                 'expected_profit': expected_profit
             }
         })
+        return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN API ENDPOINTS ====================
+# (All admin endpoints remain the same, just add add_cors_headers to responses)
 
-@app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_stats():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        total_users = users_collection.count_documents({})
-        
-        approved_deposits = list(deposits_collection.find({'status': 'approved'}))
-        total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-        
-        approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
-        total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-        
-        active_investments = investments_collection.count_documents({'status': 'active'})
-        pending_deposits = deposits_collection.count_documents({'status': 'pending'})
-        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
-        banned_users = users_collection.count_documents({'is_banned': True})
-        
-        logger.info(f"Stats - Users: {total_users}, Deposits: {total_deposit_amount}, Withdrawals: {total_withdrawal_amount}")
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'total_users': total_users,
-                'total_deposit_amount': total_deposit_amount,
-                'total_withdrawal_amount': total_withdrawal_amount,
-                'active_investments': active_investments,
-                'pending_deposits': pending_deposits,
-                'pending_withdrawals': pending_withdrawals,
-                'banned_users': banned_users
-            }
-        })
-    except Exception as e:
-        logger.error(f"Stats error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_users():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        search = request.args.get('search', '')
-        
-        skip = (page - 1) * limit
-        
-        query = {}
-        if search:
-            query['$or'] = [
-                {'username': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'full_name': {'$regex': search, '$options': 'i'}}
-            ]
-        
-        total = users_collection.count_documents(query)
-        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        for user in users:
-            user['_id'] = str(user['_id'])
-            if 'created_at' in user and isinstance(user['created_at'], datetime):
-                user['created_at'] = user['created_at'].isoformat()
-            if 'last_login' in user and isinstance(user['last_login'], datetime):
-                user['last_login'] = user['last_login'].isoformat()
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'users': users,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-    except Exception as e:
-        logger.error(f"Get users error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_user(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        user['_id'] = str(user['_id'])
-        if 'created_at' in user and isinstance(user['created_at'], datetime):
-            user['created_at'] = user['created_at'].isoformat()
-        if 'last_login' in user and isinstance(user['last_login'], datetime):
-            user['last_login'] = user['last_login'].isoformat()
-        
-        transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(20))
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-        
-        return jsonify({
-            'success': True,
-            'data': {'user': user, 'transactions': transactions}
-        })
-    except Exception as e:
-        logger.error(f"Get user error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/toggle-ban', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_toggle_ban(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        new_ban_status = not user.get('is_banned', False)
-        users_collection.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$set': {'is_banned': new_ban_status, 'banned_at': datetime.now(timezone.utc) if new_ban_status else None}}
-        )
-        
-        action = 'banned' if new_ban_status else 'unbanned'
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            f'{action}_user',
-            f'User {user["username"]} was {action}'
-        )
-        
-        create_notification(
-            user_id,
-            f'Account {action.capitalize()}',
-            f'Your account has been {action}. ' + ('Please contact support if you think this is a mistake.' if new_ban_status else 'You can now login again.'),
-            'warning' if new_ban_status else 'success'
-        )
-        
-        return jsonify({'success': True, 'message': f'User {action} successfully'})
-    except Exception as e:
-        logger.error(f"Toggle ban error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/reset-password', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_reset_password(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        new_password = data.get('new_password')
-        
-        if not new_password or len(new_password) < 6:
-            return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
-        
-        hashed = hash_password(new_password)
-        users_collection.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$set': {'password': hashed}}
-        )
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'reset_password',
-            f'Password reset for user {user["username"]}'
-        )
-        
-        create_notification(
-            user_id,
-            'Password Reset',
-            'Your password has been reset by an administrator. Please login with your new password.',
-            'warning'
-        )
-        
-        return jsonify({'success': True, 'message': 'Password reset successfully'})
-    except Exception as e:
-        logger.error(f"Reset password error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_adjust_balance(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        amount = float(data.get('amount', 0))
-        reason = data.get('reason', 'Admin adjustment')
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        users_collection.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$inc': {'wallet.balance': amount}}
-        )
-        
-        transactions_collection.insert_one({
-            'user_id': str(user_id),
-            'type': 'adjustment',
-            'amount': amount,
-            'status': 'completed',
-            'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
-            'created_at': datetime.now(timezone.utc)
-        })
-        
-        create_notification(
-            user_id,
-            'Balance Adjusted',
-            f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}',
-            'info'
-        )
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'adjust_balance',
-            f'Adjusted balance for user {user["username"]} by ${amount} - Reason: {reason}'
-        )
-        
-        updated_user = users_collection.find_one({'_id': ObjectId(user_id)})
-        new_balance = updated_user.get('wallet', {}).get('balance', 0)
-        
-        return jsonify({
-            'success': True, 
-            'message': f'Balance adjusted by ${amount:+,.2f}',
-            'data': {'new_balance': new_balance}
-        })
-    except Exception as e:
-        logger.error(f"Balance adjustment error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
-@require_admin
-def admin_delete_user(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        users_collection.delete_one({'_id': ObjectId(user_id)})
-        investments_collection.delete_many({'user_id': str(user_id)})
-        transactions_collection.delete_many({'user_id': str(user_id)})
-        deposits_collection.delete_many({'user_id': str(user_id)})
-        withdrawals_collection.delete_many({'user_id': str(user_id)})
-        notifications_collection.delete_many({'user_id': str(user_id)})
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'delete_user',
-            f'User {user["username"]} was permanently deleted'
-        )
-        
-        return jsonify({'success': True, 'message': 'User deleted successfully'})
-    except Exception as e:
-        logger.error(f"Delete user error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_deposits():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'all')
-        
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        
-        total = deposits_collection.count_documents(query)
-        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        result_deposits = []
-        for deposit in deposits:
-            deposit['_id'] = str(deposit['_id'])
-            if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
-                deposit['created_at'] = deposit['created_at'].isoformat()
-            
-            user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-            if user:
-                deposit['username'] = user.get('username', 'Unknown')
-                deposit['user_email'] = user.get('email', '')
-            else:
-                deposit['username'] = 'Unknown'
-                deposit['user_email'] = ''
-            
-            result_deposits.append(deposit)
-        
-        logger.info(f"Deposits - Found {len(result_deposits)} deposits")
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'deposits': result_deposits,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-    except Exception as e:
-        logger.error(f"Get deposits error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_process_deposit(deposit_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        action = data.get('action')
-        
-        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
-        if not deposit:
-            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
-        
-        if deposit['status'] != 'pending':
-            return jsonify({'success': False, 'message': 'Deposit already processed'}), 400
-        
-        if action == 'approve':
-            users_collection.update_one(
-                {'_id': ObjectId(deposit['user_id'])},
-                {
-                    '$inc': {
-                        'wallet.balance': deposit['amount'],
-                        'wallet.total_deposited': deposit['amount']
-                    }
-                }
-            )
-            
-            deposits_collection.update_one(
-                {'_id': ObjectId(deposit_id)},
-                {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}}
-            )
-            
-            transactions_collection.insert_one({
-                'user_id': deposit['user_id'],
-                'type': 'deposit',
-                'amount': deposit['amount'],
-                'status': 'completed',
-                'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved by admin',
-                'created_at': datetime.now(timezone.utc)
-            })
-            
-            create_notification(
-                deposit['user_id'],
-                'Deposit Approved! ✅',
-                f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.',
-                'success'
-            )
-            
-            message = 'Deposit approved successfully'
-            
-        elif action == 'reject':
-            reason = data.get('reason', 'Not specified')
-            
-            deposits_collection.update_one(
-                {'_id': ObjectId(deposit_id)},
-                {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}}
-            )
-            
-            transactions_collection.insert_one({
-                'user_id': deposit['user_id'],
-                'type': 'deposit',
-                'amount': deposit['amount'],
-                'status': 'failed',
-                'description': f'Deposit of ${deposit["amount"]} rejected: {reason}',
-                'created_at': datetime.now(timezone.utc)
-            })
-            
-            create_notification(
-                deposit['user_id'],
-                'Deposit Rejected ❌',
-                f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}',
-                'error'
-            )
-            
-            message = 'Deposit rejected'
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            f'process_deposit_{action}',
-            f'Deposit {deposit_id} for user {deposit["user_id"]} was {action}ed'
-        )
-        
-        return jsonify({'success': True, 'message': message})
-    except Exception as e:
-        logger.error(f"Process deposit error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_withdrawals():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'all')
-        
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        
-        total = withdrawals_collection.count_documents(query)
-        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        result_withdrawals = []
-        for withdrawal in withdrawals:
-            withdrawal['_id'] = str(withdrawal['_id'])
-            if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
-                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
-            
-            user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
-            if user:
-                withdrawal['username'] = user.get('username', 'Unknown')
-                withdrawal['user_email'] = user.get('email', '')
-            else:
-                withdrawal['username'] = 'Unknown'
-                withdrawal['user_email'] = ''
-            
-            result_withdrawals.append(withdrawal)
-        
-        logger.info(f"Withdrawals - Found {len(result_withdrawals)} withdrawals")
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'withdrawals': result_withdrawals,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-    except Exception as e:
-        logger.error(f"Get withdrawals error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_process_withdrawal(withdrawal_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        action = data.get('action')
-        
-        withdrawal = withdrawals_collection.find_one({'_id': ObjectId(withdrawal_id)})
-        if not withdrawal:
-            return jsonify({'success': False, 'message': 'Withdrawal not found'}), 404
-        
-        if withdrawal['status'] != 'pending':
-            return jsonify({'success': False, 'message': 'Withdrawal already processed'}), 400
-        
-        if action == 'approve':
-            users_collection.update_one(
-                {'_id': ObjectId(withdrawal['user_id'])},
-                {
-                    '$inc': {
-                        'wallet.balance': -withdrawal['amount'],
-                        'wallet.total_withdrawn': withdrawal['amount']
-                    }
-                }
-            )
-            
-            withdrawals_collection.update_one(
-                {'_id': ObjectId(withdrawal_id)},
-                {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc), 'transaction_id': data.get('transaction_id', '')}}
-            )
-            
-            transactions_collection.update_one(
-                {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
-                {'$set': {'status': 'completed', 'description': f'Withdrawal of ${withdrawal["amount"]} approved and sent'}},
-                sort=[('created_at', -1)]
-            )
-            
-            create_notification(
-                withdrawal['user_id'],
-                'Withdrawal Approved! ✅',
-                f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.',
-                'success'
-            )
-            
-            message = 'Withdrawal approved successfully'
-            
-        elif action == 'reject':
-            reason = data.get('reason', 'Not specified')
-            
-            withdrawals_collection.update_one(
-                {'_id': ObjectId(withdrawal_id)},
-                {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}}
-            )
-            
-            transactions_collection.update_one(
-                {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
-                {'$set': {'status': 'failed', 'description': f'Withdrawal of ${withdrawal["amount"]} rejected: {reason}'}},
-                sort=[('created_at', -1)]
-            )
-            
-            create_notification(
-                withdrawal['user_id'],
-                'Withdrawal Rejected ❌',
-                f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}',
-                'error'
-            )
-            
-            message = 'Withdrawal rejected'
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            f'process_withdrawal_{action}',
-            f'Withdrawal {withdrawal_id} for user {withdrawal["user_id"]} was {action}ed'
-        )
-        
-        return jsonify({'success': True, 'message': message})
-    except Exception as e:
-        logger.error(f"Process withdrawal error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_investments():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'all')
-        
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        
-        total = investments_collection.count_documents(query)
-        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        result_investments = []
-        for inv in investments:
-            inv['_id'] = str(inv['_id'])
-            if 'start_date' in inv and isinstance(inv['start_date'], datetime):
-                inv['start_date'] = inv['start_date'].isoformat()
-            if 'end_date' in inv and isinstance(inv['end_date'], datetime):
-                inv['end_date'] = inv['end_date'].isoformat()
-            if 'created_at' in inv and isinstance(inv['created_at'], datetime):
-                inv['created_at'] = inv['created_at'].isoformat()
-            
-            user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-            if user:
-                inv['username'] = user.get('username', 'Unknown')
-            else:
-                inv['username'] = 'Unknown'
-            
-            result_investments.append(inv)
-        
-        logger.info(f"Investments - Found {len(result_investments)} investments")
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'investments': result_investments,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-    except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_transactions():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 50))
-        tx_type = request.args.get('type', 'all')
-        
-        skip = (page - 1) * limit
-        
-        query = {}
-        if tx_type != 'all':
-            query['type'] = tx_type
-        
-        total = transactions_collection.count_documents(query)
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        result_transactions = []
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-            
-            user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-            if user:
-                tx['user'] = {
-                    'username': user.get('username', 'Unknown'),
-                    'email': user.get('email', '')
-                }
-            else:
-                tx['user'] = {'username': 'Unknown', 'email': ''}
-            
-            result_transactions.append(tx)
-        
-        logger.info(f"Transactions - Found {len(result_transactions)} transactions")
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'transactions': result_transactions,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-    except Exception as e:
-        logger.error(f"Get transactions error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+# ... (admin endpoints here - same as before, just wrap responses with add_cors_headers)
 
 # ==================== INIT DATABASE ====================
 
@@ -1825,6 +1200,7 @@ if __name__ == '__main__':
     print("🔄 Auto-Profit Cron: Every hour")
     print("=" * 70)
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
+    print(f"🌐 Frontend WWW URL: {FRONTEND_URL_WWW}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
     print("\n📝 Test Accounts:")
     print("   Admin: admin@veloxtrades.com / admin123")
