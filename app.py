@@ -64,13 +64,13 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# ==================== EMAIL CONFIGURATION ====================
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USER = os.getenv('EMAIL_USER', 'admin@veloxtrades.ltd')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', 'TRADE@V')
-EMAIL_FROM = os.getenv('EMAIL_FROM', 'admin@veloxtrades.ltd')
-ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@veloxtrades.ltd')
+# ==================== EMAIL CONFIGURATION - FIXED ====================
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USER = 'kingsleyuzokwe23@gmail.com'
+EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'  # App Password (no spaces)
+EMAIL_FROM = 'admin@veloxtrades.ltd'  # What users see
+ADMIN_EMAIL = 'kingsleyuzokwe23@gmail.com'  # Admin notifications
 
 def send_email(to_email, subject, body, html_body=None):
     """Send email to user"""
@@ -159,31 +159,7 @@ If you believe this is a mistake, please contact our support team.
 Best regards,
 Veloxtrades Team
 """
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head><style>
-body {{ font-family: Arial, sans-serif; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #ef4444, #dc2626); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>❌ Deposit Rejected</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<p>Your deposit of <strong>${amount:,.2f}</strong> via <strong>{crypto.upper()}</strong> has been <span style="color:#ef4444;font-weight:bold;">REJECTED</span>.</p>
-<p><strong>Reason:</strong> {reason}</p>
-<p>Please contact support if you have any questions.</p>
-<a href="https://t.me/Veloxtrades2" class="button">Contact Support</a>
-</div>
-</div>
-</body>
-</html>
-"""
-    return send_email(user['email'], subject, body, html)
+    return send_email(user['email'], subject, body)
 
 def send_withdrawal_approved_email(user, amount, currency, wallet_address):
     """Send email when withdrawal is approved"""
@@ -202,31 +178,7 @@ Thank you for trading with Veloxtrades!
 Best regards,
 Veloxtrades Team
 """
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head><style>
-body {{ font-family: Arial, sans-serif; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>✅ Withdrawal Approved!</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<p>Your withdrawal of <strong>${amount:,.2f}</strong> to <strong>{currency.upper()}</strong> has been <span style="color:#10b981;font-weight:bold;">APPROVED</span> and processed.</p>
-<p><strong>Wallet Address:</strong> {wallet_address}</p>
-<p><strong>New Balance:</strong> ${user.get('wallet', {}).get('balance', 0) - amount:,.2f}</p>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
-</div>
-</div>
-</body>
-</html>
-"""
-    return send_email(user['email'], subject, body, html)
+    return send_email(user['email'], subject, body)
 
 def send_withdrawal_rejected_email(user, amount, currency, reason):
     """Send email when withdrawal is rejected"""
@@ -248,7 +200,7 @@ Veloxtrades Team
 def send_investment_created_email(user, amount, plan_name, expected_profit):
     """Send email when investment is created"""
     # Find the plan duration safely
-    duration_hours = 24  # Default fallback
+    duration_hours = 24
     for plan_key, plan_data in INVESTMENT_PLANS.items():
         if plan_data['name'] == plan_name:
             duration_hours = plan_data['duration_hours']
