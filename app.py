@@ -40,27 +40,26 @@ app.config['NOWPAYMENTS_IPN_SECRET'] = os.getenv('NOWPAYMENTS_IPN_SECRET', 'bb68
 app.config['NOWPAYMENTS_API_URL'] = 'https://api.nowpayments.io/v1'
 
 # Production URLs - UPDATED with your new domain
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://veloxtrades.com.ng')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 
 # Add MIME types for static files
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-
-# CORS Configuration - UPDATED with your new domain
+# CORS Configuration - FULLY CORRECTED
 CORS(app, 
      supports_credentials=True,
      origins=[
          "http://localhost:5000",
-         "http://127.0.0.1:5000",
+         "http://127.0.0.1:5000", 
          "http://localhost:3000",
          "http://localhost:5500",
          "https://frontend-ugb2.onrender.com",
          "https://elite-eky6.onrender.com",
-         "https://veloxtrades.com.ng",           # Your new domain
-         "https://www.veloxtrades.com.ng",       # www version
-         "https://velox-wnn4.onrender.com",      # Your clean frontend
+         "https://veloxtrades.com.ng",
+         "https://www.veloxtrades.com.ng",
+         "https://velox-wnn4.onrender.com",
          "https://investment-gto3.onrender.com"
      ],
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
