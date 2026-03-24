@@ -247,7 +247,14 @@ Veloxtrades Team
 
 def send_investment_created_email(user, amount, plan_name, expected_profit):
     """Send email when investment is created"""
-    subject = f"🚀 Investment Created - ${amount} in {plan_name}"
+    # Find the plan duration safely
+    duration_hours = 24  # Default fallback
+    for plan_key, plan_data in INVESTMENT_PLANS.items():
+        if plan_data['name'] == plan_name:
+            duration_hours = plan_data['duration_hours']
+            break
+    
+    subject = f"🚀 Investment Created - ${amount:,.2f} in {plan_name}"
     body = f"""
 Dear {user.get('full_name', user['username'])},
 
@@ -256,7 +263,7 @@ Congratulations! Your investment of ${amount:,.2f} in {plan_name} has been succe
 Expected Profit: ${expected_profit:,.2f}
 Total Return: ${amount + expected_profit:,.2f}
 
-Your investment will mature in {INVESTMENT_PLANS[plan_name.lower().replace(' ', '_')]['duration_hours'] if plan_name.lower().replace(' ', '_') in INVESTMENT_PLANS else 24} hours.
+Your investment will mature in {duration_hours} hours.
 
 Track your investment in your dashboard.
 
