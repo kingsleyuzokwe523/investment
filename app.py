@@ -47,7 +47,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-# CORS Configuration - FULLY CORRECTED
+# CORS Configuration - FIXED for www subdomain
 CORS(app, 
      supports_credentials=True,
      origins=[
@@ -58,7 +58,7 @@ CORS(app,
          "https://frontend-ugb2.onrender.com",
          "https://elite-eky6.onrender.com",
          "https://veloxtrades.com.ng",
-         "https://www.veloxtrades.com.ng",
+         "https://www.veloxtrades.com.ng",  # Added www version
          "https://velox-wnn4.onrender.com",
          "https://investment-gto3.onrender.com"
      ],
@@ -66,6 +66,9 @@ CORS(app,
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
+
+# Also update FRONTEND_URL to include www
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
