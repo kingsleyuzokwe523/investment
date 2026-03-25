@@ -143,6 +143,17 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
 
+@app.after_request
+def after_request(response):
+    """Add CORS headers after every request"""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+    return response
+
 @app.before_request
 def handle_preflight():
     if request.method == 'OPTIONS':
@@ -313,49 +324,6 @@ scheduler.add_job(func=process_investment_profits, trigger="interval", hours=1, 
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 logger.info("✅ Auto-profit scheduler started")
-
-# ==================== FRONTEND ROUTES ====================
-@app.route('/')
-def serve_index():
-    response = jsonify({
-        'success': True, 'message': 'Veloxtrades API Server',
-        'frontend': FRONTEND_URL, 'frontend_non_www': FRONTEND_URL_NON_WWW,
-        'backend': BACKEND_URL, 'allowed_origins': ALLOWED_ORIGINS,
-        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/auth/register', '/api/verify-token']
-    })
-    return add_cors_headers(response)
-
-@app.route('/<path:filename>')
-def serve_static_files(filename):
-    try:
-        response = make_response(send_from_directory(app.static_folder, filename))
-        if filename.endswith('.js'):
-            response.headers['Content-Type'] = 'application/javascript'
-        elif filename.endswith('.css'):
-            response.headers['Content-Type'] = 'text/css'
-        elif filename.endswith('.html'):
-            response.headers['Content-Type'] = 'text/html'
-            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        return add_cors_headers(response)
-    except Exception as e:
-        return jsonify({'success': False, 'message': 'File not found'}), 404
-
-@app.route('/health', methods=['GET', 'OPTIONS'])
-def simple_health_check():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    response = jsonify({'success': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()})
-    return add_cors_headers(response)
-
-@app.route('/api/health', methods=['GET', 'OPTIONS'])
-def health_check():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    response = jsonify({
-        'success': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat(),
-        'mongo': 'connected', 'email': 'configured', 'frontend_url': FRONTEND_URL, 'backend_url': BACKEND_URL
-    })
-    return add_cors_headers(response)
 
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
@@ -716,6 +684,7 @@ def create_investment():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN API ENDPOINTS ====================
+
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_stats():
@@ -1034,6 +1003,7 @@ def admin_process_withdrawal(withdrawal_id):
         logger.error(f"Process withdrawal error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN SEND EMAIL ENDPOINT ====================
 @app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_send_email():
@@ -1169,7 +1139,6 @@ body {{ font-family: Arial, sans-serif; }}
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
-    """Adjust user balance"""
     if request.method == 'OPTIONS':
         return handle_preflight()
     try:
@@ -1192,7 +1161,7 @@ def admin_adjust_balance(user_id):
         create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount} - Reason: {reason}')
+        log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount}')
         
         response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}'})
         return add_cors_headers(response)
@@ -1210,7 +1179,7 @@ def admin_toggle_ban(user_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         new_ban_status = not user.get('is_banned', False)
-        users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status, 'banned_at': datetime.now(timezone.utc) if new_ban_status else None}})
+        users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status}})
         action = 'banned' if new_ban_status else 'unbanned'
         admin_user = get_user_from_request()
         log_admin_action(admin_user['_id'], f'{action}_user', f'User {user["username"]} was {action}')
@@ -1219,31 +1188,6 @@ def admin_toggle_ban(user_id):
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Toggle ban error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/reset-password', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_reset_password(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    try:
-        data = request.get_json()
-        new_password = data.get('new_password')
-        if not new_password or len(new_password) < 6:
-            return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
-        
-        hashed = hash_password(new_password)
-        users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'password': hashed}})
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'reset_password', f'Password reset for user {user["username"]}')
-        create_notification(user_id, 'Password Reset', 'Your password has been reset by an administrator.', 'warning')
-        
-        response = jsonify({'success': True, 'message': 'Password reset successfully'})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Reset password error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
@@ -1277,10 +1221,7 @@ def admin_delete_user(user_id):
 def reset_all_admin():
     """Emergency reset - removes all admins and creates fresh one with password admin123"""
     try:
-        admin_count = users_collection.count_documents({'is_admin': True})
-        if admin_count > 0:
-            users_collection.delete_many({'is_admin': True})
-        
+        users_collection.delete_many({'is_admin': True})
         users_collection.delete_many({'username': 'admin'})
         users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
         
@@ -1339,20 +1280,55 @@ def list_users():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== FRONTEND ROUTES ====================
+@app.route('/')
+def serve_index():
+    response = jsonify({
+        'success': True, 'message': 'Veloxtrades API Server',
+        'frontend': FRONTEND_URL, 'backend': BACKEND_URL,
+        'endpoints': ['/health', '/api/health', '/api/register', '/api/login']
+    })
+    return add_cors_headers(response)
+
+@app.route('/<path:filename>')
+def serve_static_files(filename):
+    try:
+        response = make_response(send_from_directory(app.static_folder, filename))
+        if filename.endswith('.js'):
+            response.headers['Content-Type'] = 'application/javascript'
+        elif filename.endswith('.css'):
+            response.headers['Content-Type'] = 'text/css'
+        elif filename.endswith('.html'):
+            response.headers['Content-Type'] = 'text/html'
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return add_cors_headers(response)
+    except Exception as e:
+        return jsonify({'success': False, 'message': 'File not found'}), 404
+
+@app.route('/health', methods=['GET', 'OPTIONS'])
+def simple_health_check():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    response = jsonify({'success': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()})
+    return add_cors_headers(response)
+
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
+def health_check():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    response = jsonify({
+        'success': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat(),
+        'mongo': 'connected', 'email': 'configured'
+    })
+    return add_cors_headers(response)
+
 # ==================== INIT DATABASE ====================
 def init_database():
     try:
         users_collection.create_index('email', unique=True)
         users_collection.create_index('username', unique=True)
         users_collection.create_index('referral_code', unique=True)
-        investments_collection.create_index('user_id')
-        investments_collection.create_index('status')
-        transactions_collection.create_index('user_id')
-        deposits_collection.create_index('user_id')
-        withdrawals_collection.create_index('user_id')
-        notifications_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
-        
         total_users = users_collection.count_documents({})
         logger.info(f"👥 Total users: {total_users}")
         logger.info("ℹ️ Use /api/admin/reset-all to create admin account")
@@ -1381,7 +1357,6 @@ if __name__ == '__main__':
     print("📧 Email Service Configured")
     print(f"   SMTP: {EMAIL_USER}")
     print(f"   From: {EMAIL_FROM}")
-    print("💳 NOWPayments Integration Active")
     print("👑 Admin Dashboard Ready")
     print("🔄 Auto-Profit Cron: Every hour")
     print("=" * 70)
@@ -1391,8 +1366,6 @@ if __name__ == '__main__':
     print("   Visit: /api/admin/reset-all")
     print("   This will create admin with: admin / admin123")
     print("=" * 70)
-    print("\n🔐 Token Expiration: 30 DAYS")
-    print("=" * 70 + "\n")
 
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
