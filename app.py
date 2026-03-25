@@ -55,14 +55,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 # Admin reset secret - CHANGE THIS IN PRODUCTION!
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
 
-# Add this to your existing backend code - REPLACE the CORS section
-
-from flask_cors import CORS
-
-# ==================== IMPROVED CORS CONFIGURATION ====================
-# This must be placed BEFORE any routes
-
-# Define allowed origins
+# ==================== CORS CONFIGURATION (MUST BE FIRST) ====================
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
@@ -76,15 +69,16 @@ ALLOWED_ORIGINS = [
     "https://investment-gto3.onrender.com"
 ]
 
-# Configure CORS with proper settings
+# Configure CORS properly
 CORS(app, 
      origins=ALLOWED_ORIGINS,
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken", "Origin"],
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-     max_age=3600)
+     max_age=86400)
 
+# Add CORS headers after every request
 @app.after_request
 def after_request(response):
     """Add CORS headers to every response"""
@@ -92,30 +86,33 @@ def after_request(response):
     if origin in ALLOWED_ORIGINS:
         response.headers.add('Access-Control-Allow-Origin', origin)
     else:
-        response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
+        # Default to main frontend URL
+        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
     
     response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-    response.headers.add('Access-Control-Expose-Headers', 'Content-Type, Authorization')
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Type, Authorization, X-Total-Count')
+    response.headers.add('Access-Control-Max-Age', '86400')
     return response
 
+# Handle preflight requests
 @app.before_request
 def handle_preflight():
-    """Handle preflight requests"""
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
         if origin in ALLOWED_ORIGINS:
             response.headers.add('Access-Control-Allow-Origin', origin)
         else:
-            response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+            response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin')
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Max-Age', '3600')
+        response.headers.add('Access-Control-Max-Age', '86400')
         return response
 
+# Mime types
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
@@ -264,39 +261,6 @@ def send_transaction_confirmation_email(user, transaction_type, amount, descript
 """
     return send_email(user['email'], subject, body, html_body)
 
-# ==================== CORS CONFIGURATION ====================
-CORS(app, 
-     supports_credentials=True,
-     origins=ALLOWED_ORIGINS,
-     allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken"],
-     expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-     max_age=3600)
-
-@app.before_request
-def handle_preflight():
-    if request.method == 'OPTIONS':
-        response = make_response()
-        origin = request.headers.get('Origin', '')
-        if origin in ALLOWED_ORIGINS:
-            response.headers.add('Access-Control-Allow-Origin', origin)
-        else:
-            response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Max-Age', '3600')
-        return response
-
-def add_cors_headers(response):
-    origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    else:
-        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
-
 # Session configuration
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -424,9 +388,23 @@ def log_admin_action(admin_id, action, details):
     except Exception as e:
         logger.error(f"Failed to log admin action: {e}")
 
-# ==================== AUTO-PROFIT SCHEDULER (OPTIMIZED) ====================
+def add_cors_headers(response):
+    """Helper to add CORS headers to responses"""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', FRONTEND_URL)
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
+# ==================== AUTO-PROFIT SCHEDULER ====================
 def process_investment_profits():
     """Process investment profits with batch processing to avoid memory issues"""
+    if not db:
+        logger.error("Database not connected, skipping profit processing")
+        return
+    
     try:
         logger.info("🔄 Processing investment profits...")
         
@@ -918,15 +896,15 @@ def admin_get_stats():
     if request.method == 'OPTIONS':
         return handle_preflight()
     try:
-        total_users = users_collection.count_documents({})
-        approved_deposits = list(deposits_collection.find({'status': 'approved'}))
+        total_users = users_collection.count_documents({}) if users_collection else 0
+        approved_deposits = list(deposits_collection.find({'status': 'approved'})) if deposits_collection else []
         total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-        approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
+        approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'})) if withdrawals_collection else []
         total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-        active_investments = investments_collection.count_documents({'status': 'active'})
-        pending_deposits = deposits_collection.count_documents({'status': 'pending'})
-        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
-        banned_users = users_collection.count_documents({'is_banned': True})
+        active_investments = investments_collection.count_documents({'status': 'active'}) if investments_collection else 0
+        pending_deposits = deposits_collection.count_documents({'status': 'pending'}) if deposits_collection else 0
+        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'}) if withdrawals_collection else 0
+        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection else 0
         response = jsonify({'success': True, 'data': {
             'total_users': total_users,
             'total_deposit_amount': total_deposit_amount,
@@ -956,8 +934,8 @@ def admin_get_transactions():
         if tx_type != 'all':
             query['type'] = tx_type
         
-        total = transactions_collection.count_documents(query)
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = transactions_collection.count_documents(query) if transactions_collection else 0
+        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if transactions_collection else []
         
         result_transactions = []
         for tx in transactions:
@@ -965,11 +943,14 @@ def admin_get_transactions():
             if 'created_at' in tx and isinstance(tx['created_at'], datetime):
                 tx['created_at'] = tx['created_at'].isoformat()
             
-            user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-            tx['user'] = {
-                'username': user.get('username', 'Unknown') if user else 'Unknown',
-                'email': user.get('email', '') if user else ''
-            }
+            if users_collection:
+                user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                tx['user'] = {
+                    'username': user.get('username', 'Unknown') if user else 'Unknown',
+                    'email': user.get('email', '') if user else ''
+                }
+            else:
+                tx['user'] = {'username': 'Unknown', 'email': ''}
             result_transactions.append(tx)
         
         response = jsonify({
@@ -986,7 +967,7 @@ def admin_get_transactions():
         logger.error(f"Get admin transactions error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== NEW: CREATE TRANSACTION ENDPOINT ====================
+# ==================== CREATE TRANSACTION ENDPOINT ====================
 @app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_create_transaction():
@@ -1031,9 +1012,6 @@ def admin_create_transaction():
         }
         
         result = transactions_collection.insert_one(transaction)
-        
-        # Update user balance if needed (balance already adjusted via /balance endpoint)
-        # This endpoint is primarily for recording transactions
         
         # Create notification
         create_notification(
@@ -1085,8 +1063,8 @@ def admin_get_users():
                 {'email': {'$regex': search, '$options': 'i'}},
                 {'full_name': {'$regex': search, '$options': 'i'}}
             ]
-        total = users_collection.count_documents(query)
-        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = users_collection.count_documents(query) if users_collection else 0
+        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if users_collection else []
         for user in users:
             user['_id'] = str(user['_id'])
             if 'created_at' in user and isinstance(user['created_at'], datetime):
@@ -1117,15 +1095,18 @@ def admin_get_deposits():
         query = {}
         if status != 'all':
             query['status'] = status
-        total = deposits_collection.count_documents(query)
-        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = deposits_collection.count_documents(query) if deposits_collection else 0
+        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if deposits_collection else []
         result_deposits = []
         for deposit in deposits:
             deposit['_id'] = str(deposit['_id'])
             if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
                 deposit['created_at'] = deposit['created_at'].isoformat()
-            user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-            deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            if users_collection:
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            else:
+                deposit['username'] = 'Unknown'
             result_deposits.append(deposit)
         response = jsonify({'success': True, 'data': {
             'deposits': result_deposits,
@@ -1151,15 +1132,18 @@ def admin_get_withdrawals():
         query = {}
         if status != 'all':
             query['status'] = status
-        total = withdrawals_collection.count_documents(query)
-        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = withdrawals_collection.count_documents(query) if withdrawals_collection else 0
+        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if withdrawals_collection else []
         result_withdrawals = []
         for withdrawal in withdrawals:
             withdrawal['_id'] = str(withdrawal['_id'])
             if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
                 withdrawal['created_at'] = withdrawal['created_at'].isoformat()
-            user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
-            withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            if users_collection:
+                user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
+                withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            else:
+                withdrawal['username'] = 'Unknown'
             result_withdrawals.append(withdrawal)
         response = jsonify({'success': True, 'data': {
             'withdrawals': result_withdrawals,
@@ -1185,8 +1169,8 @@ def admin_get_investments():
         query = {}
         if status != 'all':
             query['status'] = status
-        total = investments_collection.count_documents(query)
-        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = investments_collection.count_documents(query) if investments_collection else 0
+        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if investments_collection else []
         result_investments = []
         for inv in investments:
             inv['_id'] = str(inv['_id'])
@@ -1194,8 +1178,11 @@ def admin_get_investments():
                 inv['start_date'] = inv['start_date'].isoformat()
             if 'end_date' in inv and isinstance(inv['end_date'], datetime):
                 inv['end_date'] = inv['end_date'].isoformat()
-            user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-            inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            if users_collection:
+                user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
+                inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            else:
+                inv['username'] = 'Unknown'
             result_investments.append(inv)
         response = jsonify({'success': True, 'data': {
             'investments': result_investments,
@@ -1374,14 +1361,17 @@ body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
 </html>
 """
         
-        send_email(user['email'], subject, message, html_body)
-        create_notification(user_id, subject, message, email_type)
+        email_sent = send_email(user['email'], subject, message, html_body)
         
-        admin_user = get_user_from_request()
-        if admin_user:
-            log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
+        if email_sent:
+            create_notification(user_id, subject, message, email_type)
+            admin_user = get_user_from_request()
+            if admin_user:
+                log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
+            response = jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
+        else:
+            response = jsonify({'success': False, 'message': 'Failed to send email. Please check email configuration.'})
         
-        response = jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
         return add_cors_headers(response)
         
     except Exception as e:
@@ -1411,13 +1401,16 @@ def admin_broadcast_email():
         elif recipients_type == 'depositors':
             query = {'wallet.total_deposited': {'$gt': 0}}
         elif recipients_type == 'investors':
-            active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-            if active_investors:
-                query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
+            if investments_collection:
+                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
+                if active_investors:
+                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
+                else:
+                    query = {'_id': {'$in': []}}  # No active investors
             else:
-                query = {'_id': {'$in': []}}  # No active investors
+                query = {'_id': {'$in': []}}
         
-        users = list(users_collection.find(query))
+        users = list(users_collection.find(query)) if users_collection else []
         
         # Escape message to prevent XSS
         safe_message = html.escape(message)
@@ -1451,9 +1444,9 @@ body {{ font-family: Arial, sans-serif; }}
 </body>
 </html>
 """
-            send_email(user['email'], subject, message, html_body)
-            create_notification(user['_id'], subject, message, email_type)
-            sent_count += 1
+            if send_email(user['email'], subject, message, html_body):
+                create_notification(user['_id'], subject, message, email_type)
+                sent_count += 1
         
         admin_user = get_user_from_request()
         if admin_user:
@@ -1487,7 +1480,11 @@ def admin_adjust_balance(user_id):
         current_balance = user.get('wallet', {}).get('balance', 0)
         new_balance = current_balance + amount
         
-        users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
+        # Update balance
+        result = users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
+        
+        if result.modified_count == 0:
+            return jsonify({'success': False, 'message': 'Failed to update balance'}), 500
         
         transaction_type = 'adjustment'
         if amount > 0:
@@ -1495,12 +1492,14 @@ def admin_adjust_balance(user_id):
         elif amount < 0:
             transaction_type = 'debit'
         
+        # Record transaction
         transactions_collection.insert_one({
             'user_id': str(user_id), 'type': transaction_type, 'amount': abs(amount),
             'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
             'created_at': datetime.now(timezone.utc)
         })
         
+        # Create notification
         create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
         
         # Send email notification for balance adjustment
@@ -1509,6 +1508,7 @@ def admin_adjust_balance(user_id):
         except Exception as email_error:
             logger.error(f"Failed to send balance adjustment email: {email_error}")
         
+        # Log admin action
         admin_user = get_user_from_request()
         if admin_user:
             log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount}')
@@ -1553,12 +1553,18 @@ def admin_delete_user(user_id):
         username = user.get('username', 'Unknown')
         
         # Delete all related data
-        investments_collection.delete_many({'user_id': str(user_id)})
-        transactions_collection.delete_many({'user_id': str(user_id)})
-        deposits_collection.delete_many({'user_id': str(user_id)})
-        withdrawals_collection.delete_many({'user_id': str(user_id)})
-        notifications_collection.delete_many({'user_id': str(user_id)})
-        users_collection.delete_one({'_id': ObjectId(user_id)})
+        if investments_collection:
+            investments_collection.delete_many({'user_id': str(user_id)})
+        if transactions_collection:
+            transactions_collection.delete_many({'user_id': str(user_id)})
+        if deposits_collection:
+            deposits_collection.delete_many({'user_id': str(user_id)})
+        if withdrawals_collection:
+            withdrawals_collection.delete_many({'user_id': str(user_id)})
+        if notifications_collection:
+            notifications_collection.delete_many({'user_id': str(user_id)})
+        if users_collection:
+            users_collection.delete_one({'_id': ObjectId(user_id)})
         
         admin_user = get_user_from_request()
         if admin_user:
@@ -1580,9 +1586,10 @@ def reset_all_admin():
         return jsonify({'success': False, 'message': 'Unauthorized. Secret key required.'}), 401
     
     try:
-        users_collection.delete_many({'is_admin': True})
-        users_collection.delete_many({'username': 'admin'})
-        users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
+        if users_collection:
+            users_collection.delete_many({'is_admin': True})
+            users_collection.delete_many({'username': 'admin'})
+            users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
         
         hashed_password = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
@@ -1616,6 +1623,8 @@ def reset_all_admin():
 @app.route('/api/admin/check-status', methods=['GET'])
 def check_admin_status():
     try:
+        if not users_collection:
+            return jsonify({'success': False, 'message': 'Database not connected', 'admin_exists': False}), 500
         admin_user = users_collection.find_one({'username': 'admin'})
         if not admin_user:
             return jsonify({'success': False, 'message': 'Admin user not found', 'admin_exists': False})
@@ -1632,6 +1641,8 @@ def check_admin_status():
 @app.route('/api/list-users', methods=['GET'])
 def list_users():
     try:
+        if not users_collection:
+            return jsonify({'success': False, 'message': 'Database not connected'}), 500
         users = list(users_collection.find({}, {'password': 0}))
         for user in users:
             user['_id'] = str(user['_id'])
@@ -1731,7 +1742,7 @@ if __name__ == '__main__':
     print("\n" + "=" * 70)
     print("🚀 VELOXTRADES API SERVER - PRODUCTION READY")
     print("=" * 70)
-    print("📊 MongoDB Connected")
+    print("📊 MongoDB Status: " + ("Connected" if db else "Disconnected"))
     print("📧 Email Service Configured")
     print(f"   SMTP: {EMAIL_USER}")
     print(f"   From: {EMAIL_FROM}")
@@ -1741,7 +1752,7 @@ if __name__ == '__main__':
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
     print("\n📝 TO CREATE ADMIN:")
-    print(f"   Visit: /api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
+    print(f"   Visit: {BACKEND_URL}/api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
     print("   This will create admin with: admin / admin123")
     print("=" * 70)
 
