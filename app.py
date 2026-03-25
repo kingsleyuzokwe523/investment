@@ -55,7 +55,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 # Admin reset secret - CHANGE THIS IN PRODUCTION!
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
 
-# ==================== CORS CONFIGURATION (FIXED - NO DUPLICATE HEADERS) ====================
+# ==================== CORS CONFIGURATION ====================
 
 # Define allowed origins
 ALLOWED_ORIGINS = [
@@ -71,7 +71,7 @@ ALLOWED_ORIGINS = [
     "https://investment-gto3.onrender.com"
 ]
 
-# Configure CORS properly - this handles OPTIONS preflight and adds headers
+# Configure CORS properly
 CORS(app, 
      origins=ALLOWED_ORIGINS,
      supports_credentials=True,
@@ -80,12 +80,9 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
-# IMPORTANT: Do NOT add another after_request that adds duplicate CORS headers!
-# The CORS middleware already adds them. This after_request only adds security headers.
-
 @app.after_request
 def after_request(response):
-    """Add security headers - NOT duplicate CORS headers"""
+    """Add security headers"""
     response.headers.add('X-Content-Type-Options', 'nosniff')
     response.headers.add('X-Frame-Options', 'DENY')
     response.headers.add('X-XSS-Protection', '1; mode=block')
@@ -108,7 +105,7 @@ def handle_preflight():
         return response
 
 def add_cors_headers(response):
-    """Helper to ensure CORS headers - used for manual responses if needed"""
+    """Helper to ensure CORS headers"""
     origin = request.headers.get('Origin', '')
     if origin in ALLOWED_ORIGINS:
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -317,6 +314,14 @@ except Exception as e:
     # Don't crash, but log error
     client = None
     db = None
+    users_collection = None
+    investments_collection = None
+    transactions_collection = None
+    deposits_collection = None
+    withdrawals_collection = None
+    notifications_collection = None
+    payments_collection = None
+    admin_logs_collection = None
 
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
@@ -347,27 +352,55 @@ def verify_jwt_token(token):
         return None
 
 def get_user_from_request():
-    token = request.cookies.get('veloxtrades_token') or request.cookies.get('elite_token')
+    """Improved user extraction with better error handling"""
+    token = None
+    
+    # Try to get token from cookies (multiple names)
+    token = request.cookies.get('veloxtrades_token')
+    if not token:
+        token = request.cookies.get('elite_token')
+    
+    # Try Authorization header
     if not token:
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
+    
     if not token:
+        logger.debug("No token found in request")
         return None
+    
+    # Verify token
     payload = verify_jwt_token(token)
     if not payload:
+        logger.debug("Invalid token payload")
         return None
+    
     try:
-        return users_collection.find_one({'_id': ObjectId(payload['user_id'])})
+        # Check if database is connected
+        if not db or not users_collection:
+            logger.error("Database not connected")
+            return None
+            
+        user = users_collection.find_one({'_id': ObjectId(payload['user_id'])})
+        if not user:
+            logger.debug(f"User not found for ID: {payload['user_id']}")
+            return None
+            
+        return user
     except Exception as e:
-        logger.error(f"⚠️ Get user error: {e}")
+        logger.error(f"Error getting user: {e}")
         return None
 
 def require_admin(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         user = get_user_from_request()
-        if not user or not user.get('is_admin', False):
+        if not user:
+            logger.warning("Admin access denied: No user found")
+            return jsonify({'success': False, 'message': 'Authentication required'}), 401
+        if not user.get('is_admin', False):
+            logger.warning(f"Admin access denied: User {user.get('username')} is not admin")
             return jsonify({'success': False, 'message': 'Admin access required'}), 403
         return f(*args, **kwargs)
     return decorated_function
@@ -566,8 +599,13 @@ def login():
         }
 
         response = make_response(jsonify({'success': True, 'message': 'Login successful!', 'data': {'token': token, 'user': user_data}}))
-        response.set_cookie('veloxtrades_token', value=token, httponly=True, secure=True, samesite='Lax', max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
-        response.set_cookie('elite_token', value=token, httponly=True, secure=True, samesite='Lax', max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
+        
+        # Set cookies with proper configuration
+        response.set_cookie('veloxtrades_token', value=token, httponly=True, secure=True, samesite='Lax', 
+                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
+        response.set_cookie('elite_token', value=token, httponly=True, secure=True, samesite='Lax', 
+                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
+        
         return add_cors_headers(response), 200
     except Exception as e:
         logger.error(f"❌ Login error: {e}", exc_info=True)
@@ -874,7 +912,7 @@ def create_investment():
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN API ENDPOINTS (FIXED) ====================
+# ==================== ADMIN API ENDPOINTS ====================
 
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1033,23 +1071,26 @@ def admin_get_transactions():
 def admin_get_users():
     if request.method == 'OPTIONS':
         return handle_preflight()
+    
     try:
+        # CRITICAL: Check database connection first
+        if not users_collection:
+            logger.error("Users collection not available")
+            return jsonify({
+                'success': False,
+                'message': 'Database connection error',
+                'data': {
+                    'users': [],
+                    'total': 0,
+                    'page': 1,
+                    'pages': 1
+                }
+            }), 500
+        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         search = request.args.get('search', '')
         skip = (page - 1) * limit
-        
-        # Check if users collection exists
-        if not users_collection:
-            return jsonify({
-                'success': True,
-                'data': {
-                    'users': [],
-                    'total': 0,
-                    'page': page,
-                    'pages': 1
-                }
-            }), 200
         
         query = {}
         if search:
@@ -1059,44 +1100,66 @@ def admin_get_users():
                 {'full_name': {'$regex': search, '$options': 'i'}}
             ]
         
+        # Get total count
         total = users_collection.count_documents(query)
+        logger.info(f"Total users found: {total} with query: {query}")
+        
+        # Get users with pagination
         users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
+        # Format users for response
+        formatted_users = []
         for user in users:
             try:
-                user['_id'] = str(user['_id'])
-                if 'created_at' in user and isinstance(user['created_at'], datetime):
-                    user['created_at'] = user['created_at'].isoformat()
-                if 'last_login' in user and isinstance(user['last_login'], datetime):
-                    user['last_login'] = user['last_login'].isoformat()
-                # Remove sensitive data
-                user.pop('password', None)
+                user_data = {
+                    '_id': str(user['_id']),
+                    'username': user.get('username', ''),
+                    'email': user.get('email', ''),
+                    'full_name': user.get('full_name', ''),
+                    'phone': user.get('phone', ''),
+                    'country': user.get('country', ''),
+                    'wallet': user.get('wallet', {'balance': 0}),
+                    'is_admin': user.get('is_admin', False),
+                    'is_banned': user.get('is_banned', False),
+                    'is_verified': user.get('is_verified', False),
+                    'kyc_status': user.get('kyc_status', 'pending'),
+                    'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
+                    'last_login': user.get('last_login').isoformat() if user.get('last_login') else None
+                }
+                formatted_users.append(user_data)
             except Exception as e:
-                logger.error(f"Error processing user: {e}")
+                logger.error(f"Error formatting user: {e}")
                 continue
         
-        response = jsonify({
-            'success': True, 
+        # Calculate total pages
+        total_pages = (total + limit - 1) // limit if total > 0 else 1
+        
+        response_data = {
+            'success': True,
             'data': {
-                'users': users,
+                'users': formatted_users,
                 'total': total,
                 'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
+                'pages': total_pages,
+                'limit': limit
             }
-        })
+        }
+        
+        response = jsonify(response_data)
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({
-            'success': True,
+            'success': False,
+            'message': str(e),
             'data': {
                 'users': [],
                 'total': 0,
                 'page': 1,
-                'pages': 1,
-                'error': str(e)
+                'pages': 1
             }
-        }), 200
+        }), 500
 
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1682,6 +1745,73 @@ def admin_delete_user(user_id):
         logger.error(f"Delete user error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== DEBUG ADMIN ENDPOINT ====================
+@app.route('/api/admin/debug-users', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_debug_users():
+    """Debug endpoint to check what's wrong with user fetching"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        # Check database connection
+        db_status = "connected" if db else "disconnected"
+        
+        # Check if users_collection exists
+        collection_exists = users_collection is not None
+        
+        # Count users
+        total_users = 0
+        if users_collection:
+            try:
+                total_users = users_collection.count_documents({})
+            except Exception as e:
+                total_users = f"Error: {e}"
+        
+        # Get sample of users (first 5)
+        sample_users = []
+        if users_collection and total_users > 0:
+            try:
+                sample = list(users_collection.find({}, {'password': 0}).limit(5))
+                for user in sample:
+                    user['_id'] = str(user['_id'])
+                    user.pop('password', None)
+                    sample_users.append(user)
+            except Exception as e:
+                sample_users = f"Error: {e}"
+        
+        # Get admin user info from token
+        current_user = get_user_from_request()
+        admin_info = None
+        if current_user:
+            admin_info = {
+                'id': str(current_user.get('_id')),
+                'username': current_user.get('username'),
+                'email': current_user.get('email'),
+                'is_admin': current_user.get('is_admin', False)
+            }
+        
+        return jsonify({
+            'success': True,
+            'debug_info': {
+                'database_connected': db_status,
+                'users_collection_exists': collection_exists,
+                'total_users': total_users,
+                'sample_users': sample_users,
+                'current_admin': admin_info,
+                'request_cookies': {k: '***HIDDEN***' if 'token' in k else v for k, v in request.cookies.items()},
+                'request_headers': {k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']}
+            }
+        })
+    except Exception as e:
+        logger.error(f"Debug error: {e}", exc_info=True)
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+# ==================== ADMIN RESET ENDPOINT ====================
 @app.route('/api/admin/reset-all', methods=['GET'])
 def reset_all_admin():
     """Emergency reset - removes all admins and creates fresh one with password admin123"""
