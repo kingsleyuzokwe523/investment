@@ -64,13 +64,13 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# ==================== EMAIL CONFIGURATION - FIXED ====================
+# ==================== EMAIL CONFIGURATION ====================
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USER = 'kingsleyuzokwe23@gmail.com'
-EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'  # App Password (no spaces)
-EMAIL_FROM = 'admin@veloxtrades.ltd'  # What users see
-ADMIN_EMAIL = 'kingsleyuzokwe23@gmail.com'  # Admin notifications
+EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
+EMAIL_FROM = 'admin@veloxtrades.ltd'
+ADMIN_EMAIL = 'kingsleyuzokwe23@gmail.com'
 
 def send_email(to_email, subject, body, html_body=None):
     """Send email to user"""
@@ -99,7 +99,6 @@ def send_email(to_email, subject, body, html_body=None):
         return False
 
 def send_deposit_approved_email(user, amount, crypto, transaction_id):
-    """Send email when deposit is approved"""
     subject = f"✅ Deposit Approved - ${amount} added to your Veloxtrades account"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -115,37 +114,9 @@ Thank you for investing with Veloxtrades!
 Best regards,
 Veloxtrades Team
 """
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head><style>
-body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-.button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-.footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>✅ Deposit Approved!</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<p>Your deposit of <strong>${amount:,.2f}</strong> via <strong>{crypto.upper()}</strong> has been <span style="color:#10b981;font-weight:bold;">APPROVED</span> and added to your wallet.</p>
-<p><strong>Transaction ID:</strong> {transaction_id or 'N/A'}</p>
-<p><strong>New Balance:</strong> ${user.get('wallet', {}).get('balance', 0) + amount:,.2f}</p>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
-</div>
-<div class="footer"><p>© 2026 Veloxtrades. All rights reserved.</p></div>
-</div>
-</body>
-</html>
-"""
-    return send_email(user['email'], subject, body, html)
+    return send_email(user['email'], subject, body)
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
-    """Send email when deposit is rejected"""
     subject = f"❌ Deposit Rejected - ${amount} - Veloxtrades"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -162,7 +133,6 @@ Veloxtrades Team
     return send_email(user['email'], subject, body)
 
 def send_withdrawal_approved_email(user, amount, currency, wallet_address):
-    """Send email when withdrawal is approved"""
     subject = f"✅ Withdrawal Approved - ${amount} sent to your wallet"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -181,7 +151,6 @@ Veloxtrades Team
     return send_email(user['email'], subject, body)
 
 def send_withdrawal_rejected_email(user, amount, currency, reason):
-    """Send email when withdrawal is rejected"""
     subject = f"❌ Withdrawal Rejected - ${amount} - Veloxtrades"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -197,192 +166,7 @@ Veloxtrades Team
 """
     return send_email(user['email'], subject, body)
 
-# ==================== MANUAL EMAIL ENDPOINT ====================
-
-@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_send_email():
-    """Send manual email to a specific user"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        subject = data.get('subject')
-        message = data.get('message')
-        email_type = data.get('type', 'info')
-        
-        if not user_id or not subject or not message:
-            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
-        
-        # Get user from database
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        # Create HTML email body
-        html_body = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>{subject}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-        .content {{ padding: 20px; background: #f9fafb; }}
-        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
-        .button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-        .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
-    </style>
-</head>
-<body>
-<div class="container">
-<div class="header">
-<h2>📧 {subject}</h2>
-</div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">
-{message.replace(chr(10), '<br>')}
-</div>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
-</div>
-<div class="footer">
-<p>© 2025 Veloxtrades. All rights reserved.</p>
-<p>Need help? <a href="https://t.me/Veloxtrades2">Contact Support</a></p>
-</div>
-</div>
-</body>
-</html>
-        """
-        
-        # Send the email
-        send_email(user['email'], subject, message, html_body)
-        
-        # Create notification for user
-        create_notification(
-            user_id,
-            subject,
-            message,
-            email_type
-        )
-        
-        # Log admin action
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'send_manual_email',
-            f'Sent email to {user["username"]}: {subject}'
-        )
-        
-        return jsonify({
-            'success': True, 
-            'message': f'Email sent to {user["email"]}',
-            'data': {'user_id': user_id, 'subject': subject}
-        })
-        
-    except Exception as e:
-        logger.error(f"Send email error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== BROADCAST EMAIL ENDPOINT ====================
-
-@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_broadcast_email():
-    """Send broadcast email to multiple users"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        recipients_type = data.get('recipients', 'all')
-        subject = data.get('subject')
-        message = data.get('message')
-        email_type = data.get('type', 'info')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        # Build query based on recipient type
-        query = {}
-        if recipients_type == 'active':
-            query = {'is_banned': False}
-        elif recipients_type == 'depositors':
-            query = {'wallet.total_deposited': {'$gt': 0}}
-        elif recipients_type == 'investors':
-            # Users with active investments
-            active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-            query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
-        
-        users = list(users_collection.find(query))
-        
-        sent_count = 0
-        for user in users:
-            html_body = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>{subject}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-        .content {{ padding: 20px; background: #f9fafb; }}
-        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
-        .footer {{ text-align: center; padding: 20px; font-size: 12px; }}
-    </style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>📢 {subject}</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">
-{message.replace(chr(10), '<br>')}
-</div>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
-</div>
-<div class="footer">
-<p>© 2025 Veloxtrades</p>
-</div>
-</div>
-</body>
-</html>
-"""
-            send_email(user['email'], subject, message, html_body)
-            create_notification(
-                user['_id'],
-                subject,
-                message,
-                email_type
-            )
-            sent_count += 1
-        
-        # Log admin action
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'broadcast_email',
-            f'Sent broadcast to {sent_count} users: {subject}'
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': f'Broadcast sent to {sent_count} users',
-            'data': {'count': sent_count}
-        })
-        
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 def send_investment_created_email(user, amount, plan_name, expected_profit):
-    """Send email when investment is created"""
-    # Find the plan duration safely
     duration_hours = 24
     for plan_key, plan_data in INVESTMENT_PLANS.items():
         if plan_data['name'] == plan_name:
@@ -408,7 +192,6 @@ Veloxtrades Team
     return send_email(user['email'], subject, body)
 
 def send_investment_completed_email(user, amount, plan_name, profit):
-    """Send email when investment is completed and profit paid"""
     subject = f"🎉 Investment Completed - You earned ${profit:,.2f}!"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -428,7 +211,6 @@ Veloxtrades Team
     return send_email(user['email'], subject, body)
 
 def send_investment_paid_email(user, investment_amount, profit, plan_name):
-    """Send email when admin pays out investment profit"""
     subject = f"💰 Investment Profit Paid - ${profit:,.2f} credited!"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -557,6 +339,7 @@ def get_user_from_request():
         logger.error(f"⚠️ Get user error: {e}")
         return None
 
+# ==================== DEFINE require_admin HERE ====================
 def require_admin(f):
     def decorated_function(*args, **kwargs):
         user = get_user_from_request()
@@ -614,7 +397,6 @@ def process_investment_profits():
                     create_notification(user_id, 'Investment Completed! 🎉',
                         f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!', 'success')
                     
-                    # Send email notification
                     user = users_collection.find_one({'_id': ObjectId(user_id)})
                     if user:
                         send_investment_completed_email(user, amount, investment.get("plan_name", "Investment"), expected_profit)
@@ -1032,10 +814,7 @@ def create_investment():
         transactions_collection.insert_one({'user_id': str(user['_id']), 'type': 'investment', 'amount': amount,
             'status': 'completed', 'description': f'Investment in {plan["name"]}', 'investment_id': str(result.inserted_id), 'created_at': datetime.now(timezone.utc)})
         create_notification(user['_id'], 'Investment Created! 🚀', f'Your investment of ${amount:,.2f} in {plan["name"]} has been started. Expected profit: ${expected_profit:,.2f}', 'success')
-        
-        # Send email notification for investment created
         send_investment_created_email(user, amount, plan['name'], expected_profit)
-        
         updated_user = users_collection.find_one({'_id': user['_id']})
         new_balance = updated_user.get('wallet', {}).get('balance', 0)
         response = jsonify({'success': True, 'message': 'Investment created successfully',
@@ -1045,7 +824,7 @@ def create_investment():
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN API ENDPOINTS ====================
+# ==================== ADMIN API ENDPOINTS (ALL AFTER require_admin) ====================
 
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1062,9 +841,15 @@ def admin_get_stats():
         pending_deposits = deposits_collection.count_documents({'status': 'pending'})
         pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
         banned_users = users_collection.count_documents({'is_banned': True})
-        response = jsonify({'success': True, 'data': {'total_users': total_users, 'total_deposit_amount': total_deposit_amount,
-            'total_withdrawal_amount': total_withdrawal_amount, 'active_investments': active_investments,
-            'pending_deposits': pending_deposits, 'pending_withdrawals': pending_withdrawals, 'banned_users': banned_users}})
+        response = jsonify({'success': True, 'data': {
+            'total_users': total_users,
+            'total_deposit_amount': total_deposit_amount,
+            'total_withdrawal_amount': total_withdrawal_amount,
+            'active_investments': active_investments,
+            'pending_deposits': pending_deposits,
+            'pending_withdrawals': pending_withdrawals,
+            'banned_users': banned_users
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Stats error: {e}")
@@ -1082,7 +867,11 @@ def admin_get_users():
         skip = (page - 1) * limit
         query = {}
         if search:
-            query['$or'] = [{'username': {'$regex': search, '$options': 'i'}}, {'email': {'$regex': search, '$options': 'i'}}, {'full_name': {'$regex': search, '$options': 'i'}}]
+            query['$or'] = [
+                {'username': {'$regex': search, '$options': 'i'}},
+                {'email': {'$regex': search, '$options': 'i'}},
+                {'full_name': {'$regex': search, '$options': 'i'}}
+            ]
         total = users_collection.count_documents(query)
         users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         for user in users:
@@ -1091,42 +880,44 @@ def admin_get_users():
                 user['created_at'] = user['created_at'].isoformat()
             if 'last_login' in user and isinstance(user['last_login'], datetime):
                 user['last_login'] = user['last_login'].isoformat()
-        response = jsonify({'success': True, 'data': {'users': users, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}})
+        response = jsonify({'success': True, 'data': {
+            'users': users,
+            'total': total,
+            'page': page,
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get users error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/users/<user_id>', methods=['GET', 'OPTIONS'])
+@app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
-def admin_get_user(user_id):
+def admin_adjust_balance(user_id):
     if request.method == 'OPTIONS':
         return handle_preflight()
-    
     try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        reason = data.get('reason', 'Admin adjustment')
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        user['_id'] = str(user['_id'])
-        if 'created_at' in user and isinstance(user['created_at'], datetime):
-            user['created_at'] = user['created_at'].isoformat()
-        if 'last_login' in user and isinstance(user['last_login'], datetime):
-            user['last_login'] = user['last_login'].isoformat()
-        
-        transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(20))
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-        
-        response = jsonify({
-            'success': True,
-            'data': {'user': user, 'transactions': transactions}
+        users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
+        transactions_collection.insert_one({
+            'user_id': str(user_id), 'type': 'adjustment', 'amount': amount,
+            'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
+            'created_at': datetime.now(timezone.utc)
         })
+        create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
+        admin_user = get_user_from_request()
+        log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount} - Reason: {reason}')
+        updated_user = users_collection.find_one({'_id': ObjectId(user_id)})
+        new_balance = updated_user.get('wallet', {}).get('balance', 0)
+        response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}', 'data': {'new_balance': new_balance}})
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get user error: {e}")
+        logger.error(f"Balance adjustment error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/admin/users/<user_id>/toggle-ban', methods=['POST', 'OPTIONS'])
@@ -1148,104 +939,6 @@ def admin_toggle_ban(user_id):
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Toggle ban error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/reset-password', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_reset_password(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        new_password = data.get('new_password')
-        
-        if not new_password or len(new_password) < 6:
-            return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
-        
-        hashed = hash_password(new_password)
-        users_collection.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$set': {'password': hashed}}
-        )
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'reset_password',
-            f'Password reset for user {user["username"]}'
-        )
-        
-        create_notification(
-            user_id,
-            'Password Reset',
-            'Your password has been reset by an administrator. Please login with your new password.',
-            'warning'
-        )
-        
-        response = jsonify({'success': True, 'message': 'Password reset successfully'})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Reset password error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_adjust_balance(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    try:
-        data = request.get_json()
-        amount = float(data.get('amount', 0))
-        reason = data.get('reason', 'Admin adjustment')
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
-        transactions_collection.insert_one({'user_id': str(user_id), 'type': 'adjustment', 'amount': amount,
-            'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})', 'created_at': datetime.now(timezone.utc)})
-        create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
-        admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount} - Reason: {reason}')
-        updated_user = users_collection.find_one({'_id': ObjectId(user_id)})
-        new_balance = updated_user.get('wallet', {}).get('balance', 0)
-        response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}', 'data': {'new_balance': new_balance}})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Balance adjustment error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
-@require_admin
-def admin_delete_user(user_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        users_collection.delete_one({'_id': ObjectId(user_id)})
-        investments_collection.delete_many({'user_id': str(user_id)})
-        transactions_collection.delete_many({'user_id': str(user_id)})
-        deposits_collection.delete_many({'user_id': str(user_id)})
-        withdrawals_collection.delete_many({'user_id': str(user_id)})
-        notifications_collection.delete_many({'user_id': str(user_id)})
-        
-        admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'delete_user',
-            f'User {user["username"]} was permanently deleted'
-        )
-        
-        response = jsonify({'success': True, 'message': 'User deleted successfully'})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Delete user error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
@@ -1270,9 +963,13 @@ def admin_get_deposits():
                 deposit['created_at'] = deposit['created_at'].isoformat()
             user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
             deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            deposit['user_email'] = user.get('email', '') if user else ''
             result_deposits.append(deposit)
-        response = jsonify({'success': True, 'data': {'deposits': result_deposits, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}})
+        response = jsonify({'success': True, 'data': {
+            'deposits': result_deposits,
+            'total': total,
+            'page': page,
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get deposits error: {e}")
@@ -1299,8 +996,11 @@ def admin_process_deposit(deposit_id):
         if action == 'approve':
             users_collection.update_one({'_id': ObjectId(deposit['user_id'])}, {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}})
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
-            transactions_collection.insert_one({'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
-                'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved by admin', 'created_at': datetime.now(timezone.utc)})
+            transactions_collection.insert_one({
+                'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
+                'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved by admin',
+                'created_at': datetime.now(timezone.utc)
+            })
             create_notification(deposit['user_id'], 'Deposit Approved! ✅', f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
             if send_email_notification and user:
                 send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_id', ''))
@@ -1308,8 +1008,11 @@ def admin_process_deposit(deposit_id):
         elif action == 'reject':
             reason = data.get('reason', 'Not specified')
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
-            transactions_collection.insert_one({'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
-                'status': 'failed', 'description': f'Deposit of ${deposit["amount"]} rejected: {reason}', 'created_at': datetime.now(timezone.utc)})
+            transactions_collection.insert_one({
+                'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
+                'status': 'failed', 'description': f'Deposit of ${deposit["amount"]} rejected: {reason}',
+                'created_at': datetime.now(timezone.utc)
+            })
             create_notification(deposit['user_id'], 'Deposit Rejected ❌', f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             if send_email_notification and user:
                 send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
@@ -1347,9 +1050,13 @@ def admin_get_withdrawals():
                 withdrawal['created_at'] = withdrawal['created_at'].isoformat()
             user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
             withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            withdrawal['user_email'] = user.get('email', '') if user else ''
             result_withdrawals.append(withdrawal)
-        response = jsonify({'success': True, 'data': {'withdrawals': result_withdrawals, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}})
+        response = jsonify({'success': True, 'data': {
+            'withdrawals': result_withdrawals,
+            'total': total,
+            'page': page,
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}")
@@ -1376,8 +1083,11 @@ def admin_process_withdrawal(withdrawal_id):
         if action == 'approve':
             users_collection.update_one({'_id': ObjectId(withdrawal['user_id'])}, {'$inc': {'wallet.balance': -withdrawal['amount'], 'wallet.total_withdrawn': withdrawal['amount']}})
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc), 'transaction_id': data.get('transaction_id', '')}})
-            transactions_collection.update_one({'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
-                {'$set': {'status': 'completed', 'description': f'Withdrawal of ${withdrawal["amount"]} approved and sent'}}, sort=[('created_at', -1)])
+            transactions_collection.update_one(
+                {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
+                {'$set': {'status': 'completed', 'description': f'Withdrawal of ${withdrawal["amount"]} approved and sent'}},
+                sort=[('created_at', -1)]
+            )
             create_notification(withdrawal['user_id'], 'Withdrawal Approved! ✅', f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.', 'success')
             if send_email_notification and user:
                 send_withdrawal_approved_email(user, withdrawal['amount'], withdrawal['currency'], withdrawal['wallet_address'])
@@ -1385,8 +1095,11 @@ def admin_process_withdrawal(withdrawal_id):
         elif action == 'reject':
             reason = data.get('reason', 'Not specified')
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
-            transactions_collection.update_one({'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
-                {'$set': {'status': 'failed', 'description': f'Withdrawal of ${withdrawal["amount"]} rejected: {reason}'}}, sort=[('created_at', -1)])
+            transactions_collection.update_one(
+                {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
+                {'$set': {'status': 'failed', 'description': f'Withdrawal of ${withdrawal["amount"]} rejected: {reason}'}},
+                sort=[('created_at', -1)]
+            )
             create_notification(withdrawal['user_id'], 'Withdrawal Rejected ❌', f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             if send_email_notification and user:
                 send_withdrawal_rejected_email(user, withdrawal['amount'], withdrawal['currency'], reason)
@@ -1422,12 +1135,15 @@ def admin_get_investments():
                 inv['start_date'] = inv['start_date'].isoformat()
             if 'end_date' in inv and isinstance(inv['end_date'], datetime):
                 inv['end_date'] = inv['end_date'].isoformat()
-            if 'created_at' in inv and isinstance(inv['created_at'], datetime):
-                inv['created_at'] = inv['created_at'].isoformat()
             user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
             inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
             result_investments.append(inv)
-        response = jsonify({'success': True, 'data': {'investments': result_investments, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}})
+        response = jsonify({'success': True, 'data': {
+            'investments': result_investments,
+            'total': total,
+            'page': page,
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get investments error: {e}")
@@ -1494,10 +1210,143 @@ def admin_get_transactions():
             user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
             tx['user'] = {'username': user.get('username', 'Unknown') if user else 'Unknown', 'email': user.get('email', '') if user else ''}
             result_transactions.append(tx)
-        response = jsonify({'success': True, 'data': {'transactions': result_transactions, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}})
+        response = jsonify({'success': True, 'data': {
+            'transactions': result_transactions,
+            'total': total,
+            'page': page,
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get transactions error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== MANUAL EMAIL ENDPOINT ====================
+
+@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_send_email():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        subject = data.get('subject')
+        message = data.get('message')
+        email_type = data.get('type', 'info')
+        
+        if not user_id or not subject or not message:
+            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
+        
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>{subject}</title>
+<style>
+body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+.content {{ padding: 20px; background: #f9fafb; }}
+.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
+.button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+.footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h2>📧 {subject}</h2></div>
+<div class="content">
+<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+<div class="message-box">{message.replace(chr(10), '<br>')}</div>
+<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
+</div>
+<div class="footer"><p>© 2025 Veloxtrades. All rights reserved.</p></div>
+</div>
+</body>
+</html>
+"""
+        
+        send_email(user['email'], subject, message, html_body)
+        create_notification(user_id, subject, message, email_type)
+        
+        admin_user = get_user_from_request()
+        log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
+        
+        return jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
+    except Exception as e:
+        logger.error(f"Send email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== BROADCAST EMAIL ENDPOINT ====================
+
+@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_broadcast_email():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    try:
+        data = request.get_json()
+        recipients_type = data.get('recipients', 'all')
+        subject = data.get('subject')
+        message = data.get('message')
+        email_type = data.get('type', 'info')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        query = {}
+        if recipients_type == 'active':
+            query = {'is_banned': False}
+        elif recipients_type == 'depositors':
+            query = {'wallet.total_deposited': {'$gt': 0}}
+        elif recipients_type == 'investors':
+            active_investors = investments_collection.distinct('user_id', {'status': 'active'})
+            query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
+        
+        users = list(users_collection.find(query))
+        
+        sent_count = 0
+        for user in users:
+            html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>{subject}</title>
+<style>
+body {{ font-family: Arial, sans-serif; }}
+.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+.content {{ padding: 20px; background: #f9fafb; }}
+.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
+.footer {{ text-align: center; padding: 20px; font-size: 12px; }}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h2>📢 {subject}</h2></div>
+<div class="content">
+<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+<div class="message-box">{message.replace(chr(10), '<br>')}</div>
+<a href="https://www.veloxtrades.com.ng/dashboard.html" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
+</div>
+<div class="footer"><p>© 2025 Veloxtrades</p></div>
+</div>
+</body>
+</html>
+"""
+            send_email(user['email'], subject, message, html_body)
+            create_notification(user['_id'], subject, message, email_type)
+            sent_count += 1
+        
+        admin_user = get_user_from_request()
+        log_admin_action(admin_user['_id'], 'broadcast_email', f'Sent broadcast to {sent_count} users: {subject}')
+        
+        return jsonify({'success': True, 'message': f'Broadcast sent to {sent_count} users', 'data': {'count': sent_count}})
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== INIT DATABASE ====================
@@ -1515,7 +1364,6 @@ def init_database():
         notifications_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
-        # Create admin user
         admin_email = 'admin@veloxtrades.ltd'
         admin_exists = users_collection.find_one({'email': admin_email})
 
@@ -1535,7 +1383,6 @@ def init_database():
             users_collection.insert_one(admin_user)
             logger.info("✅ Admin user created (username: admin, password: TRADE@V)")
 
-        # Create demo user
         demo_email = 'demo@veloxtrades.com'
         demo_exists = users_collection.find_one({'email': demo_email})
         if not demo_exists:
@@ -1593,6 +1440,8 @@ if __name__ == '__main__':
     print("   ✅ Investment Created")
     print("   ✅ Investment Completed (Auto)")
     print("   ✅ Investment Profit Paid")
+    print("   ✅ Manual Email (Admin)")
+    print("   ✅ Broadcast Email (Admin)")
     print("=" * 70)
     print("\n🔐 Token Expiration: 30 DAYS")
     print("=" * 70 + "\n")
