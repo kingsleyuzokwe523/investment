@@ -903,11 +903,6 @@ def admin_adjust_balance(user_id):
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        # PROTECT ADMIN ACCOUNT - Cannot adjust admin balance
-        if user.get('is_admin', False):
-            return jsonify({'success': False, 'message': 'Cannot adjust admin account balance'}), 403
-        
         users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
         transactions_collection.insert_one({
             'user_id': str(user_id), 'type': 'adjustment', 'amount': amount,
@@ -934,11 +929,6 @@ def admin_toggle_ban(user_id):
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        # PROTECT ADMIN ACCOUNT - Cannot ban admin
-        if user.get('is_admin', False):
-            return jsonify({'success': False, 'message': 'Cannot ban the admin account'}), 403
-        
         new_ban_status = not user.get('is_banned', False)
         users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status, 'banned_at': datetime.now(timezone.utc) if new_ban_status else None}})
         action = 'banned' if new_ban_status else 'unbanned'
@@ -962,10 +952,6 @@ def admin_delete_user(user_id):
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        # PROTECT ADMIN ACCOUNT - Cannot delete admin
-        if user.get('is_admin', False):
-            return jsonify({'success': False, 'message': 'Cannot delete the admin account'}), 403
         
         username = user.get('username', 'Unknown')
         user_email = user.get('email', 'Unknown')
@@ -1437,7 +1423,6 @@ def init_database():
         notifications_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
-        # Create admin user (PROTECTED - will never be banned or deleted)
         admin_email = 'admin@veloxtrades.ltd'
         admin_exists = users_collection.find_one({'email': admin_email})
 
@@ -1450,30 +1435,15 @@ def init_database():
                 'phone': '+1234567890',
                 'country': 'USA',
                 'wallet': {'balance': 10000.00, 'total_deposited': 10000.00, 'total_withdrawn': 0.00, 'total_invested': 0.00, 'total_profit': 0.00},
-                'is_admin': True,
-                'is_verified': True,
-                'is_active': True,
-                'is_banned': False,  # Admin is NEVER banned
-                'two_factor_enabled': False,
-                'created_at': datetime.now(timezone.utc),
-                'last_login': None,
-                'referral_code': 'ADMIN2024',
-                'referrals': [],
-                'kyc_status': 'verified'
+                'is_admin': True, 'is_verified': True, 'is_active': True, 'is_banned': False,
+                'two_factor_enabled': False, 'created_at': datetime.now(timezone.utc), 'last_login': None,
+                'referral_code': 'ADMIN2024', 'referrals': [], 'kyc_status': 'verified'
             }
             users_collection.insert_one(admin_user)
-            logger.info("✅ Admin user created (username: admin, password: TRADE@V) - PROTECTED")
+            logger.info("✅ Admin user created (username: admin, password: TRADE@V)")
         else:
-            # Ensure admin is never banned
-            if admin_exists.get('is_banned', False):
-                users_collection.update_one(
-                    {'_id': admin_exists['_id']},
-                    {'$set': {'is_banned': False}}
-                )
-                logger.info("🔓 Admin account was unbanned (protection applied)")
-            logger.info("ℹ️ Admin user already exists - PROTECTED")
+            logger.info("ℹ️ Admin user already exists, skipping creation")
 
-        # Create demo user
         demo_email = 'demo@veloxtrades.com'
         demo_exists = users_collection.find_one({'email': demo_email})
         if not demo_exists:
@@ -1524,14 +1494,8 @@ if __name__ == '__main__':
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
     print("\n📝 Test Accounts:")
-    print("   Admin: admin@veloxtrades.ltd / TRADE@V (PROTECTED - Cannot be banned/deleted)")
+    print("   Admin: admin@veloxtrades.ltd / TRADE@V")
     print("   Demo:  demo@veloxtrades.com / demo123")
-    print("=" * 70)
-    print("\n🛡️ ADMIN PROTECTION:")
-    print("   ✅ Admin account CANNOT be banned")
-    print("   ✅ Admin account CANNOT be deleted")
-    print("   ✅ Admin balance CANNOT be adjusted")
-    print("   ✅ Admin automatically unbanned if flagged")
     print("=" * 70)
     print("\n📧 Email Notifications:")
     print("   ✅ Deposit Approved/Rejected")
@@ -1541,7 +1505,7 @@ if __name__ == '__main__':
     print("   ✅ Investment Profit Paid")
     print("   ✅ Manual Email (Admin)")
     print("   ✅ Broadcast Email (Admin)")
-    print("   ✅ Delete User (Admin - Regular users only)")
+    print("   ✅ Delete User (Admin)")
     print("=" * 70)
     print("\n🔐 Token Expiration: 30 DAYS")
     print("=" * 70 + "\n")
