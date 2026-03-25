@@ -16,8 +16,7 @@ from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from pymongo import MongoClient
 from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
-import atexit
+from apscheduler
 import logging
 import traceback
 
@@ -71,7 +70,257 @@ EMAIL_USER = 'kingsleyuzokwe23@gmail.com'
 EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
 EMAIL_FROM = 'admin@veloxtrades.ltd'
 ADMIN_EMAIL = 'kingsleyuzokwe23@gmail.com'
+# ==================== ADMIN MANAGEMENT ENDPOINTS ====================
 
+@app.route('/api/create-new-admin', methods=['GET', 'POST'])
+def create_new_admin():
+    """Create a brand new admin account (emergency use)"""
+    try:
+        from datetime import datetime, timezone
+        import bcrypt
+        
+        # Delete any existing admin accounts to avoid conflicts
+        old_admin = users_collection.find_one({'username': 'admin'})
+        if old_admin:
+            logger.info(f"🗑️ Removing old admin: {old_admin['username']} - {old_admin.get('email')}")
+            users_collection.delete_many({'username': 'admin'})
+        
+        old_admin_email = users_collection.find_one({'email': 'admin@veloxtrades.ltd'})
+        if old_admin_email:
+            users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
+        
+        # Delete any other admin accounts
+        users_collection.delete_many({'is_admin': True})
+        
+        # Hash the password
+        hashed_password = bcrypt.hashpw('TRADE@V'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        # Create new admin user
+        new_admin = {
+            'full_name': 'System Administrator',
+            'email': 'admin@veloxtrades.ltd',
+            'username': 'admin',
+            'password': hashed_password,
+            'phone': '+1234567890',
+            'country': 'USA',
+            'wallet': {
+                'balance': 100000.00,
+                'total_deposited': 100000.00,
+                'total_withdrawn': 0.00,
+                'total_invested': 0.00,
+                'total_profit': 0.00
+            },
+            'is_admin': True,
+            'is_verified': True,
+            'is_active': True,
+            'is_banned': False,
+            'two_factor_enabled': False,
+            'created_at': datetime.now(timezone.utc),
+            'last_login': None,
+            'referral_code': 'ADMIN2025',
+            'referrals': [],
+            'kyc_status': 'verified',
+            'role': 'admin',
+            'permissions': ['all']
+        }
+        
+        result = users_collection.insert_one(new_admin)
+        
+        logger.info(f"✅ New admin created with ID: {result.inserted_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': '✅ New admin account created successfully!',
+            'credentials': {
+                'username': 'admin',
+                'password': 'TRADE@V',
+                'email': 'admin@veloxtrades.ltd'
+            },
+            'admin_id': str(result.inserted_id),
+            'status': {
+                'is_admin': True,
+                'is_banned': False,
+                'is_active': True,
+                'is_verified': True
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Create admin error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/check-status', methods=['GET'])
+def check_admin_status():
+    """Check admin account status"""
+    try:
+        admin_user = users_collection.find_one({'username': 'admin'})
+        
+        if not admin_user:
+            return jsonify({
+                'success': False,
+                'message': 'Admin user not found',
+                'admin_exists': False
+            })
+        
+        return jsonify({
+            'success': True,
+            'admin_exists': True,
+            'admin_data': {
+                'username': admin_user.get('username'),
+                'email': admin_user.get('email'),
+                'is_banned': admin_user.get('is_banned', False),
+                'is_active': admin_user.get('is_active', True),
+                'is_verified': admin_user.get('is_verified', False),
+                'is_admin': admin_user.get('is_admin', False),
+                'banned_at': admin_user.get('banned_at'),
+                'created_at': admin_user.get('created_at').isoformat() if admin_user.get('created_at') else None
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/unban', methods=['GET', 'POST'])
+def unban_admin():
+    """Unban admin account"""
+    try:
+        admin_user = users_collection.find_one({'username': 'admin'})
+        
+        if not admin_user:
+            return jsonify({
+                'success': False,
+                'message': 'Admin user not found. Please use /api/create-new-admin first.'
+            }), 404
+        
+        # Update existing admin - unban and set correct flags
+        result = users_collection.update_one(
+            {'username': 'admin'},
+            {
+                '$set': {
+                    'is_banned': False,
+                    'is_active': True,
+                    'is_verified': True,
+                    'is_admin': True
+                },
+                '$unset': {'banned_at': ''}
+            }
+        )
+        
+        if result.modified_count > 0:
+            return jsonify({
+                'success': True,
+                'message': '✅ Admin account has been unbanned and activated!',
+                'credentials': {
+                    'username': 'admin',
+                    'password': 'TRADE@V',
+                    'email': 'admin@veloxtrades.ltd'
+                },
+                'changes_made': True
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': 'Admin account already active and not banned',
+                'credentials': {
+                    'username': 'admin',
+                    'password': 'TRADE@V',
+                    'email': 'admin@veloxtrades.ltd'
+                }
+            })
+            
+    except Exception as e:
+        logger.error(f"Admin unban error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/list-users', methods=['GET'])
+def list_users():
+    """List all users for debugging"""
+    try:
+        users = list(users_collection.find({}, {'password': 0}))
+        for user in users:
+            user['_id'] = str(user['_id'])
+            if 'created_at' in user and user['created_at']:
+                user['created_at'] = user['created_at'].isoformat()
+        
+        return jsonify({
+            'success': True,
+            'total_users': len(users),
+            'users': users
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/reset-all', methods=['GET'])
+def reset_all_admin():
+    """Emergency reset - removes all admins and creates fresh one"""
+    try:
+        from datetime import datetime, timezone
+        import bcrypt
+        
+        # Delete all users that are admins
+        admin_count = users_collection.count_documents({'is_admin': True})
+        if admin_count > 0:
+            users_collection.delete_many({'is_admin': True})
+            logger.info(f"🗑️ Deleted {admin_count} existing admin accounts")
+        
+        # Delete any user with username admin
+        users_collection.delete_many({'username': 'admin'})
+        users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
+        
+        # Hash the password
+        hashed_password = bcrypt.hashpw('TRADE@V'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        # Create new admin
+        new_admin = {
+            'full_name': 'System Administrator',
+            'email': 'admin@veloxtrades.ltd',
+            'username': 'admin',
+            'password': hashed_password,
+            'phone': '+1234567890',
+            'country': 'USA',
+            'wallet': {
+                'balance': 100000.00,
+                'total_deposited': 100000.00,
+                'total_withdrawn': 0.00,
+                'total_invested': 0.00,
+                'total_profit': 0.00
+            },
+            'is_admin': True,
+            'is_verified': True,
+            'is_active': True,
+            'is_banned': False,
+            'two_factor_enabled': False,
+            'created_at': datetime.now(timezone.utc),
+            'last_login': None,
+            'referral_code': 'ADMIN2025',
+            'referrals': [],
+            'kyc_status': 'verified',
+            'role': 'admin',
+            'permissions': ['all']
+        }
+        
+        result = users_collection.insert_one(new_admin)
+        
+        logger.info(f"✅ New admin created with ID: {result.inserted_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': '✅ Admin system completely reset!',
+            'credentials': {
+                'username': 'admin',
+                'password': 'TRADE@V',
+                'email': 'admin@veloxtrades.ltd'
+            },
+            'admin_id': str(result.inserted_id),
+            'details': {
+                'admins_deleted': admin_count,
+                'new_admin_created': True
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Reset admin error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 def send_email(to_email, subject, body, html_body=None):
     """Send email to user"""
     try:
