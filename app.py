@@ -55,6 +55,14 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 # Admin reset secret - CHANGE THIS IN PRODUCTION!
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
 
+# Add this to your existing backend code - REPLACE the CORS section
+
+from flask_cors import CORS
+
+# ==================== IMPROVED CORS CONFIGURATION ====================
+# This must be placed BEFORE any routes
+
+# Define allowed origins
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
@@ -67,6 +75,46 @@ ALLOWED_ORIGINS = [
     "https://velox-wnn4.onrender.com",
     "https://investment-gto3.onrender.com"
 ]
+
+# Configure CORS with proper settings
+CORS(app, 
+     origins=ALLOWED_ORIGINS,
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken", "Origin"],
+     expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+     max_age=3600)
+
+@app.after_request
+def after_request(response):
+    """Add CORS headers to every response"""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
+    
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Type, Authorization')
+    return response
+
+@app.before_request
+def handle_preflight():
+    """Handle preflight requests"""
+    if request.method == 'OPTIONS':
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+        else:
+            response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Max-Age', '3600')
+        return response
 
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
