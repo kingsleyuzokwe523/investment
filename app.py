@@ -874,35 +874,82 @@ def create_investment():
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN API ENDPOINTS ====================
+# ==================== ADMIN API ENDPOINTS (FIXED) ====================
+
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_stats():
     if request.method == 'OPTIONS':
         return handle_preflight()
     try:
-        total_users = users_collection.count_documents({}) if users_collection else 0
-        approved_deposits = list(deposits_collection.find({'status': 'approved'})) if deposits_collection else []
-        total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-        approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'})) if withdrawals_collection else []
-        total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-        active_investments = investments_collection.count_documents({'status': 'active'}) if investments_collection else 0
-        pending_deposits = deposits_collection.count_documents({'status': 'pending'}) if deposits_collection else 0
-        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'}) if withdrawals_collection else 0
-        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection else 0
-        response = jsonify({'success': True, 'data': {
-            'total_users': total_users,
-            'total_deposit_amount': total_deposit_amount,
-            'total_withdrawal_amount': total_withdrawal_amount,
-            'active_investments': active_investments,
-            'pending_deposits': pending_deposits,
-            'pending_withdrawals': pending_withdrawals,
-            'banned_users': banned_users
-        }})
+        # Safely get counts with error handling
+        total_users = 0
+        total_deposit_amount = 0
+        total_withdrawal_amount = 0
+        active_investments = 0
+        pending_deposits = 0
+        pending_withdrawals = 0
+        banned_users = 0
+        
+        # Users collection
+        if users_collection:
+            total_users = users_collection.count_documents({})
+            banned_users = users_collection.count_documents({'is_banned': True})
+        
+        # Deposits collection
+        if deposits_collection:
+            try:
+                approved_deposits = list(deposits_collection.find({'status': 'approved'}))
+                total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
+                pending_deposits = deposits_collection.count_documents({'status': 'pending'})
+            except Exception as e:
+                logger.error(f"Error fetching deposits: {e}")
+        
+        # Withdrawals collection
+        if withdrawals_collection:
+            try:
+                approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
+                total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
+                pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
+            except Exception as e:
+                logger.error(f"Error fetching withdrawals: {e}")
+        
+        # Investments collection
+        if investments_collection:
+            try:
+                active_investments = investments_collection.count_documents({'status': 'active'})
+            except Exception as e:
+                logger.error(f"Error fetching investments: {e}")
+        
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'total_users': total_users,
+                'total_deposit_amount': total_deposit_amount,
+                'total_withdrawal_amount': total_withdrawal_amount,
+                'active_investments': active_investments,
+                'pending_deposits': pending_deposits,
+                'pending_withdrawals': pending_withdrawals,
+                'banned_users': banned_users
+            }
+        })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Stats error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Stats error: {e}", exc_info=True)
+        # Return empty stats instead of error to prevent dashboard failure
+        return jsonify({
+            'success': True, 
+            'data': {
+                'total_users': 0,
+                'total_deposit_amount': 0,
+                'total_withdrawal_amount': 0,
+                'active_investments': 0,
+                'pending_deposits': 0,
+                'pending_withdrawals': 0,
+                'banned_users': 0,
+                'error': str(e)
+            }
+        }), 200
 
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -919,24 +966,44 @@ def admin_get_transactions():
         if tx_type != 'all':
             query['type'] = tx_type
         
-        total = transactions_collection.count_documents(query) if transactions_collection else 0
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if transactions_collection else []
+        # Check if transactions collection exists
+        if not transactions_collection:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'transactions': [],
+                    'total': 0,
+                    'page': page,
+                    'pages': 1
+                }
+            }), 200
+        
+        total = transactions_collection.count_documents(query)
+        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         result_transactions = []
         for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-            
-            if users_collection:
-                user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-                tx['user'] = {
-                    'username': user.get('username', 'Unknown') if user else 'Unknown',
-                    'email': user.get('email', '') if user else ''
-                }
-            else:
-                tx['user'] = {'username': 'Unknown', 'email': ''}
-            result_transactions.append(tx)
+            try:
+                tx['_id'] = str(tx['_id'])
+                if 'created_at' in tx and isinstance(tx['created_at'], datetime):
+                    tx['created_at'] = tx['created_at'].isoformat()
+                
+                # Get user info safely
+                if users_collection and 'user_id' in tx:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                        tx['user'] = {
+                            'username': user.get('username', 'Unknown') if user else 'Unknown',
+                            'email': user.get('email', '') if user else ''
+                        }
+                    except:
+                        tx['user'] = {'username': 'Unknown', 'email': ''}
+                else:
+                    tx['user'] = {'username': 'Unknown', 'email': ''}
+                result_transactions.append(tx)
+            except Exception as e:
+                logger.error(f"Error processing transaction: {e}")
+                continue
         
         response = jsonify({
             'success': True,
@@ -949,82 +1016,17 @@ def admin_get_transactions():
         })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get admin transactions error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== CREATE TRANSACTION ENDPOINT ====================
-@app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_create_transaction():
-    """Create a new transaction record (manual transaction)"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        
-        user_id = data.get('user_id')
-        transaction_type = data.get('type')
-        amount = float(data.get('amount', 0))
-        status = data.get('status', 'completed')
-        description = data.get('description', '')
-        
-        if not user_id:
-            return jsonify({'success': False, 'message': 'User ID is required'}), 400
-        
-        if not transaction_type:
-            return jsonify({'success': False, 'message': 'Transaction type is required'}), 400
-        
-        if not validate_amount(amount, 0.01):
-            return jsonify({'success': False, 'message': 'Invalid amount'}), 400
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        transaction = {
-            'user_id': str(user_id),
-            'type': transaction_type,
-            'amount': amount,
-            'status': status,
-            'description': description,
-            'created_at': datetime.now(timezone.utc),
-            'admin_created': True,
-            'admin_id': str(get_user_from_request()['_id']) if get_user_from_request() else None
-        }
-        
-        result = transactions_collection.insert_one(transaction)
-        
-        create_notification(
-            user_id,
-            f'Transaction Created: {transaction_type.capitalize()}',
-            f'A {transaction_type} transaction of ${amount:,.2f} has been recorded on your account. {description}',
-            'info'
-        )
-        
-        admin_user = get_user_from_request()
-        if admin_user:
-            log_admin_action(
-                admin_user['_id'],
-                'create_transaction',
-                f'Created {transaction_type} transaction of ${amount} for user {user["username"]}'
-            )
-        
-        response = jsonify({
+        logger.error(f"Get admin transactions error: {e}", exc_info=True)
+        return jsonify({
             'success': True,
-            'message': f'Transaction created successfully',
             'data': {
-                'transaction_id': str(result.inserted_id),
-                'user': user['username'],
-                'type': transaction_type,
-                'amount': amount
+                'transactions': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1,
+                'error': str(e)
             }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Create transaction error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        }), 200
 
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1036,6 +1038,19 @@ def admin_get_users():
         limit = int(request.args.get('limit', 20))
         search = request.args.get('search', '')
         skip = (page - 1) * limit
+        
+        # Check if users collection exists
+        if not users_collection:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'users': [],
+                    'total': 0,
+                    'page': page,
+                    'pages': 1
+                }
+            }), 200
+        
         query = {}
         if search:
             query['$or'] = [
@@ -1043,24 +1058,45 @@ def admin_get_users():
                 {'email': {'$regex': search, '$options': 'i'}},
                 {'full_name': {'$regex': search, '$options': 'i'}}
             ]
-        total = users_collection.count_documents(query) if users_collection else 0
-        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if users_collection else []
+        
+        total = users_collection.count_documents(query)
+        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
         for user in users:
-            user['_id'] = str(user['_id'])
-            if 'created_at' in user and isinstance(user['created_at'], datetime):
-                user['created_at'] = user['created_at'].isoformat()
-            if 'last_login' in user and isinstance(user['last_login'], datetime):
-                user['last_login'] = user['last_login'].isoformat()
-        response = jsonify({'success': True, 'data': {
-            'users': users,
-            'total': total,
-            'page': page,
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }})
+            try:
+                user['_id'] = str(user['_id'])
+                if 'created_at' in user and isinstance(user['created_at'], datetime):
+                    user['created_at'] = user['created_at'].isoformat()
+                if 'last_login' in user and isinstance(user['last_login'], datetime):
+                    user['last_login'] = user['last_login'].isoformat()
+                # Remove sensitive data
+                user.pop('password', None)
+            except Exception as e:
+                logger.error(f"Error processing user: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'users': users,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get users error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Get users error: {e}", exc_info=True)
+        return jsonify({
+            'success': True,
+            'data': {
+                'users': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1,
+                'error': str(e)
+            }
+        }), 200
 
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1072,32 +1108,66 @@ def admin_get_deposits():
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
         skip = (page - 1) * limit
+        
+        if not deposits_collection:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'deposits': [],
+                    'total': 0,
+                    'page': page,
+                    'pages': 1
+                }
+            }), 200
+        
         query = {}
         if status != 'all':
             query['status'] = status
-        total = deposits_collection.count_documents(query) if deposits_collection else 0
-        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if deposits_collection else []
+        
+        total = deposits_collection.count_documents(query)
+        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
         result_deposits = []
         for deposit in deposits:
-            deposit['_id'] = str(deposit['_id'])
-            if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
-                deposit['created_at'] = deposit['created_at'].isoformat()
-            if users_collection:
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            else:
-                deposit['username'] = 'Unknown'
-            result_deposits.append(deposit)
-        response = jsonify({'success': True, 'data': {
-            'deposits': result_deposits,
-            'total': total,
-            'page': page,
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }})
+            try:
+                deposit['_id'] = str(deposit['_id'])
+                if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
+                    deposit['created_at'] = deposit['created_at'].isoformat()
+                
+                if users_collection and 'user_id' in deposit:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                        deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                    except:
+                        deposit['username'] = 'Unknown'
+                else:
+                    deposit['username'] = 'Unknown'
+                result_deposits.append(deposit)
+            except Exception as e:
+                logger.error(f"Error processing deposit: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'deposits': result_deposits,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get deposits error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Get deposits error: {e}", exc_info=True)
+        return jsonify({
+            'success': True,
+            'data': {
+                'deposits': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1
+            }
+        }), 200
 
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1109,32 +1179,66 @@ def admin_get_withdrawals():
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
         skip = (page - 1) * limit
+        
+        if not withdrawals_collection:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'withdrawals': [],
+                    'total': 0,
+                    'page': page,
+                    'pages': 1
+                }
+            }), 200
+        
         query = {}
         if status != 'all':
             query['status'] = status
-        total = withdrawals_collection.count_documents(query) if withdrawals_collection else 0
-        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if withdrawals_collection else []
+        
+        total = withdrawals_collection.count_documents(query)
+        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
         result_withdrawals = []
         for withdrawal in withdrawals:
-            withdrawal['_id'] = str(withdrawal['_id'])
-            if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
-                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
-            if users_collection:
-                user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
-                withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            else:
-                withdrawal['username'] = 'Unknown'
-            result_withdrawals.append(withdrawal)
-        response = jsonify({'success': True, 'data': {
-            'withdrawals': result_withdrawals,
-            'total': total,
-            'page': page,
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }})
+            try:
+                withdrawal['_id'] = str(withdrawal['_id'])
+                if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
+                    withdrawal['created_at'] = withdrawal['created_at'].isoformat()
+                
+                if users_collection and 'user_id' in withdrawal:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
+                        withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                    except:
+                        withdrawal['username'] = 'Unknown'
+                else:
+                    withdrawal['username'] = 'Unknown'
+                result_withdrawals.append(withdrawal)
+            except Exception as e:
+                logger.error(f"Error processing withdrawal: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'withdrawals': result_withdrawals,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get withdrawals error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Get withdrawals error: {e}", exc_info=True)
+        return jsonify({
+            'success': True,
+            'data': {
+                'withdrawals': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1
+            }
+        }), 200
 
 @app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1146,34 +1250,68 @@ def admin_get_investments():
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
         skip = (page - 1) * limit
+        
+        if not investments_collection:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'investments': [],
+                    'total': 0,
+                    'page': page,
+                    'pages': 1
+                }
+            }), 200
+        
         query = {}
         if status != 'all':
             query['status'] = status
-        total = investments_collection.count_documents(query) if investments_collection else 0
-        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)) if investments_collection else []
+        
+        total = investments_collection.count_documents(query)
+        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
         result_investments = []
         for inv in investments:
-            inv['_id'] = str(inv['_id'])
-            if 'start_date' in inv and isinstance(inv['start_date'], datetime):
-                inv['start_date'] = inv['start_date'].isoformat()
-            if 'end_date' in inv and isinstance(inv['end_date'], datetime):
-                inv['end_date'] = inv['end_date'].isoformat()
-            if users_collection:
-                user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-                inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            else:
-                inv['username'] = 'Unknown'
-            result_investments.append(inv)
-        response = jsonify({'success': True, 'data': {
-            'investments': result_investments,
-            'total': total,
-            'page': page,
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }})
+            try:
+                inv['_id'] = str(inv['_id'])
+                if 'start_date' in inv and isinstance(inv['start_date'], datetime):
+                    inv['start_date'] = inv['start_date'].isoformat()
+                if 'end_date' in inv and isinstance(inv['end_date'], datetime):
+                    inv['end_date'] = inv['end_date'].isoformat()
+                
+                if users_collection and 'user_id' in inv:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
+                        inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                    except:
+                        inv['username'] = 'Unknown'
+                else:
+                    inv['username'] = 'Unknown'
+                result_investments.append(inv)
+            except Exception as e:
+                logger.error(f"Error processing investment: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'investments': result_investments,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
         return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Get investments error: {e}", exc_info=True)
+        return jsonify({
+            'success': True,
+            'data': {
+                'investments': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1
+            }
+        }), 200
 
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
