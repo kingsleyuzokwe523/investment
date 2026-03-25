@@ -197,6 +197,189 @@ Veloxtrades Team
 """
     return send_email(user['email'], subject, body)
 
+# ==================== MANUAL EMAIL ENDPOINT ====================
+
+@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_send_email():
+    """Send manual email to a specific user"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        subject = data.get('subject')
+        message = data.get('message')
+        email_type = data.get('type', 'info')
+        
+        if not user_id or not subject or not message:
+            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
+        
+        # Get user from database
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Create HTML email body
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{subject}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+        .content {{ padding: 20px; background: #f9fafb; }}
+        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
+        .button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+        .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
+    </style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h2>📧 {subject}</h2>
+</div>
+<div class="content">
+<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+<div class="message-box">
+{message.replace(chr(10), '<br>')}
+</div>
+<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
+</div>
+<div class="footer">
+<p>© 2025 Veloxtrades. All rights reserved.</p>
+<p>Need help? <a href="https://t.me/Veloxtrades2">Contact Support</a></p>
+</div>
+</div>
+</body>
+</html>
+        """
+        
+        # Send the email
+        send_email(user['email'], subject, message, html_body)
+        
+        # Create notification for user
+        create_notification(
+            user_id,
+            subject,
+            message,
+            email_type
+        )
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'send_manual_email',
+            f'Sent email to {user["username"]}: {subject}'
+        )
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Email sent to {user["email"]}',
+            'data': {'user_id': user_id, 'subject': subject}
+        })
+        
+    except Exception as e:
+        logger.error(f"Send email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== BROADCAST EMAIL ENDPOINT ====================
+
+@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_broadcast_email():
+    """Send broadcast email to multiple users"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        data = request.get_json()
+        recipients_type = data.get('recipients', 'all')
+        subject = data.get('subject')
+        message = data.get('message')
+        email_type = data.get('type', 'info')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        # Build query based on recipient type
+        query = {}
+        if recipients_type == 'active':
+            query = {'is_banned': False}
+        elif recipients_type == 'depositors':
+            query = {'wallet.total_deposited': {'$gt': 0}}
+        elif recipients_type == 'investors':
+            # Users with active investments
+            active_investors = investments_collection.distinct('user_id', {'status': 'active'})
+            query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
+        
+        users = list(users_collection.find(query))
+        
+        sent_count = 0
+        for user in users:
+            html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{subject}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+        .content {{ padding: 20px; background: #f9fafb; }}
+        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
+        .footer {{ text-align: center; padding: 20px; font-size: 12px; }}
+    </style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h2>📢 {subject}</h2></div>
+<div class="content">
+<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+<div class="message-box">
+{message.replace(chr(10), '<br>')}
+</div>
+<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
+</div>
+<div class="footer">
+<p>© 2025 Veloxtrades</p>
+</div>
+</div>
+</body>
+</html>
+"""
+            send_email(user['email'], subject, message, html_body)
+            create_notification(
+                user['_id'],
+                subject,
+                message,
+                email_type
+            )
+            sent_count += 1
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'broadcast_email',
+            f'Sent broadcast to {sent_count} users: {subject}'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'Broadcast sent to {sent_count} users',
+            'data': {'count': sent_count}
+        })
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 def send_investment_created_email(user, amount, plan_name, expected_profit):
     """Send email when investment is created"""
     # Find the plan duration safely
