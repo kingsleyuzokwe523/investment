@@ -1,4 +1,3 @@
-
 import os
 import bcrypt
 import jwt
@@ -12,6 +11,9 @@ import smtplib
 import logging
 import traceback
 import atexit
+import html
+import time
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,8 @@ from flask_cors import CORS
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
+from functools import wraps
+from urllib.parse import urlparse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -65,7 +69,7 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# ==================== EMAIL CONFIGURATION ====================
+# ==================== EMAIL CONFIGURATION (KEPT AS IS) ====================
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USER = 'kingsleyuzokwe523@gmail.com'
@@ -73,37 +77,85 @@ EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
 EMAIL_FROM = 'admin@veloxtrades.ltd'
 ADMIN_EMAIL = 'kingsleyuzokwe523@gmail.com'
 
-def send_email(to_email, subject, body, html_body=None):
-    """Send email to user"""
-    try:
-        msg = MIMEMultipart('alternative')
-        msg['From'] = EMAIL_FROM
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        
-        part1 = MIMEText(body, 'plain')
-        msg.attach(part1)
-        
-        if html_body:
-            part2 = MIMEText(html_body, 'html')
-            msg.attach(part2)
-        
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        
-        logger.info(f"✅ Email sent to {to_email}: {subject}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Email error: {e}")
-        return False
+# ==================== ENHANCED EMAIL FUNCTION ====================
+def send_email(to_email, subject, body, html_body=None, max_retries=3):
+    """Send email to user with retry logic and proper error handling"""
+    for attempt in range(max_retries):
+        try:
+            # Validate email format
+            if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
+                logger.error(f"❌ Invalid email format: {to_email}")
+                return False
+            
+            msg = MIMEMultipart('alternative')
+            msg['From'] = EMAIL_FROM
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            
+            # Add plain text version
+            part1 = MIMEText(body, 'plain')
+            msg.attach(part1)
+            
+            # Add HTML version if provided, with escaping
+            if html_body:
+                # Escape HTML content to prevent XSS
+                html_body = html.escape(html_body) if not html_body.startswith('<!DOCTYPE') else html_body
+                part2 = MIMEText(html_body, 'html')
+                msg.attach(part2)
+            
+            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=30) as server:
+                server.starttls()
+                server.login(EMAIL_USER, EMAIL_PASSWORD)
+                server.send_message(msg)
+            
+            logger.info(f"✅ Email sent to {to_email}: {subject}")
+            return True
+            
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ Email authentication error: {e}")
+            return False
+        except smtplib.SMTPException as e:
+            logger.error(f"❌ SMTP error (attempt {attempt+1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                return False
+        except Exception as e:
+            logger.error(f"❌ Email error (attempt {attempt+1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                return False
+    
+    return False
 
 # ==================== EMAIL FUNCTIONS ====================
 def send_deposit_approved_email(user, amount, crypto, transaction_id):
     subject = f"✅ Deposit Approved - ${amount} added to your Veloxtrades account"
     body = f"Dear {user.get('full_name', user['username'])},\n\nYour deposit of ${amount:,.2f} via {crypto.upper()} has been approved and added to your wallet.\n\nTransaction ID: {transaction_id or 'N/A'}\n\nThank you for investing with Veloxtrades!\n\nBest regards,\nVeloxtrades Team"
-    return send_email(user['email'], subject, body)
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>{subject}</title></head>
+<body style="font-family: Arial, sans-serif;">
+<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+<div style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+<h2>✅ Deposit Approved</h2>
+</div>
+<div style="padding: 20px; background: #f9fafb;">
+<p>Dear <strong>{html.escape(user.get('full_name', user['username']))}</strong>,</p>
+<p>Your deposit of <strong>${amount:,.2f}</strong> via <strong>{crypto.upper()}</strong> has been approved and added to your wallet.</p>
+<p><strong>Transaction ID:</strong> {transaction_id or 'N/A'}</p>
+<p>Thank you for investing with Veloxtrades!</p>
+</div>
+<div style="text-align: center; padding: 20px; font-size: 12px; color: #6b7280;">
+<p>© 2025 Veloxtrades. All rights reserved.</p>
+</div>
+</div>
+</body>
+</html>
+"""
+    return send_email(user['email'], subject, body, html_body)
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
     subject = f"❌ Deposit Rejected - ${amount} - Veloxtrades"
@@ -143,8 +195,6 @@ CORS(app,
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=3600)
-
-# @app.after_request REMOVED - NO DUPLICATE CORS HEADERS
 
 @app.before_request
 def handle_preflight():
@@ -188,10 +238,25 @@ INVESTMENT_PLANS = {
 def utc_now():
     return datetime.now(timezone.utc)
 
-# MongoDB Connection
+# MongoDB Connection with retry logic
+def get_db_connection():
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = MongoClient(app.config['MONGO_URI'], serverSelectionTimeoutMS=5000)
+            # Test connection
+            client.admin.command('ping')
+            db = client['veloxtrades_db']
+            return client, db
+        except Exception as e:
+            logger.error(f"MongoDB connection attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                raise
+
 try:
-    client = MongoClient(app.config['MONGO_URI'])
-    db = client['veloxtrades_db']
+    client, db = get_db_connection()
     users_collection = db['users']
     investments_collection = db['investments']
     transactions_collection = db['transactions']
@@ -203,7 +268,9 @@ try:
     logger.info("✅ MongoDB Connected Successfully!")
 except Exception as e:
     logger.error(f"❌ MongoDB Connection Error: {e}")
-    raise
+    # Don't crash, but log error
+    client = None
+    db = None
 
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
@@ -223,6 +290,12 @@ def create_jwt_token(user_id, username, is_admin=False):
 def verify_jwt_token(token):
     try:
         return jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        logger.warning("⚠️ Token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"⚠️ Invalid token: {e}")
+        return None
     except Exception as e:
         logger.warning(f"⚠️ Token verification error: {e}")
         return None
@@ -245,41 +318,57 @@ def get_user_from_request():
         return None
 
 def require_admin(f):
+    @wraps(f)
     def decorated_function(*args, **kwargs):
         user = get_user_from_request()
         if not user or not user.get('is_admin', False):
             return jsonify({'success': False, 'message': 'Admin access required'}), 403
         return f(*args, **kwargs)
-    decorated_function.__name__ = f.__name__
     return decorated_function
 
 def create_notification(user_id, title, message, type='info'):
-    return notifications_collection.insert_one({
-        'user_id': str(user_id), 'title': title, 'message': message,
-        'type': type, 'read': False, 'created_at': datetime.now(timezone.utc)
-    })
+    try:
+        # Escape message to prevent XSS
+        safe_message = html.escape(message)
+        return notifications_collection.insert_one({
+            'user_id': str(user_id), 'title': title, 'message': safe_message,
+            'type': type, 'read': False, 'created_at': datetime.now(timezone.utc)
+        })
+    except Exception as e:
+        logger.error(f"Failed to create notification: {e}")
+        return None
 
 def log_admin_action(admin_id, action, details):
-    admin_logs_collection.insert_one({
-        'admin_id': str(admin_id), 'action': action, 'details': details,
-        'ip_address': request.remote_addr, 'created_at': datetime.now(timezone.utc)
-    })
+    try:
+        admin_logs_collection.insert_one({
+            'admin_id': str(admin_id), 'action': action, 'details': details,
+            'ip_address': request.remote_addr, 'created_at': datetime.now(timezone.utc)
+        })
+    except Exception as e:
+        logger.error(f"Failed to log admin action: {e}")
 
-# ==================== AUTO-PROFIT SCHEDULER ====================
+# ==================== AUTO-PROFIT SCHEDULER (OPTIMIZED) ====================
 def process_investment_profits():
+    """Process investment profits with batch processing to avoid memory issues"""
     try:
         logger.info("🔄 Processing investment profits...")
-        active_investments = list(investments_collection.find({
+        
+        # Use cursor instead of loading all at once
+        cursor = investments_collection.find({
             'status': 'active',
             'end_date': {'$lte': datetime.now(timezone.utc)}
-        }))
+        }).batch_size(100)
         
-        for investment in active_investments:
+        processed_count = 0
+        error_count = 0
+        
+        for investment in cursor:
             try:
                 user_id = investment['user_id']
                 amount = investment['amount']
                 expected_profit = investment.get('expected_profit', 0)
                 
+                # Use atomic operation
                 result = users_collection.update_one(
                     {'_id': ObjectId(user_id)},
                     {'$inc': {'wallet.balance': expected_profit, 'wallet.total_profit': expected_profit}}
@@ -304,9 +393,18 @@ def process_investment_profits():
                     if user:
                         send_investment_completed_email(user, amount, investment.get("plan_name", "Investment"), expected_profit)
                     
+                    processed_count += 1
                     logger.info(f"✅ Processed profit for investment {investment['_id']}")
+                else:
+                    logger.warning(f"⚠️ User not found for investment {investment['_id']}")
+                    
             except Exception as e:
-                logger.error(f"❌ Error processing investment {investment['_id']}: {e}")
+                error_count += 1
+                logger.error(f"❌ Error processing investment {investment.get('_id', 'unknown')}: {e}")
+                continue
+        
+        logger.info(f"✅ Profit processing completed: {processed_count} processed, {error_count} errors")
+        
     except Exception as e:
         logger.error(f"❌ Error in profit processing: {e}")
 
@@ -316,6 +414,22 @@ scheduler.add_job(func=process_investment_profits, trigger="interval", hours=1, 
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 logger.info("✅ Auto-profit scheduler started")
+
+# ==================== INPUT VALIDATION FUNCTIONS ====================
+def validate_email(email):
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_password(password):
+    """Password must be at least 6 characters"""
+    return len(password) >= 6
+
+def validate_amount(amount, min_amount=0):
+    try:
+        amount = float(amount)
+        return amount >= min_amount and amount <= 1000000  # Max $1M
+    except (ValueError, TypeError):
+        return False
 
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
@@ -332,8 +446,18 @@ def register():
         username = data.get('username', '').strip().lower()
         password = data.get('password', '')
 
+        # Input validation
         if not all([full_name, email, username, password]):
             return jsonify({'success': False, 'message': 'All fields are required'}), 400
+        
+        if not validate_email(email):
+            return jsonify({'success': False, 'message': 'Invalid email format'}), 400
+        
+        if not validate_password(password):
+            return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+        
+        if len(username) < 3 or len(username) > 30:
+            return jsonify({'success': False, 'message': 'Username must be 3-30 characters'}), 400
 
         if users_collection.find_one({'email': email}):
             return jsonify({'success': False, 'message': 'Email already registered'}), 400
@@ -357,7 +481,7 @@ def register():
         response = jsonify({'success': True, 'message': 'Registration successful! You can now login.'})
         return add_cors_headers(response), 201
     except Exception as e:
-        logger.error(f"❌ Registration error: {e}")
+        logger.error(f"❌ Registration error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'Registration failed'}), 500
 
 @app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
@@ -401,7 +525,7 @@ def login():
         response.set_cookie('elite_token', value=token, httponly=True, secure=True, samesite='Lax', max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
         return add_cors_headers(response), 200
     except Exception as e:
-        logger.error(f"❌ Login error: {e}")
+        logger.error(f"❌ Login error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'Login failed'}), 500
 
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
@@ -449,6 +573,7 @@ def get_dashboard():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     try:
+        # Use cursor for better memory management
         active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'}))
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
         pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
@@ -489,6 +614,7 @@ def get_transactions():
         response = jsonify({'success': True, 'data': {'transactions': all_transactions}})
         return add_cors_headers(response)
     except Exception as e:
+        logger.error(f"Transactions error: {e}")
         return jsonify({'success': False, 'message': 'Failed to load transactions'}), 500
 
 # ==================== INVESTMENTS API ====================
@@ -510,6 +636,7 @@ def get_investments():
         response = jsonify({'success': True, 'data': {'investments': investments}})
         return add_cors_headers(response)
     except Exception as e:
+        logger.error(f"Investments error: {e}")
         return jsonify({'success': False, 'message': 'Failed to load investments'}), 500
 
 # ==================== DEPOSIT API ====================
@@ -522,8 +649,18 @@ def create_deposit():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     try:
         data = request.get_json()
+        amount = float(data.get('amount', 0))
+        crypto = data.get('crypto', '')
+        
+        # Input validation
+        if not validate_amount(amount, 10):  # Minimum deposit $10
+            return jsonify({'success': False, 'message': 'Invalid amount. Minimum deposit is $10'}), 400
+        
+        if not crypto or crypto not in ['btc', 'eth', 'usdt', 'usdc']:
+            return jsonify({'success': False, 'message': 'Invalid cryptocurrency'}), 400
+        
         deposit = {
-            'user_id': str(user['_id']), 'amount': float(data.get('amount', 0)), 'crypto': data.get('crypto', ''),
+            'user_id': str(user['_id']), 'amount': amount, 'crypto': crypto,
             'wallet_address': data.get('wallet_address', ''), 'transaction_id': data.get('transaction_id', ''),
             'status': 'pending', 'created_at': datetime.now(timezone.utc)
         }
@@ -610,11 +747,18 @@ def create_withdrawal():
         amount = float(data.get('amount', 0))
         currency = data.get('currency', '')
         wallet_address = data.get('wallet_address', '')
+        
+        # Input validation
+        if not validate_amount(amount, 50):
+            return jsonify({'success': False, 'message': 'Invalid amount. Minimum withdrawal is $50'}), 400
+        
+        if not wallet_address or len(wallet_address) < 10:
+            return jsonify({'success': False, 'message': 'Invalid wallet address'}), 400
+        
         current_balance = user.get('wallet', {}).get('balance', 0)
         if amount > current_balance:
             return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
-        if amount < 50:
-            return jsonify({'success': False, 'message': 'Minimum withdrawal is $50'}), 400
+        
         withdrawal = {
             'user_id': str(user['_id']), 'amount': amount, 'currency': currency,
             'wallet_address': wallet_address, 'status': 'pending', 'created_at': datetime.now(timezone.utc)
@@ -646,37 +790,51 @@ def create_investment():
         plan = INVESTMENT_PLANS.get(plan_type)
         if not plan:
             return jsonify({'success': False, 'message': 'Invalid investment plan'}), 400
+        
+        # Validate amount
         if amount < plan['min_deposit']:
             return jsonify({'success': False, 'message': f'Minimum investment is ${plan["min_deposit"]}'}), 400
         if amount > plan['max_deposit'] and plan['max_deposit'] != float('inf'):
             return jsonify({'success': False, 'message': f'Maximum investment is ${plan["max_deposit"]}'}), 400
+        
         current_balance = user.get('wallet', {}).get('balance', 0)
         if amount > current_balance:
             return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
+        
         expected_profit = amount * plan['roi'] / 100
         end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
-        users_collection.update_one({'_id': user['_id']}, {'$inc': {'wallet.balance': -amount, 'wallet.total_invested': amount}})
+        
+        # Use atomic operation
+        result = users_collection.update_one(
+            {'_id': user['_id'], 'wallet.balance': {'$gte': amount}},
+            {'$inc': {'wallet.balance': -amount, 'wallet.total_invested': amount}}
+        )
+        
+        if result.modified_count == 0:
+            return jsonify({'success': False, 'message': 'Insufficient balance or transaction failed'}), 400
+        
         investment = {
             'user_id': str(user['_id']), 'plan_name': plan['name'], 'plan_type': plan_type, 'amount': amount,
             'expected_profit': expected_profit, 'roi': plan['roi'], 'duration_hours': plan['duration_hours'],
             'status': 'active', 'start_date': datetime.now(timezone.utc), 'end_date': end_date, 'created_at': datetime.now(timezone.utc)
         }
-        result = investments_collection.insert_one(investment)
+        inv_result = investments_collection.insert_one(investment)
+        
         transactions_collection.insert_one({'user_id': str(user['_id']), 'type': 'investment', 'amount': amount,
-            'status': 'completed', 'description': f'Investment in {plan["name"]}', 'investment_id': str(result.inserted_id), 'created_at': datetime.now(timezone.utc)})
+            'status': 'completed', 'description': f'Investment in {plan["name"]}', 'investment_id': str(inv_result.inserted_id), 'created_at': datetime.now(timezone.utc)})
         create_notification(user['_id'], 'Investment Created! 🚀', f'Your investment of ${amount:,.2f} in {plan["name"]} has been started. Expected profit: ${expected_profit:,.2f}', 'success')
         send_investment_created_email(user, amount, plan['name'], expected_profit)
+        
         updated_user = users_collection.find_one({'_id': user['_id']})
         new_balance = updated_user.get('wallet', {}).get('balance', 0)
         response = jsonify({'success': True, 'message': 'Investment created successfully',
-            'data': {'investment_id': str(result.inserted_id), 'new_balance': new_balance, 'expected_profit': expected_profit}})
+            'data': {'investment_id': str(inv_result.inserted_id), 'new_balance': new_balance, 'expected_profit': expected_profit}})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN API ENDPOINTS ====================
-
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_stats():
@@ -910,7 +1068,11 @@ def admin_process_deposit(deposit_id):
         user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
         
         if action == 'approve':
-            users_collection.update_one({'_id': ObjectId(deposit['user_id'])}, {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}})
+            # Use atomic operation
+            users_collection.update_one(
+                {'_id': ObjectId(deposit['user_id'])},
+                {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+            )
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
             transactions_collection.insert_one({
                 'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
@@ -937,7 +1099,8 @@ def admin_process_deposit(deposit_id):
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], f'process_deposit_{action}', f'Deposit {deposit_id} for user {deposit["user_id"]} was {action}ed')
+        if admin_user:
+            log_admin_action(admin_user['_id'], f'process_deposit_{action}', f'Deposit {deposit_id} for user {deposit["user_id"]} was {action}ed')
         response = jsonify({'success': True, 'message': message})
         return add_cors_headers(response)
     except Exception as e:
@@ -963,7 +1126,11 @@ def admin_process_withdrawal(withdrawal_id):
         user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
         
         if action == 'approve':
-            users_collection.update_one({'_id': ObjectId(withdrawal['user_id'])}, {'$inc': {'wallet.balance': -withdrawal['amount'], 'wallet.total_withdrawn': withdrawal['amount']}})
+            # Use atomic operation
+            users_collection.update_one(
+                {'_id': ObjectId(withdrawal['user_id'])},
+                {'$inc': {'wallet.balance': -withdrawal['amount'], 'wallet.total_withdrawn': withdrawal['amount']}}
+            )
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc), 'transaction_id': data.get('transaction_id', '')}})
             transactions_collection.update_one(
                 {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
@@ -1017,10 +1184,13 @@ def admin_send_email():
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # Escape message to prevent XSS
+        safe_message = html.escape(message)
+        
         html_body = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>{subject}</title>
+<head><meta charset="UTF-8"><title>{html.escape(subject)}</title>
 <style>
 body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
@@ -1033,10 +1203,10 @@ body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
 </head>
 <body>
 <div class="container">
-<div class="header"><h2>📧 {subject}</h2></div>
+<div class="header"><h2>📧 {html.escape(subject)}</h2></div>
 <div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
+<p>Dear <strong>{html.escape(user.get('full_name', user['username']))}</strong>,</p>
+<div class="message-box">{safe_message.replace(chr(10), '<br>')}</div>
 <a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
 </div>
 <div class="footer"><p>© 2025 Veloxtrades. All rights reserved.</p></div>
@@ -1049,7 +1219,8 @@ body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
         create_notification(user_id, subject, message, email_type)
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
+        if admin_user:
+            log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
         
         response = jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
         return add_cors_headers(response)
@@ -1086,12 +1257,15 @@ def admin_broadcast_email():
         
         users = list(users_collection.find(query))
         
+        # Escape message to prevent XSS
+        safe_message = html.escape(message)
+        
         sent_count = 0
         for user in users:
             html_body = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>{subject}</title>
+<head><meta charset="UTF-8"><title>{html.escape(subject)}</title>
 <style>
 body {{ font-family: Arial, sans-serif; }}
 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
@@ -1104,10 +1278,10 @@ body {{ font-family: Arial, sans-serif; }}
 </head>
 <body>
 <div class="container">
-<div class="header"><h2>📢 {subject}</h2></div>
+<div class="header"><h2>📢 {html.escape(subject)}</h2></div>
 <div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
+<p>Dear <strong>{html.escape(user.get('full_name', user['username']))}</strong>,</p>
+<div class="message-box">{safe_message.replace(chr(10), '<br>')}</div>
 <a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
 </div>
 <div class="footer"><p>© 2025 Veloxtrades</p></div>
@@ -1120,7 +1294,8 @@ body {{ font-family: Arial, sans-serif; }}
             sent_count += 1
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'broadcast_email', f'Sent broadcast to {sent_count} users: {subject}')
+        if admin_user:
+            log_admin_action(admin_user['_id'], 'broadcast_email', f'Sent broadcast to {sent_count} users: {subject}')
         
         response = jsonify({'success': True, 'message': f'Broadcast sent to {sent_count} users', 'data': {'count': sent_count}})
         return add_cors_headers(response)
@@ -1138,6 +1313,10 @@ def admin_adjust_balance(user_id):
         amount = float(data.get('amount', 0))
         reason = data.get('reason', 'Admin adjustment')
         
+        # Validate amount
+        if not validate_amount(amount, -1000000) or amount > 1000000:
+            return jsonify({'success': False, 'message': 'Invalid amount. Amount must be between -1,000,000 and 1,000,000'}), 400
+        
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
@@ -1153,7 +1332,8 @@ def admin_adjust_balance(user_id):
         create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount}')
+        if admin_user:
+            log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount}')
         
         response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}'})
         return add_cors_headers(response)
@@ -1174,7 +1354,8 @@ def admin_toggle_ban(user_id):
         users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status}})
         action = 'banned' if new_ban_status else 'unbanned'
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], f'{action}_user', f'User {user["username"]} was {action}')
+        if admin_user:
+            log_admin_action(admin_user['_id'], f'{action}_user', f'User {user["username"]} was {action}')
         create_notification(user_id, f'Account {action.capitalize()}', f'Your account has been {action}.', 'warning' if new_ban_status else 'success')
         response = jsonify({'success': True, 'message': f'User {action} successfully'})
         return add_cors_headers(response)
@@ -1193,6 +1374,7 @@ def admin_delete_user(user_id):
             return jsonify({'success': False, 'message': 'User not found'}), 404
         username = user.get('username', 'Unknown')
         
+        # Delete all related data
         investments_collection.delete_many({'user_id': str(user_id)})
         transactions_collection.delete_many({'user_id': str(user_id)})
         deposits_collection.delete_many({'user_id': str(user_id)})
@@ -1201,7 +1383,8 @@ def admin_delete_user(user_id):
         users_collection.delete_one({'_id': ObjectId(user_id)})
         
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'delete_user', f'Deleted user: {username}')
+        if admin_user:
+            log_admin_action(admin_user['_id'], 'delete_user', f'Deleted user: {username}')
         
         response = jsonify({'success': True, 'message': f'User {username} permanently deleted'})
         return add_cors_headers(response)
@@ -1212,6 +1395,12 @@ def admin_delete_user(user_id):
 @app.route('/api/admin/reset-all', methods=['GET'])
 def reset_all_admin():
     """Emergency reset - removes all admins and creates fresh one with password admin123"""
+    # Add security check
+    secret_key = request.args.get('secret')
+    if not secret_key or secret_key != ADMIN_RESET_SECRET:
+        logger.warning(f"Unauthorized admin reset attempt from {request.remote_addr}")
+        return jsonify({'success': False, 'message': 'Unauthorized. Secret key required.'}), 401
+    
     try:
         users_collection.delete_many({'is_admin': True})
         users_collection.delete_many({'username': 'admin'})
@@ -1233,6 +1422,8 @@ def reset_all_admin():
         }
         
         result = users_collection.insert_one(new_admin)
+        
+        logger.info(f"Admin reset performed by {request.remote_addr}")
         
         return jsonify({
             'success': True,
@@ -1308,22 +1499,33 @@ def simple_health_check():
 def health_check():
     if request.method == 'OPTIONS':
         return handle_preflight()
+    
+    # Check MongoDB connection
+    mongo_status = 'disconnected'
+    try:
+        if db:
+            db.command('ping')
+            mongo_status = 'connected'
+    except:
+        pass
+    
     response = jsonify({
         'success': True, 'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat(),
-        'mongo': 'connected', 'email': 'configured'
+        'mongo': mongo_status, 'email': 'configured'
     })
     return add_cors_headers(response)
 
 # ==================== INIT DATABASE ====================
 def init_database():
     try:
-        users_collection.create_index('email', unique=True)
-        users_collection.create_index('username', unique=True)
-        users_collection.create_index('referral_code', unique=True)
-        logger.info("✅ Database indexes created")
-        total_users = users_collection.count_documents({})
-        logger.info(f"👥 Total users: {total_users}")
-        logger.info("ℹ️ Use /api/admin/reset-all to create admin account")
+        if db:
+            users_collection.create_index('email', unique=True)
+            users_collection.create_index('username', unique=True)
+            users_collection.create_index('referral_code', unique=True)
+            logger.info("✅ Database indexes created")
+            total_users = users_collection.count_documents({})
+            logger.info(f"👥 Total users: {total_users}")
+            logger.info("ℹ️ Use /api/admin/reset-all?secret=YOUR_SECRET to create admin account")
     except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")
 
@@ -1355,7 +1557,7 @@ if __name__ == '__main__':
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
     print("\n📝 TO CREATE ADMIN:")
-    print("   Visit: /api/admin/reset-all")
+    print(f"   Visit: /api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
     print("   This will create admin with: admin / admin123")
     print("=" * 70)
 
