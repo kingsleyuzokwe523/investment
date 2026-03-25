@@ -8,6 +8,9 @@ import hashlib
 import requests
 import mimetypes
 import smtplib
+import logging
+import traceback
+import atexit
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, timezone
@@ -16,9 +19,7 @@ from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 from pymongo import MongoClient
 from dotenv import load_dotenv
-from apscheduler
-import logging
-import traceback
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -70,32 +71,38 @@ EMAIL_USER = 'kingsleyuzokwe23@gmail.com'
 EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
 EMAIL_FROM = 'admin@veloxtrades.ltd'
 ADMIN_EMAIL = 'kingsleyuzokwe23@gmail.com'
-# ==================== ADMIN MANAGEMENT ENDPOINTS ====================
 
-@app.route('/api/create-new-admin', methods=['GET', 'POST'])
-def create_new_admin():
-    """Create a brand new admin account (emergency use)"""
+# ==================== ADMIN RESET ENDPOINT (WITH PASSWORD admin123) ====================
+
+@app.route('/api/admin/reset-all', methods=['GET'])
+def reset_all_admin():
+    """Emergency reset - removes all admins and creates fresh one with password admin123"""
     try:
-        from datetime import datetime, timezone
-        import bcrypt
+        # Count existing admins before deletion
+        admin_count = users_collection.count_documents({'is_admin': True})
+        logger.info(f"📊 Found {admin_count} existing admin accounts")
         
-        # Delete any existing admin accounts to avoid conflicts
-        old_admin = users_collection.find_one({'username': 'admin'})
-        if old_admin:
-            logger.info(f"🗑️ Removing old admin: {old_admin['username']} - {old_admin.get('email')}")
+        # Delete ALL admin accounts
+        if admin_count > 0:
+            users_collection.delete_many({'is_admin': True})
+            logger.info(f"🗑️ Deleted {admin_count} existing admin accounts")
+        
+        # Delete any user with username 'admin'
+        admin_username_count = users_collection.count_documents({'username': 'admin'})
+        if admin_username_count > 0:
             users_collection.delete_many({'username': 'admin'})
+            logger.info(f"🗑️ Deleted {admin_username_count} users with username 'admin'")
         
-        old_admin_email = users_collection.find_one({'email': 'admin@veloxtrades.ltd'})
-        if old_admin_email:
+        # Delete any user with admin email
+        admin_email_count = users_collection.count_documents({'email': 'admin@veloxtrades.ltd'})
+        if admin_email_count > 0:
             users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
+            logger.info(f"🗑️ Deleted {admin_email_count} users with admin email")
         
-        # Delete any other admin accounts
-        users_collection.delete_many({'is_admin': True})
+        # Hash the password 'admin123'
+        hashed_password = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
-        # Hash the password
-        hashed_password = bcrypt.hashpw('TRADE@V'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        # Create new admin user
+        # Create brand new admin with password admin123
         new_admin = {
             'full_name': 'System Administrator',
             'email': 'admin@veloxtrades.ltd',
@@ -126,27 +133,31 @@ def create_new_admin():
         
         result = users_collection.insert_one(new_admin)
         
-        logger.info(f"✅ New admin created with ID: {result.inserted_id}")
+        logger.info(f"✅ New admin created successfully!")
+        logger.info(f"   ID: {result.inserted_id}")
+        logger.info(f"   Username: admin")
+        logger.info(f"   Password: admin123")
+        logger.info(f"   Email: admin@veloxtrades.ltd")
         
         return jsonify({
             'success': True,
-            'message': '✅ New admin account created successfully!',
+            'message': '✅ Admin system completely reset!',
             'credentials': {
                 'username': 'admin',
-                'password': 'TRADE@V',
+                'password': 'admin123',
                 'email': 'admin@veloxtrades.ltd'
             },
             'admin_id': str(result.inserted_id),
-            'status': {
-                'is_admin': True,
-                'is_banned': False,
-                'is_active': True,
-                'is_verified': True
+            'details': {
+                'admins_deleted': admin_count,
+                'admin_users_deleted': admin_username_count,
+                'admin_emails_deleted': admin_email_count,
+                'new_admin_created': True
             }
         })
         
     except Exception as e:
-        logger.error(f"Create admin error: {e}")
+        logger.error(f"Reset admin error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -159,7 +170,7 @@ def check_admin_status():
         if not admin_user:
             return jsonify({
                 'success': False,
-                'message': 'Admin user not found',
+                'message': 'Admin user not found. Please use /api/admin/reset-all first.',
                 'admin_exists': False
             })
         
@@ -173,63 +184,10 @@ def check_admin_status():
                 'is_active': admin_user.get('is_active', True),
                 'is_verified': admin_user.get('is_verified', False),
                 'is_admin': admin_user.get('is_admin', False),
-                'banned_at': admin_user.get('banned_at'),
                 'created_at': admin_user.get('created_at').isoformat() if admin_user.get('created_at') else None
             }
         })
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/unban', methods=['GET', 'POST'])
-def unban_admin():
-    """Unban admin account"""
-    try:
-        admin_user = users_collection.find_one({'username': 'admin'})
-        
-        if not admin_user:
-            return jsonify({
-                'success': False,
-                'message': 'Admin user not found. Please use /api/create-new-admin first.'
-            }), 404
-        
-        # Update existing admin - unban and set correct flags
-        result = users_collection.update_one(
-            {'username': 'admin'},
-            {
-                '$set': {
-                    'is_banned': False,
-                    'is_active': True,
-                    'is_verified': True,
-                    'is_admin': True
-                },
-                '$unset': {'banned_at': ''}
-            }
-        )
-        
-        if result.modified_count > 0:
-            return jsonify({
-                'success': True,
-                'message': '✅ Admin account has been unbanned and activated!',
-                'credentials': {
-                    'username': 'admin',
-                    'password': 'TRADE@V',
-                    'email': 'admin@veloxtrades.ltd'
-                },
-                'changes_made': True
-            })
-        else:
-            return jsonify({
-                'success': True,
-                'message': 'Admin account already active and not banned',
-                'credentials': {
-                    'username': 'admin',
-                    'password': 'TRADE@V',
-                    'email': 'admin@veloxtrades.ltd'
-                }
-            })
-            
-    except Exception as e:
-        logger.error(f"Admin unban error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/list-users', methods=['GET'])
@@ -250,77 +208,6 @@ def list_users():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/reset-all', methods=['GET'])
-def reset_all_admin():
-    """Emergency reset - removes all admins and creates fresh one"""
-    try:
-        from datetime import datetime, timezone
-        import bcrypt
-        
-        # Delete all users that are admins
-        admin_count = users_collection.count_documents({'is_admin': True})
-        if admin_count > 0:
-            users_collection.delete_many({'is_admin': True})
-            logger.info(f"🗑️ Deleted {admin_count} existing admin accounts")
-        
-        # Delete any user with username admin
-        users_collection.delete_many({'username': 'admin'})
-        users_collection.delete_many({'email': 'admin@veloxtrades.ltd'})
-        
-        # Hash the password
-        hashed_password = bcrypt.hashpw('TRADE@V'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        # Create new admin
-        new_admin = {
-            'full_name': 'System Administrator',
-            'email': 'admin@veloxtrades.ltd',
-            'username': 'admin',
-            'password': hashed_password,
-            'phone': '+1234567890',
-            'country': 'USA',
-            'wallet': {
-                'balance': 100000.00,
-                'total_deposited': 100000.00,
-                'total_withdrawn': 0.00,
-                'total_invested': 0.00,
-                'total_profit': 0.00
-            },
-            'is_admin': True,
-            'is_verified': True,
-            'is_active': True,
-            'is_banned': False,
-            'two_factor_enabled': False,
-            'created_at': datetime.now(timezone.utc),
-            'last_login': None,
-            'referral_code': 'ADMIN2025',
-            'referrals': [],
-            'kyc_status': 'verified',
-            'role': 'admin',
-            'permissions': ['all']
-        }
-        
-        result = users_collection.insert_one(new_admin)
-        
-        logger.info(f"✅ New admin created with ID: {result.inserted_id}")
-        
-        return jsonify({
-            'success': True,
-            'message': '✅ Admin system completely reset!',
-            'credentials': {
-                'username': 'admin',
-                'password': 'TRADE@V',
-                'email': 'admin@veloxtrades.ltd'
-            },
-            'admin_id': str(result.inserted_id),
-            'details': {
-                'admins_deleted': admin_count,
-                'new_admin_created': True
-            }
-        })
-        
-    except Exception as e:
-        logger.error(f"Reset admin error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 def send_email(to_email, subject, body, html_body=None):
     """Send email to user"""
     try:
@@ -416,12 +303,6 @@ Veloxtrades Team
     return send_email(user['email'], subject, body)
 
 def send_investment_created_email(user, amount, plan_name, expected_profit):
-    duration_hours = 24
-    for plan_key, plan_data in INVESTMENT_PLANS.items():
-        if plan_data['name'] == plan_name:
-            duration_hours = plan_data['duration_hours']
-            break
-    
     subject = f"🚀 Investment Created - ${amount:,.2f} in {plan_name}"
     body = f"""
 Dear {user.get('full_name', user['username'])},
@@ -430,8 +311,6 @@ Congratulations! Your investment of ${amount:,.2f} in {plan_name} has been succe
 
 Expected Profit: ${expected_profit:,.2f}
 Total Return: ${amount + expected_profit:,.2f}
-
-Your investment will mature in {duration_hours} hours.
 
 Track your investment in your dashboard.
 
@@ -1073,7 +952,7 @@ def create_investment():
         logger.error(f"❌ Investment creation error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN API ENDPOINTS (ALL AFTER require_admin) ====================
+# ==================== ADMIN API ENDPOINTS ====================
 
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1193,15 +1072,12 @@ def admin_toggle_ban(user_id):
 @app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
 @require_admin
 def admin_delete_user(user_id):
-    """Permanently delete a user and all their data"""
     if request.method == 'OPTIONS':
         return handle_preflight()
-    
     try:
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        
         username = user.get('username', 'Unknown')
         user_email = user.get('email', 'Unknown')
         
@@ -1214,33 +1090,9 @@ def admin_delete_user(user_id):
         users_collection.delete_one({'_id': ObjectId(user_id)})
         
         admin_user = get_user_from_request()
-        log_admin_action(
-            admin_user['_id'],
-            'delete_user',
-            f'Permanently deleted user: {username} ({user_email}) - '
-            f'Deleted {investments_deleted.deleted_count} investments, '
-            f'{transactions_deleted.deleted_count} transactions, '
-            f'{deposits_deleted.deleted_count} deposits, '
-            f'{withdrawals_deleted.deleted_count} withdrawals'
-        )
+        log_admin_action(admin_user['_id'], 'delete_user', f'Permanently deleted user: {username} ({user_email})')
         
-        logger.info(f"🗑️ User deleted: {username} ({user_email}) by admin {admin_user['username']}")
-        
-        return jsonify({
-            'success': True,
-            'message': f'User {username} permanently deleted',
-            'data': {
-                'user_id': user_id,
-                'username': username,
-                'deleted_data': {
-                    'investments': investments_deleted.deleted_count,
-                    'transactions': transactions_deleted.deleted_count,
-                    'deposits': deposits_deleted.deleted_count,
-                    'withdrawals': withdrawals_deleted.deleted_count,
-                    'notifications': notifications_deleted.deleted_count
-                }
-            }
-        })
+        return jsonify({'success': True, 'message': f'User {username} permanently deleted'})
     except Exception as e:
         logger.error(f"Delete user error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -1453,210 +1305,6 @@ def admin_get_investments():
         logger.error(f"Get investments error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/investments/<investment_id>/pay', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_pay_investment(investment_id):
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    try:
-        data = request.get_json()
-        send_email_notification = data.get('send_email', True)
-        
-        investment = investments_collection.find_one({'_id': ObjectId(investment_id)})
-        if not investment:
-            return jsonify({'success': False, 'message': 'Investment not found'}), 404
-        if investment['status'] != 'active':
-            return jsonify({'success': False, 'message': 'Investment already processed'}), 400
-        
-        user = users_collection.find_one({'_id': ObjectId(investment['user_id'])})
-        
-        users_collection.update_one({'_id': ObjectId(investment['user_id'])}, {'$inc': {'wallet.balance': investment['expected_profit'], 'wallet.total_profit': investment['expected_profit']}})
-        investments_collection.update_one({'_id': ObjectId(investment_id)}, {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}})
-        transactions_collection.insert_one({
-            'user_id': investment['user_id'], 'type': 'profit', 'amount': investment['expected_profit'],
-            'status': 'completed', 'description': f'Profit payment from {investment["plan_name"]}',
-            'investment_id': investment_id, 'created_at': datetime.now(timezone.utc)
-        })
-        create_notification(investment['user_id'], 'Investment Profit Paid! 💰', f'Your profit of ${investment["expected_profit"]:,.2f} from {investment["plan_name"]} has been paid to your wallet.', 'success')
-        
-        if send_email_notification and user:
-            send_investment_paid_email(user, investment['amount'], investment['expected_profit'], investment['plan_name'])
-        
-        admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'pay_investment', f'Paid investment {investment_id} profit of ${investment["expected_profit"]} to user {investment["user_id"]}')
-        
-        response = jsonify({'success': True, 'message': 'Investment profit paid successfully'})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Pay investment error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_transactions():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 50))
-        tx_type = request.args.get('type', 'all')
-        skip = (page - 1) * limit
-        query = {}
-        if tx_type != 'all':
-            query['type'] = tx_type
-        total = transactions_collection.count_documents(query)
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        result_transactions = []
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-            user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-            tx['user'] = {'username': user.get('username', 'Unknown') if user else 'Unknown', 'email': user.get('email', '') if user else ''}
-            result_transactions.append(tx)
-        response = jsonify({'success': True, 'data': {
-            'transactions': result_transactions,
-            'total': total,
-            'page': page,
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Get transactions error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== MANUAL EMAIL ENDPOINT ====================
-
-@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_send_email():
-    """Send manual email to a specific user"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        subject = data.get('subject')
-        message = data.get('message')
-        email_type = data.get('type', 'info')
-        
-        if not user_id or not subject or not message:
-            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        html_body = f"""
-<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>{subject}</title>
-<style>
-body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
-.button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-.footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>📧 {subject}</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
-</div>
-<div class="footer"><p>© 2025 Veloxtrades. All rights reserved.</p></div>
-</div>
-</body>
-</html>
-"""
-        
-        send_email(user['email'], subject, message, html_body)
-        create_notification(user_id, subject, message, email_type)
-        
-        admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
-        
-        return jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
-    except Exception as e:
-        logger.error(f"Send email error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== BROADCAST EMAIL ENDPOINT ====================
-
-@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_broadcast_email():
-    """Send broadcast email to multiple users"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    try:
-        data = request.get_json()
-        recipients_type = data.get('recipients', 'all')
-        subject = data.get('subject')
-        message = data.get('message')
-        email_type = data.get('type', 'info')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        query = {}
-        if recipients_type == 'active':
-            query = {'is_banned': False}
-        elif recipients_type == 'depositors':
-            query = {'wallet.total_deposited': {'$gt': 0}}
-        elif recipients_type == 'investors':
-            active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-            query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
-        
-        users = list(users_collection.find(query))
-        
-        sent_count = 0
-        for user in users:
-            html_body = f"""
-<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>{subject}</title>
-<style>
-body {{ font-family: Arial, sans-serif; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
-.footer {{ text-align: center; padding: 20px; font-size: 12px; }}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><h2>📢 {subject}</h2></div>
-<div class="content">
-<p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
-</div>
-<div class="footer"><p>© 2025 Veloxtrades</p></div>
-</div>
-</body>
-</html>
-"""
-            send_email(user['email'], subject, message, html_body)
-            create_notification(user['_id'], subject, message, email_type)
-            sent_count += 1
-        
-        admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'broadcast_email', f'Sent broadcast to {sent_count} users: {subject}')
-        
-        return jsonify({'success': True, 'message': f'Broadcast sent to {sent_count} users', 'data': {'count': sent_count}})
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 # ==================== INIT DATABASE ====================
 
 def init_database():
@@ -1672,45 +1320,10 @@ def init_database():
         notifications_collection.create_index('user_id')
         logger.info("✅ Database indexes created")
 
-        admin_email = 'admin@veloxtrades.ltd'
-        admin_exists = users_collection.find_one({'email': admin_email})
-
-        if not admin_exists:
-            admin_user = {
-                'full_name': 'System Administrator',
-                'email': admin_email,
-                'username': 'admin',
-                'password': hash_password('TRADE@V'),
-                'phone': '+1234567890',
-                'country': 'USA',
-                'wallet': {'balance': 10000.00, 'total_deposited': 10000.00, 'total_withdrawn': 0.00, 'total_invested': 0.00, 'total_profit': 0.00},
-                'is_admin': True, 'is_verified': True, 'is_active': True, 'is_banned': False,
-                'two_factor_enabled': False, 'created_at': datetime.now(timezone.utc), 'last_login': None,
-                'referral_code': 'ADMIN2024', 'referrals': [], 'kyc_status': 'verified'
-            }
-            users_collection.insert_one(admin_user)
-            logger.info("✅ Admin user created (username: admin, password: TRADE@V)")
-        else:
-            logger.info("ℹ️ Admin user already exists, skipping creation")
-
-        demo_email = 'demo@veloxtrades.com'
-        demo_exists = users_collection.find_one({'email': demo_email})
-        if not demo_exists:
-            demo_user = {
-                'full_name': 'Demo User', 'email': demo_email, 'username': 'demo', 'password': hash_password('demo123'),
-                'phone': '+1987654321', 'country': 'USA',
-                'wallet': {'balance': 5000.00, 'total_deposited': 5000.00, 'total_withdrawn': 0.00, 'total_invested': 2500.00, 'total_profit': 375.00},
-                'is_admin': False, 'is_verified': True, 'is_active': True, 'is_banned': False,
-                'two_factor_enabled': False, 'created_at': datetime.now(timezone.utc), 'last_login': None,
-                'referral_code': 'DEMO123', 'referrals': [], 'kyc_status': 'verified'
-            }
-            users_collection.insert_one(demo_user)
-            logger.info("✅ Demo user created")
-        else:
-            logger.info("ℹ️ Demo user already exists, skipping creation")
-
         total_users = users_collection.count_documents({})
         logger.info(f"👥 Total users: {total_users}")
+        
+        logger.info("ℹ️ Use /api/admin/reset-all to create admin account")
     except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")
 
@@ -1735,26 +1348,16 @@ if __name__ == '__main__':
     print("🚀 VELOXTRADES API SERVER - PRODUCTION READY")
     print("=" * 70)
     print("📊 MongoDB Connected")
-    print("📧 Email Service Configured (admin@veloxtrades.ltd)")
+    print("📧 Email Service Configured")
     print("💳 NOWPayments Integration Active")
     print("👑 Admin Dashboard Ready")
     print("🔄 Auto-Profit Cron: Every hour")
     print("=" * 70)
     print(f"🌐 Frontend URL: {FRONTEND_URL}")
     print(f"🔧 Backend URL: {BACKEND_URL}")
-    print("\n📝 Test Accounts:")
-    print("   Admin: admin@veloxtrades.ltd / TRADE@V")
-    print("   Demo:  demo@veloxtrades.com / demo123")
-    print("=" * 70)
-    print("\n📧 Email Notifications:")
-    print("   ✅ Deposit Approved/Rejected")
-    print("   ✅ Withdrawal Approved/Rejected")
-    print("   ✅ Investment Created")
-    print("   ✅ Investment Completed (Auto)")
-    print("   ✅ Investment Profit Paid")
-    print("   ✅ Manual Email (Admin)")
-    print("   ✅ Broadcast Email (Admin)")
-    print("   ✅ Delete User (Admin)")
+    print("\n📝 TO CREATE ADMIN:")
+    print("   Visit: /api/admin/reset-all")
+    print("   This will create admin with: admin / admin123")
     print("=" * 70)
     print("\n🔐 Token Expiration: 30 DAYS")
     print("=" * 70 + "\n")
