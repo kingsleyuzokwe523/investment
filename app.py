@@ -52,6 +52,9 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 FRONTEND_URL_NON_WWW = 'https://veloxtrades.com.ng'
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 
+# Admin reset secret - CHANGE THIS IN PRODUCTION!
+ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
+
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
@@ -69,7 +72,7 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# ==================== EMAIL CONFIGURATION (KEPT AS IS) ====================
+# ==================== EMAIL CONFIGURATION ====================
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USER = 'kingsleyuzokwe523@gmail.com'
@@ -96,10 +99,8 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
             part1 = MIMEText(body, 'plain')
             msg.attach(part1)
             
-            # Add HTML version if provided, with escaping
+            # Add HTML version if provided
             if html_body:
-                # Escape HTML content to prevent XSS
-                html_body = html.escape(html_body) if not html_body.startswith('<!DOCTYPE') else html_body
                 part2 = MIMEText(html_body, 'html')
                 msg.attach(part2)
             
@@ -117,7 +118,7 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
         except smtplib.SMTPException as e:
             logger.error(f"❌ SMTP error (attempt {attempt+1}): {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # Exponential backoff
+                time.sleep(2 ** attempt)
             else:
                 return False
         except Exception as e:
@@ -186,6 +187,34 @@ def send_investment_paid_email(user, investment_amount, profit, plan_name):
     subject = f"💰 Investment Profit Paid - ${profit:,.2f} credited!"
     body = f"Dear {user.get('full_name', user['username'])},\n\nYour investment profit has been paid!\n\nInvestment: {plan_name}\nOriginal Amount: ${investment_amount:,.2f}\nProfit Earned: ${profit:,.2f}\nTotal Received: ${investment_amount + profit:,.2f}\n\nThank you for choosing Veloxtrades!\n\nBest regards,\nVeloxtrades Team"
     return send_email(user['email'], subject, body)
+
+def send_transaction_confirmation_email(user, transaction_type, amount, description, new_balance):
+    subject = f"💰 Transaction Confirmation - ${amount:,.2f} {transaction_type.capitalize()}"
+    body = f"Dear {user.get('full_name', user['username'])},\n\nA {transaction_type} transaction of ${amount:,.2f} has been completed on your account.\n\nDescription: {description}\nNew Balance: ${new_balance:,.2f}\n\nThank you for using Veloxtrades!\n\nBest regards,\nVeloxtrades Team"
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>{subject}</title></head>
+<body style="font-family: Arial, sans-serif;">
+<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+<div style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+<h2>💰 Transaction Confirmation</h2>
+</div>
+<div style="padding: 20px; background: #f9fafb;">
+<p>Dear <strong>{html.escape(user.get('full_name', user['username']))}</strong>,</p>
+<p>A <strong>{transaction_type}</strong> transaction of <strong>${amount:,.2f}</strong> has been completed on your account.</p>
+<p><strong>Description:</strong> {html.escape(description)}</p>
+<p><strong>New Balance:</strong> ${new_balance:,.2f}</p>
+<p>Thank you for using Veloxtrades!</p>
+</div>
+<div style="text-align: center; padding: 20px; font-size: 12px; color: #6b7280;">
+<p>© 2025 Veloxtrades. All rights reserved.</p>
+</div>
+</div>
+</body>
+</html>
+"""
+    return send_email(user['email'], subject, body, html_body)
 
 # ==================== CORS CONFIGURATION ====================
 CORS(app, 
@@ -909,6 +938,88 @@ def admin_get_transactions():
         logger.error(f"Get admin transactions error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== NEW: CREATE TRANSACTION ENDPOINT ====================
+@app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_create_transaction():
+    """Create a new transaction record (manual transaction)"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        user_id = data.get('user_id')
+        transaction_type = data.get('type')
+        amount = float(data.get('amount', 0))
+        status = data.get('status', 'completed')
+        description = data.get('description', '')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': 'User ID is required'}), 400
+        
+        if not transaction_type:
+            return jsonify({'success': False, 'message': 'Transaction type is required'}), 400
+        
+        if not validate_amount(amount, 0.01):
+            return jsonify({'success': False, 'message': 'Invalid amount'}), 400
+        
+        # Get user
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Create transaction record
+        transaction = {
+            'user_id': str(user_id),
+            'type': transaction_type,
+            'amount': amount,
+            'status': status,
+            'description': description,
+            'created_at': datetime.now(timezone.utc),
+            'admin_created': True,
+            'admin_id': str(get_user_from_request()['_id']) if get_user_from_request() else None
+        }
+        
+        result = transactions_collection.insert_one(transaction)
+        
+        # Update user balance if needed (balance already adjusted via /balance endpoint)
+        # This endpoint is primarily for recording transactions
+        
+        # Create notification
+        create_notification(
+            user_id,
+            f'Transaction Created: {transaction_type.capitalize()}',
+            f'A {transaction_type} transaction of ${amount:,.2f} has been recorded on your account. {description}',
+            'info'
+        )
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        if admin_user:
+            log_admin_action(
+                admin_user['_id'],
+                'create_transaction',
+                f'Created {transaction_type} transaction of ${amount} for user {user["username"]}'
+            )
+        
+        response = jsonify({
+            'success': True,
+            'message': f'Transaction created successfully',
+            'data': {
+                'transaction_id': str(result.inserted_id),
+                'user': user['username'],
+                'type': transaction_type,
+                'amount': amount
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Create transaction error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
@@ -1253,7 +1364,10 @@ def admin_broadcast_email():
             query = {'wallet.total_deposited': {'$gt': 0}}
         elif recipients_type == 'investors':
             active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-            query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
+            if active_investors:
+                query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
+            else:
+                query = {'_id': {'$in': []}}  # No active investors
         
         users = list(users_collection.find(query))
         
@@ -1321,21 +1435,37 @@ def admin_adjust_balance(user_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # Get current balance for email
+        current_balance = user.get('wallet', {}).get('balance', 0)
+        new_balance = current_balance + amount
+        
         users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
         
+        transaction_type = 'adjustment'
+        if amount > 0:
+            transaction_type = 'credit'
+        elif amount < 0:
+            transaction_type = 'debit'
+        
         transactions_collection.insert_one({
-            'user_id': str(user_id), 'type': 'adjustment', 'amount': amount,
+            'user_id': str(user_id), 'type': transaction_type, 'amount': abs(amount),
             'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
             'created_at': datetime.now(timezone.utc)
         })
         
         create_notification(user_id, 'Balance Adjusted', f'Your balance has been adjusted by ${amount:+,.2f}. Reason: {reason}', 'info')
         
+        # Send email notification for balance adjustment
+        try:
+            send_transaction_confirmation_email(user, transaction_type, abs(amount), reason, new_balance)
+        except Exception as email_error:
+            logger.error(f"Failed to send balance adjustment email: {email_error}")
+        
         admin_user = get_user_from_request()
         if admin_user:
             log_admin_action(admin_user['_id'], 'adjust_balance', f'Adjusted balance for user {user["username"]} by ${amount}')
         
-        response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}'})
+        response = jsonify({'success': True, 'message': f'Balance adjusted by ${amount:+,.2f}', 'data': {'new_balance': new_balance}})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Balance adjustment error: {e}")
@@ -1522,6 +1652,12 @@ def init_database():
             users_collection.create_index('email', unique=True)
             users_collection.create_index('username', unique=True)
             users_collection.create_index('referral_code', unique=True)
+            transactions_collection.create_index('user_id')
+            transactions_collection.create_index('created_at')
+            deposits_collection.create_index('status')
+            withdrawals_collection.create_index('status')
+            investments_collection.create_index('status')
+            investments_collection.create_index('end_date')
             logger.info("✅ Database indexes created")
             total_users = users_collection.count_documents({})
             logger.info(f"👥 Total users: {total_users}")
