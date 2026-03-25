@@ -956,14 +956,12 @@ def admin_delete_user(user_id):
         username = user.get('username', 'Unknown')
         user_email = user.get('email', 'Unknown')
         
-        # Delete all user-related data
         investments_deleted = investments_collection.delete_many({'user_id': str(user_id)})
         transactions_deleted = transactions_collection.delete_many({'user_id': str(user_id)})
         deposits_deleted = deposits_collection.delete_many({'user_id': str(user_id)})
         withdrawals_deleted = withdrawals_collection.delete_many({'user_id': str(user_id)})
         notifications_deleted = notifications_collection.delete_many({'user_id': str(user_id)})
         
-        # Delete the user
         users_collection.delete_one({'_id': ObjectId(user_id)})
         
         admin_user = get_user_from_request()
