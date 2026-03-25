@@ -1223,11 +1223,15 @@ def admin_get_transactions():
 
 # ==================== MANUAL EMAIL ENDPOINT ====================
 
+# ==================== MANUAL EMAIL ENDPOINT ====================
+
 @app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_send_email():
+    """Send manual email to a specific user"""
     if request.method == 'OPTIONS':
         return handle_preflight()
+    
     try:
         data = request.get_json()
         user_id = data.get('user_id')
@@ -1238,56 +1242,87 @@ def admin_send_email():
         if not user_id or not subject or not message:
             return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
         
+        # Get user from database
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # Create HTML email body
         html_body = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>{subject}</title>
-<style>
-body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
-.button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-.footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
-</style>
+<head>
+    <meta charset="UTF-8">
+    <title>{subject}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+        .content {{ padding: 20px; background: #f9fafb; }}
+        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
+        .button {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+        .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }}
+    </style>
 </head>
 <body>
 <div class="container">
-<div class="header"><h2>📧 {subject}</h2></div>
+<div class="header">
+<h2>📧 {subject}</h2>
+</div>
 <div class="content">
 <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
+<div class="message-box">
+{message.replace(chr(10), '<br>')}
+</div>
 <a href="https://www.veloxtrades.com.ng/dashboard.html" class="button">View Dashboard</a>
 </div>
-<div class="footer"><p>© 2025 Veloxtrades. All rights reserved.</p></div>
+<div class="footer">
+<p>© 2025 Veloxtrades. All rights reserved.</p>
+<p>Need help? <a href="https://t.me/Veloxtrades2">Contact Support</a></p>
+</div>
 </div>
 </body>
 </html>
 """
         
+        # Send the email
         send_email(user['email'], subject, message, html_body)
-        create_notification(user_id, subject, message, email_type)
         
+        # Create notification for user
+        create_notification(
+            user_id,
+            subject,
+            message,
+            email_type
+        )
+        
+        # Log admin action
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'send_manual_email', f'Sent email to {user["username"]}: {subject}')
+        log_admin_action(
+            admin_user['_id'],
+            'send_manual_email',
+            f'Sent email to {user["username"]}: {subject}'
+        )
         
-        return jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
+        return jsonify({
+            'success': True, 
+            'message': f'Email sent to {user["email"]}',
+            'data': {'user_id': user_id, 'subject': subject}
+        })
+        
     except Exception as e:
         logger.error(f"Send email error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
+# ==================== BROADCAST EMAIL ENDPOINT ====================
 # ==================== BROADCAST EMAIL ENDPOINT ====================
 
 @app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_broadcast_email():
+    """Send broadcast email to multiple users"""
     if request.method == 'OPTIONS':
         return handle_preflight()
+    
     try:
         data = request.get_json()
         recipients_type = data.get('recipients', 'all')
@@ -1298,12 +1333,14 @@ def admin_broadcast_email():
         if not subject or not message:
             return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
         
+        # Build query based on recipient type
         query = {}
         if recipients_type == 'active':
             query = {'is_banned': False}
         elif recipients_type == 'depositors':
             query = {'wallet.total_deposited': {'$gt': 0}}
         elif recipients_type == 'investors':
+            # Users with active investments
             active_investors = investments_collection.distinct('user_id', {'status': 'active'})
             query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
         
@@ -1314,41 +1351,134 @@ def admin_broadcast_email():
             html_body = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>{subject}</title>
-<style>
-body {{ font-family: Arial, sans-serif; }}
-.container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
-.content {{ padding: 20px; background: #f9fafb; }}
-.message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
-.footer {{ text-align: center; padding: 20px; font-size: 12px; }}
-</style>
+<head>
+    <meta charset="UTF-8">
+    <title>{subject}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+        .content {{ padding: 20px; background: #f9fafb; }}
+        .message-box {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
+        .footer {{ text-align: center; padding: 20px; font-size: 12px; }}
+    </style>
 </head>
 <body>
 <div class="container">
 <div class="header"><h2>📢 {subject}</h2></div>
 <div class="content">
 <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-<div class="message-box">{message.replace(chr(10), '<br>')}</div>
-<a href="https://www.veloxtrades.com.ng/dashboard.html" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
+<div class="message-box">
+{message.replace(chr(10), '<br>')}
 </div>
-<div class="footer"><p>© 2025 Veloxtrades</p></div>
+<a href="https://www.veloxtrades.com.ng/dashboard.html" class="button" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">View Dashboard</a>
+</div>
+<div class="footer">
+<p>© 2025 Veloxtrades</p>
+</div>
 </div>
 </body>
 </html>
 """
             send_email(user['email'], subject, message, html_body)
-            create_notification(user['_id'], subject, message, email_type)
+            create_notification(
+                user['_id'],
+                subject,
+                message,
+                email_type
+            )
             sent_count += 1
         
+        # Log admin action
         admin_user = get_user_from_request()
-        log_admin_action(admin_user['_id'], 'broadcast_email', f'Sent broadcast to {sent_count} users: {subject}')
+        log_admin_action(
+            admin_user['_id'],
+            'broadcast_email',
+            f'Sent broadcast to {sent_count} users: {subject}'
+        )
         
-        return jsonify({'success': True, 'message': f'Broadcast sent to {sent_count} users', 'data': {'count': sent_count}})
+        return jsonify({
+            'success': True,
+            'message': f'Broadcast sent to {sent_count} users',
+            'data': {'count': sent_count}
+        })
+        
     except Exception as e:
         logger.error(f"Broadcast error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== DELETE USER ENDPOINT ====================
+
+@app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
+@require_admin
+def admin_delete_user(user_id):
+    """Permanently delete a user and all their data"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        # Check if user exists
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        # Store user info for logging
+        username = user.get('username', 'Unknown')
+        user_email = user.get('email', 'Unknown')
+        
+        # Delete user's investments
+        investments_deleted = investments_collection.delete_many({'user_id': str(user_id)})
+        
+        # Delete user's transactions
+        transactions_deleted = transactions_collection.delete_many({'user_id': str(user_id)})
+        
+        # Delete user's deposits
+        deposits_deleted = deposits_collection.delete_many({'user_id': str(user_id)})
+        
+        # Delete user's withdrawals
+        withdrawals_deleted = withdrawals_collection.delete_many({'user_id': str(user_id)})
+        
+        # Delete user's notifications
+        notifications_deleted = notifications_collection.delete_many({'user_id': str(user_id)})
+        
+        # Finally delete the user
+        users_collection.delete_one({'_id': ObjectId(user_id)})
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'],
+            'delete_user',
+            f'Permanently deleted user: {username} ({user_email}) - '
+            f'Deleted {investments_deleted.deleted_count} investments, '
+            f'{transactions_deleted.deleted_count} transactions, '
+            f'{deposits_deleted.deleted_count} deposits, '
+            f'{withdrawals_deleted.deleted_count} withdrawals, '
+            f'{notifications_deleted.deleted_count} notifications'
+        )
+        
+        logger.info(f"🗑️ User deleted: {username} ({user_email}) by admin {admin_user['username']}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'User {username} permanently deleted',
+            'data': {
+                'user_id': user_id,
+                'username': username,
+                'email': user_email,
+                'deleted_data': {
+                    'investments': investments_deleted.deleted_count,
+                    'transactions': transactions_deleted.deleted_count,
+                    'deposits': deposits_deleted.deleted_count,
+                    'withdrawals': withdrawals_deleted.deleted_count,
+                    'notifications': notifications_deleted.deleted_count
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Delete user error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 # ==================== INIT DATABASE ====================
 
 def init_database():
