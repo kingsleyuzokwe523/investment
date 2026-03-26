@@ -165,11 +165,20 @@ def before_request():
 
 @app.after_request
 def after_request(response):
-    """Add security headers"""
+    """Add security headers and CORS headers"""
     response.headers.add('X-Content-Type-Options', 'nosniff')
     response.headers.add('X-Frame-Options', 'DENY')
     response.headers.add('X-XSS-Protection', '1; mode=block')
-    return add_cors_headers(response)
+    
+    # Always add CORS headers for admin endpoints
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+    
+    return response
 
 @app.before_request
 def handle_preflight():
@@ -177,7 +186,7 @@ def handle_preflight():
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
-        if origin in ALLOWED_ORIGINS:
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
             response.headers['Access-Control-Allow-Origin'] = origin
         else:
             response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
@@ -190,7 +199,7 @@ def handle_preflight():
 def add_cors_headers(response):
     """Helper to ensure CORS headers"""
     origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS:
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
     else:
         response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
@@ -205,39 +214,68 @@ EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
 EMAIL_FROM = 'Veloxtrades'
 
 def send_email(to_email, subject, body, html_body=None, max_retries=3):
-    """Send email with logging and retry logic"""
+    """Send email with logging and retry logic - Fixed version"""
     for attempt in range(max_retries):
         try:
-            if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
+            # Validate email
+            if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
                 logger.error(f"❌ Invalid email format: {to_email}")
                 return False
             
+            # Create message
             msg = MIMEMultipart('alternative')
-            msg['From'] = EMAIL_FROM
+            msg['From'] = f"{EMAIL_FROM} <{EMAIL_USER}>"
             msg['To'] = to_email
             msg['Subject'] = subject
             
+            # Attach plain text body
             part1 = MIMEText(body, 'plain')
             msg.attach(part1)
             
+            # Attach HTML body if provided
             if html_body:
                 part2 = MIMEText(html_body, 'html')
                 msg.attach(part2)
             
+            # Send email with timeout
             with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=30) as server:
                 server.starttls()
                 server.login(EMAIL_USER, EMAIL_PASSWORD)
                 server.send_message(msg)
             
             logger.info(f"✅ Email sent to {to_email}: {subject}")
+            
+            # Log to email_logs collection if available
+            if email_logs_collection is not None:
+                try:
+                    email_logs_collection.insert_one({
+                        'to': to_email,
+                        'subject': subject,
+                        'status': 'sent',
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                except Exception as log_error:
+                    logger.error(f"Failed to log email: {log_error}")
+            
             return True
             
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ SMTP Authentication Error: {e}")
+            logger.error("Please check your email credentials and ensure you're using an App Password")
+            return False
+        except smtplib.SMTPException as e:
+            logger.error(f"❌ SMTP Error (attempt {attempt+1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                return False
         except Exception as e:
             logger.error(f"❌ Email error (attempt {attempt+1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
                 return False
+    
     return False
 
 # ==================== HELPER FUNCTIONS ====================
@@ -377,25 +415,66 @@ def get_email_template(title, content, button_text=None, button_link=None):
     '''
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
-    subject = f"✅ Deposit Approved - ${amount} added to your Veloxtrades account"
-    content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
-    <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
-        <p><strong>✅ Deposit Approved!</strong></p>
-        <p>Amount: <strong>${amount:,.2f}</strong></p>
-        <p>Method: <strong>{crypto.upper()}</strong></p>
-        <p>Transaction ID: <strong>{transaction_hash or 'N/A'}</strong></p>
-    </div>
-    <p>Your deposit has been successfully added to your wallet balance.</p>
-    <p>You can now start investing with your funds.</p>
-    '''
-    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your deposit of ${amount:,.2f} has been approved.", html_body)
+    """Send deposit approved email with proper formatting"""
+    try:
+        subject = f"✅ Deposit Approved - ${amount} added to your Veloxtrades account"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        
+        plain_body = f"""
+Dear {user_name},
+
+Your deposit of ${amount:,.2f} has been approved!
+
+Amount: ${amount:,.2f}
+Method: {crypto.upper()}
+Transaction ID: {transaction_hash or 'N/A'}
+
+The funds have been added to your wallet balance.
+
+Best regards,
+Veloxtrades Team
+        """
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+            <p><strong>✅ Deposit Approved!</strong></p>
+            <p>Amount: <strong>${amount:,.2f}</strong></p>
+            <p>Method: <strong>{crypto.upper()}</strong></p>
+            <p>Transaction ID: <strong>{transaction_hash or 'N/A'}</strong></p>
+        </div>
+        <p>Your deposit has been successfully added to your wallet balance.</p>
+        <p>You can now start investing with your funds.</p>
+        '''
+        html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
+        
+        logger.info(f"Sending deposit approval email to {user['email']}")
+        return send_email(user['email'], subject, plain_body, html_body)
+    except Exception as e:
+        logger.error(f"Error in send_deposit_approved_email: {e}")
+        return False
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
     subject = f"❌ Deposit Rejected - ${amount} deposit was not approved"
+    user_name = user.get('full_name', user.get('username', 'User'))
+    
+    plain_body = f"""
+Dear {user_name},
+
+Your deposit of ${amount:,.2f} has been rejected.
+
+Amount: ${amount:,.2f}
+Method: {crypto.upper()}
+Reason: {reason}
+
+Please contact support if you have any questions.
+
+Best regards,
+Veloxtrades Team
+    """
+    
     content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <p>Dear <strong>{user_name}</strong>,</p>
     <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0;">
         <p><strong>❌ Deposit Rejected</strong></p>
         <p>Amount: <strong>${amount:,.2f}</strong></p>
@@ -406,12 +485,29 @@ def send_deposit_rejected_email(user, amount, crypto, reason):
     <p>You can submit a new deposit request at any time.</p>
     '''
     html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your deposit of ${amount:,.2f} was rejected. Reason: {reason}", html_body)
+    return send_email(user['email'], subject, plain_body, html_body)
 
 def send_withdrawal_approved_email(user, amount, currency, wallet_address):
     subject = f"✅ Withdrawal Approved - ${amount} sent to your wallet"
+    user_name = user.get('full_name', user.get('username', 'User'))
+    
+    plain_body = f"""
+Dear {user_name},
+
+Your withdrawal of ${amount:,.2f} has been approved!
+
+Amount: ${amount:,.2f}
+Currency: {currency.upper()}
+Wallet Address: {wallet_address}
+
+The funds have been sent to your wallet.
+
+Best regards,
+Veloxtrades Team
+    """
+    
     content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <p>Dear <strong>{user_name}</strong>,</p>
     <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
         <p><strong>✅ Withdrawal Approved!</strong></p>
         <p>Amount: <strong>${amount:,.2f}</strong></p>
@@ -421,12 +517,29 @@ def send_withdrawal_approved_email(user, amount, currency, wallet_address):
     <p>Your withdrawal has been processed and sent to your wallet. Funds should reflect within a few hours.</p>
     '''
     html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your withdrawal of ${amount:,.2f} has been approved.", html_body)
+    return send_email(user['email'], subject, plain_body, html_body)
 
 def send_withdrawal_rejected_email(user, amount, currency, reason):
     subject = f"❌ Withdrawal Rejected - ${amount} withdrawal request"
+    user_name = user.get('full_name', user.get('username', 'User'))
+    
+    plain_body = f"""
+Dear {user_name},
+
+Your withdrawal request of ${amount:,.2f} has been rejected.
+
+Amount: ${amount:,.2f}
+Currency: {currency.upper()}
+Reason: {reason}
+
+The funds have been returned to your wallet.
+
+Best regards,
+Veloxtrades Team
+    """
+    
     content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <p>Dear <strong>{user_name}</strong>,</p>
     <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0;">
         <p><strong>❌ Withdrawal Rejected</strong></p>
         <p>Amount: <strong>${amount:,.2f}</strong></p>
@@ -437,12 +550,30 @@ def send_withdrawal_rejected_email(user, amount, currency, reason):
     <p>Please ensure your wallet address is correct and try again.</p>
     '''
     html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your withdrawal of ${amount:,.2f} was rejected. Reason: {reason}", html_body)
+    return send_email(user['email'], subject, plain_body, html_body)
 
 def send_investment_confirmation_email(user, amount, plan_name, roi, expected_profit):
     subject = f"🚀 Investment Confirmed - ${amount} invested in {plan_name}"
+    user_name = user.get('full_name', user.get('username', 'User'))
+    
+    plain_body = f"""
+Dear {user_name},
+
+Your investment of ${amount:,.2f} in {plan_name} has started!
+
+Amount: ${amount:,.2f}
+ROI: {roi}%
+Expected Profit: ${expected_profit:,.2f}
+Total Return: ${(amount + expected_profit):,.2f}
+
+Your investment will automatically complete at the end of the duration.
+
+Best regards,
+Veloxtrades Team
+    """
+    
     content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <p>Dear <strong>{user_name}</strong>,</p>
     <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
         <p><strong>✅ Investment Started!</strong></p>
         <p>Plan: <strong>{plan_name}</strong></p>
@@ -455,12 +586,29 @@ def send_investment_confirmation_email(user, amount, plan_name, roi, expected_pr
     <p>You will receive another email when your investment completes with your profit.</p>
     '''
     html_body = get_email_template(subject, content, 'View Investments', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your investment of ${amount:,.2f} in {plan_name} has started.", html_body)
+    return send_email(user['email'], subject, plain_body, html_body)
 
 def send_investment_completed_email(user, amount, plan_name, profit):
     subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
+    user_name = user.get('full_name', user.get('username', 'User'))
+    
+    plain_body = f"""
+Dear {user_name},
+
+Your investment of ${amount:,.2f} in {plan_name} has been completed!
+
+Initial Investment: ${amount:,.2f}
+Profit Earned: ${profit:,.2f}
+Total Return: ${(amount + profit):,.2f}
+
+The profit has been added to your wallet balance.
+
+Best regards,
+Veloxtrades Team
+    """
+    
     content = f'''
-    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <p>Dear <strong>{user_name}</strong>,</p>
     <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
         <p><strong>🎉 Investment Completed!</strong></p>
         <p>Plan: <strong>{plan_name}</strong></p>
@@ -472,7 +620,7 @@ def send_investment_completed_email(user, amount, plan_name, profit):
     <p>You can start a new investment or withdraw your funds.</p>
     '''
     html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, f"Your investment of ${amount:,.2f} has completed. You earned ${profit:,.2f} profit!", html_body)
+    return send_email(user['email'], subject, plain_body, html_body)
 
 # ==================== AUTO-PROFIT SCHEDULER ====================
 def process_investment_profits():
@@ -1453,8 +1601,11 @@ def admin_process_deposit(deposit_id):
             return jsonify({'success': False, 'message': 'Deposit already processed'}), 400
         
         user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
+            # Update user balance
             users_collection.update_one(
                 {'_id': ObjectId(deposit['user_id'])},
                 {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
@@ -1471,10 +1622,16 @@ def admin_process_deposit(deposit_id):
             create_notification(deposit['user_id'], 'Deposit Approved! ✅', 
                 f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
             
+            # Send email with better error handling
             try:
-                send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
+                email_sent = send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
+                if email_sent:
+                    logger.info(f"✅ Deposit approval email sent to {user['email']}")
+                else:
+                    logger.error(f"❌ Failed to send deposit approval email to {user['email']}")
             except Exception as e:
-                logger.error(f"Failed to send deposit approval email: {e}")
+                logger.error(f"Error sending deposit approval email: {e}")
+                logger.error(traceback.format_exc())
             
             message = 'Deposit approved successfully'
             
@@ -1493,9 +1650,13 @@ def admin_process_deposit(deposit_id):
                 f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             
             try:
-                send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
+                email_sent = send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
+                if email_sent:
+                    logger.info(f"✅ Deposit rejection email sent to {user['email']}")
+                else:
+                    logger.error(f"❌ Failed to send deposit rejection email to {user['email']}")
             except Exception as e:
-                logger.error(f"Failed to send deposit rejection email: {e}")
+                logger.error(f"Error sending deposit rejection email: {e}")
             
             message = 'Deposit rejected'
         else:
@@ -1505,6 +1666,7 @@ def admin_process_deposit(deposit_id):
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Process deposit error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
@@ -1766,7 +1928,22 @@ def admin_send_email():
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
-        email_sent = send_email(user['email'], subject, message)
+        # Send email with both plain text and HTML
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                <h1>Veloxtrades</h1>
+            </div>
+            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
+                <h2>{subject}</h2>
+                <p>{message.replace(chr(10), '<br>')}</p>
+                <hr style="margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">This is an automated message from Veloxtrades.</p>
+            </div>
+        </div>
+        """
+        
+        email_sent = send_email(user['email'], subject, message, html_body)
         
         if email_sent:
             create_notification(user_id, subject, message, 'info')
@@ -1813,9 +1990,23 @@ def admin_broadcast_email():
         
         users = list(users_collection.find(query))
         
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                <h1>Veloxtrades</h1>
+            </div>
+            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
+                <h2>{subject}</h2>
+                <p>{message.replace(chr(10), '<br>')}</p>
+                <hr style="margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
+            </div>
+        </div>
+        """
+        
         sent_count = 0
         for user in users:
-            if send_email(user['email'], subject, message):
+            if send_email(user['email'], subject, message, html_body):
                 create_notification(user['_id'], subject, message, 'info')
                 sent_count += 1
         
