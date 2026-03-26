@@ -257,8 +257,12 @@ def verify_jwt_token(token):
         return jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
     except Exception as e:
         return None
+# ==================== USER TRANSACTIONS ====================
 @app.route('/api/transactions', methods=['GET', 'OPTIONS'])
 def get_transactions():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
@@ -277,6 +281,49 @@ def get_transactions():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get transactions error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ==================== USER NOTIFICATIONS - GET UNREAD COUNT ====================
+@app.route('/api/notifications', methods=['GET', 'OPTIONS'])
+def get_notifications():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        notifications = list(notifications_collection.find(
+            {'user_id': str(user['_id'])}
+        ).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for notif in notifications:
+            notif['_id'] = str(notif['_id'])
+            if 'created_at' in notif:
+                notif['created_at'] = notif['created_at'].isoformat()
+        
+        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
+        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'notifications': notifications,
+                'total': total,
+                'unread': unread,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get notifications error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 def get_user_from_request():
     token = None
