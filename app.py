@@ -1478,6 +1478,7 @@ def admin_reject_withdrawal(withdrawal_id):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN: STATS DASHBOARD ====================
+# ==================== ADMIN: STATS DASHBOARD ====================
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_stats():
@@ -1497,32 +1498,38 @@ def admin_get_stats():
         total_deposits = deposits_collection.aggregate([
             {'$match': {'status': 'approved'}},
             {'$group': {'_id': None, 'total': {'$sum': '$amount'}}}
-        ]).next().get('total', 0)
+        ]).next().get('total', 0) if deposits_collection else 0
         
         total_withdrawals = withdrawals_collection.aggregate([
             {'$match': {'status': 'approved'}},
             {'$group': {'_id': None, 'total': {'$sum': '$amount'}}}
-        ]).next().get('total', 0)
+        ]).next().get('total', 0) if withdrawals_collection else 0
         
         total_profit_paid = transactions_collection.aggregate([
             {'$match': {'type': 'profit', 'status': 'completed'}},
             {'$group': {'_id': None, 'total': {'$sum': '$amount'}}}
-        ]).next().get('total', 0)
+        ]).next().get('total', 0) if transactions_collection else 0
         
         # Investment stats
-        active_investments = investments_collection.count_documents({'status': 'active'})
+        active_investments = investments_collection.count_documents({'status': 'active'}) if investments_collection else 0
         total_invested = investments_collection.aggregate([
             {'$match': {'status': 'active'}},
             {'$group': {'_id': None, 'total': {'$sum': '$amount'}}}
-        ]).next().get('total', 0)
+        ]).next().get('total', 0) if investments_collection else 0
         
         # Pending requests
-        pending_deposits = deposits_collection.count_documents({'status': 'pending'})
-        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
+        pending_deposits = deposits_collection.count_documents({'status': 'pending'}) if deposits_collection else 0
+        pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'}) if withdrawals_collection else 0
         pending_kyc = kyc_collection.count_documents({'status': 'pending'}) if kyc_collection else 0
         open_tickets = support_tickets_collection.count_documents({'status': 'open'}) if support_tickets_collection else 0
         
-        response = jsonify({
+        # Email stats
+        email_stats = {
+            'total_sent': email_logs_collection.count_documents({'status': 'sent'}) if email_logs_collection else 0,
+            'total_failed': email_logs_collection.count_documents({'status': 'failed'}) if email_logs_collection else 0
+        }
+        
+        response_data = {
             'success': True,
             'data': {
                 'users': {
@@ -1545,12 +1552,16 @@ def admin_get_stats():
                     'withdrawals': pending_withdrawals,
                     'kyc': pending_kyc,
                     'tickets': open_tickets
-                }
+                },
+                'email': email_stats
             }
-        })
+        }
+        
+        response = jsonify(response_data)
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Admin stats error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN: NOTIFICATIONS ====================
