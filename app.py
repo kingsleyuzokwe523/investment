@@ -170,7 +170,7 @@ def after_request(response):
     response.headers.add('X-Frame-Options', 'DENY')
     response.headers.add('X-XSS-Protection', '1; mode=block')
     
-    # Always add CORS headers for admin endpoints
+    # Always add CORS headers for all responses
     origin = request.headers.get('Origin', '')
     if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -1428,81 +1428,7 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
-# Add this endpoint to your Flask app (put it with other admin endpoints)
 
-@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_resend_deposit_emails():
-    """Resend emails for all existing processed deposits"""
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    if deposits_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        status_filter = data.get('status', 'approved')
-        
-        # Build query
-        query = {}
-        if status_filter == 'approved':
-            query['status'] = 'approved'
-        elif status_filter == 'rejected':
-            query['status'] = 'rejected'
-        
-        # Get all processed deposits
-        deposits = list(deposits_collection.find(query))
-        
-        sent_count = 0
-        failed_count = 0
-        
-        for deposit in deposits:
-            try:
-                # Get user
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                if not user:
-                    failed_count += 1
-                    continue
-                
-                # Send appropriate email
-                if deposit['status'] == 'approved':
-                    email_sent = send_deposit_approved_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('transaction_hash', '')
-                    )
-                else:
-                    email_sent = send_deposit_rejected_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('rejection_reason', 'Not specified')
-                    )
-                
-                if email_sent:
-                    sent_count += 1
-                else:
-                    failed_count += 1
-                    
-            except Exception as e:
-                failed_count += 1
-                logger.error(f"Error resending email: {e}")
-        
-        response = jsonify({
-            'success': True,
-            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
-            'data': {
-                'sent': sent_count,
-                'failed': failed_count
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Resend emails error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
@@ -1740,6 +1666,213 @@ def admin_process_deposit(deposit_id):
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Process deposit error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_email(deposit_id):
+    """Resend email for a specific deposit"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+        if not deposit:
+            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+        
+        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if deposit['status'] == 'approved':
+            email_sent = send_deposit_approved_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                deposit.get('transaction_hash', '')
+            )
+        elif deposit['status'] == 'rejected':
+            email_sent = send_deposit_rejected_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                deposit.get('rejection_reason', 'Not specified')
+            )
+        else:
+            return jsonify({'success': False, 'message': 'Deposit not processed yet'}), 400
+        
+        if email_sent:
+            response = jsonify({'success': True, 'message': 'Email resent successfully'})
+        else:
+            response = jsonify({'success': False, 'message': 'Failed to send email'}), 500
+        
+        return add_cors_headers(response)
+            
+    except Exception as e:
+        logger.error(f"Resend email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_emails():
+    """Resend emails for all existing processed deposits"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            data = {}
+        status_filter = data.get('status', 'approved')
+        
+        # Build query
+        query = {}
+        if status_filter == 'approved':
+            query['status'] = 'approved'
+        elif status_filter == 'rejected':
+            query['status'] = 'rejected'
+        elif status_filter == 'all':
+            query['status'] = {'$in': ['approved', 'rejected']}
+        
+        # Get all processed deposits
+        deposits = list(deposits_collection.find(query))
+        
+        sent_count = 0
+        failed_count = 0
+        errors = []
+        
+        for deposit in deposits:
+            try:
+                # Get user
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                if not user:
+                    failed_count += 1
+                    errors.append(f"User not found for deposit {deposit.get('_id', 'unknown')}")
+                    continue
+                
+                # Send appropriate email based on status
+                if deposit['status'] == 'approved':
+                    email_sent = send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('transaction_hash', '')
+                    )
+                elif deposit['status'] == 'rejected':
+                    email_sent = send_deposit_rejected_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('rejection_reason', 'Not specified')
+                    )
+                else:
+                    continue
+                
+                if email_sent:
+                    sent_count += 1
+                    logger.info(f"✅ Resent email for deposit {deposit.get('deposit_id', 'unknown')} to {user['email']}")
+                else:
+                    failed_count += 1
+                    errors.append(f"Failed to send email for deposit {deposit.get('deposit_id', 'unknown')}")
+                    
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"Error for deposit {deposit.get('deposit_id', 'unknown')}: {str(e)}")
+                logger.error(f"Error resending email: {e}")
+        
+        response = jsonify({
+            'success': True,
+            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
+            'data': {
+                'sent': sent_count,
+                'failed': failed_count,
+                'errors': errors[:10]
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Resend emails error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/investments/<investment_id>/complete', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_complete_investment(investment_id):
+    """Manually complete an investment and add profit to user balance"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if investments_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        investment = investments_collection.find_one({'_id': ObjectId(investment_id)})
+        if not investment:
+            return jsonify({'success': False, 'message': 'Investment not found'}), 404
+        
+        if investment['status'] != 'active':
+            return jsonify({'success': False, 'message': 'Investment already completed'}), 400
+        
+        user_id = investment['user_id']
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+            
+        amount = investment['amount']
+        expected_profit = investment.get('expected_profit', 0)
+        plan_name = investment.get('plan_name', 'Investment')
+        
+        # Add profit to user balance
+        result = users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$inc': {'wallet.balance': expected_profit, 'wallet.total_profit': expected_profit}}
+        )
+        
+        if result.modified_count > 0:
+            # Update investment status
+            investments_collection.update_one(
+                {'_id': ObjectId(investment_id)},
+                {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}}
+            )
+            
+            # Record transaction
+            if transactions_collection is not None:
+                transactions_collection.insert_one({
+                    'user_id': user_id,
+                    'type': 'profit',
+                    'amount': expected_profit,
+                    'status': 'completed',
+                    'description': f'Profit from {plan_name} (Manual completion by admin)',
+                    'investment_id': str(investment_id),
+                    'created_at': datetime.now(timezone.utc)
+                })
+            
+            # Send notification
+            create_notification(user_id, 'Investment Completed! 🎉', 
+                f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!', 'success')
+            
+            # Send email
+            try:
+                send_investment_completed_email(user, amount, plan_name, expected_profit)
+            except Exception as e:
+                logger.error(f"Failed to send investment completion email: {e}")
+            
+            response = jsonify({'success': True, 'message': 'Investment completed successfully'})
+        else:
+            response = jsonify({'success': False, 'message': 'Failed to update user balance'}), 500
+        
+        return add_cors_headers(response)
+            
+    except Exception as e:
+        logger.error(f"Complete investment error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
