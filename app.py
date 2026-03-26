@@ -1428,7 +1428,81 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
+# Add this endpoint to your Flask app (put it with other admin endpoints)
 
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_emails():
+    """Resend emails for all existing processed deposits"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        status_filter = data.get('status', 'approved')
+        
+        # Build query
+        query = {}
+        if status_filter == 'approved':
+            query['status'] = 'approved'
+        elif status_filter == 'rejected':
+            query['status'] = 'rejected'
+        
+        # Get all processed deposits
+        deposits = list(deposits_collection.find(query))
+        
+        sent_count = 0
+        failed_count = 0
+        
+        for deposit in deposits:
+            try:
+                # Get user
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                if not user:
+                    failed_count += 1
+                    continue
+                
+                # Send appropriate email
+                if deposit['status'] == 'approved':
+                    email_sent = send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('transaction_hash', '')
+                    )
+                else:
+                    email_sent = send_deposit_rejected_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('rejection_reason', 'Not specified')
+                    )
+                
+                if email_sent:
+                    sent_count += 1
+                else:
+                    failed_count += 1
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Error resending email: {e}")
+        
+        response = jsonify({
+            'success': True,
+            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
+            'data': {
+                'sent': sent_count,
+                'failed': failed_count
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Resend emails error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
