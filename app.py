@@ -1100,7 +1100,14 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Admin get users error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+# Add email stats to admin stats
+email_stats = {
+    'total_sent': email_logs_collection.count_documents({'status': 'sent'}) if email_logs_collection else 0,
+    'total_failed': email_logs_collection.count_documents({'status': 'failed'}) if email_logs_collection else 0
+}
 
+# Add to your response
+'email': email_stats
 @app.route('/api/admin/users/<user_id>', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_user(user_id):
