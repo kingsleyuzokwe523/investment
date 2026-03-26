@@ -166,7 +166,7 @@ def after_request(response):
     response.headers.add('X-Content-Type-Options', 'nosniff')
     response.headers.add('X-Frame-Options', 'DENY')
     response.headers.add('X-XSS-Protection', '1; mode=block')
-    return response
+    return add_cors_headers(response)
 
 @app.before_request
 def handle_preflight():
@@ -257,74 +257,7 @@ def verify_jwt_token(token):
         return jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
     except Exception as e:
         return None
-# ==================== USER TRANSACTIONS ====================
-@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
-def get_transactions():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        transactions = list(transactions_collection.find(
-            {'user_id': str(user['_id'])}
-        ).sort('created_at', -1))
-        
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx:
-                tx['created_at'] = tx['created_at'].isoformat()
-        
-        response = jsonify({'success': True, 'data': {'transactions': transactions}})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Get transactions error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
-
-# ==================== USER NOTIFICATIONS - GET UNREAD COUNT ====================
-@app.route('/api/notifications', methods=['GET', 'OPTIONS'])
-def get_notifications():
-    if request.method == 'OPTIONS':
-        return handle_preflight()
-    
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        skip = (page - 1) * limit
-        
-        notifications = list(notifications_collection.find(
-            {'user_id': str(user['_id'])}
-        ).sort('created_at', -1).skip(skip).limit(limit))
-        
-        for notif in notifications:
-            notif['_id'] = str(notif['_id'])
-            if 'created_at' in notif:
-                notif['created_at'] = notif['created_at'].isoformat()
-        
-        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
-        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'notifications': notifications,
-                'total': total,
-                'unread': unread,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Get notifications error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 def get_user_from_request():
     token = None
     token = request.cookies.get('veloxtrades_token')
@@ -392,8 +325,155 @@ INVESTMENT_PLANS = {
     'classic': {'name': 'Classic Plan', 'roi': 50, 'duration_hours': 144, 'min_deposit': 10001, 'max_deposit': float('inf')}
 }
 
+# ==================== EMAIL TEMPLATES ====================
+def get_email_template(title, content, button_text=None, button_link=None):
+    """Return styled HTML email template"""
+    button_html = ''
+    if button_text and button_link:
+        button_html = f'''
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="{button_link}" style="background: #10b981; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">{button_text}</a>
+        </div>
+        '''
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; margin: 0; padding: 0; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 30px 20px; text-align: center; border-radius: 10px 10px 0 0; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .header p {{ margin: 10px 0 0; opacity: 0.9; }}
+            .content {{ background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
+            .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #666; border-top: 1px solid #eee; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>VELOXTRADES</h1>
+                <p>The Velocity of Wealth</p>
+            </div>
+            <div class="content">
+                <h2>{title}</h2>
+                {content}
+                {button_html}
+            </div>
+            <div class="footer">
+                <p>© 2025 Veloxtrades. All rights reserved.</p>
+                <p>If you did not request this email, please ignore it.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    '''
+
+def send_deposit_approved_email(user, amount, crypto, transaction_hash):
+    subject = f"✅ Deposit Approved - ${amount} added to your Veloxtrades account"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+        <p><strong>✅ Deposit Approved!</strong></p>
+        <p>Amount: <strong>${amount:,.2f}</strong></p>
+        <p>Method: <strong>{crypto.upper()}</strong></p>
+        <p>Transaction ID: <strong>{transaction_hash or 'N/A'}</strong></p>
+    </div>
+    <p>Your deposit has been successfully added to your wallet balance.</p>
+    <p>You can now start investing with your funds.</p>
+    '''
+    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your deposit of ${amount:,.2f} has been approved.", html_body)
+
+def send_deposit_rejected_email(user, amount, crypto, reason):
+    subject = f"❌ Deposit Rejected - ${amount} deposit was not approved"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0;">
+        <p><strong>❌ Deposit Rejected</strong></p>
+        <p>Amount: <strong>${amount:,.2f}</strong></p>
+        <p>Method: <strong>{crypto.upper()}</strong></p>
+        <p>Reason: <strong>{reason}</strong></p>
+    </div>
+    <p>Your deposit request was not approved. Please contact support if you have any questions.</p>
+    <p>You can submit a new deposit request at any time.</p>
+    '''
+    html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your deposit of ${amount:,.2f} was rejected. Reason: {reason}", html_body)
+
+def send_withdrawal_approved_email(user, amount, currency, wallet_address):
+    subject = f"✅ Withdrawal Approved - ${amount} sent to your wallet"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+        <p><strong>✅ Withdrawal Approved!</strong></p>
+        <p>Amount: <strong>${amount:,.2f}</strong></p>
+        <p>Currency: <strong>{currency.upper()}</strong></p>
+        <p>Wallet Address: <strong>{wallet_address}</strong></p>
+    </div>
+    <p>Your withdrawal has been processed and sent to your wallet. Funds should reflect within a few hours.</p>
+    '''
+    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your withdrawal of ${amount:,.2f} has been approved.", html_body)
+
+def send_withdrawal_rejected_email(user, amount, currency, reason):
+    subject = f"❌ Withdrawal Rejected - ${amount} withdrawal request"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0;">
+        <p><strong>❌ Withdrawal Rejected</strong></p>
+        <p>Amount: <strong>${amount:,.2f}</strong></p>
+        <p>Currency: <strong>{currency.upper()}</strong></p>
+        <p>Reason: <strong>{reason}</strong></p>
+    </div>
+    <p>Your withdrawal request was not approved. The funds have been returned to your wallet.</p>
+    <p>Please ensure your wallet address is correct and try again.</p>
+    '''
+    html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your withdrawal of ${amount:,.2f} was rejected. Reason: {reason}", html_body)
+
+def send_investment_confirmation_email(user, amount, plan_name, roi, expected_profit):
+    subject = f"🚀 Investment Confirmed - ${amount} invested in {plan_name}"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+        <p><strong>✅ Investment Started!</strong></p>
+        <p>Plan: <strong>{plan_name}</strong></p>
+        <p>Amount: <strong>${amount:,.2f}</strong></p>
+        <p>ROI: <strong>{roi}%</strong></p>
+        <p>Expected Profit: <strong>${expected_profit:,.2f}</strong></p>
+        <p>Total Return: <strong>${(amount + expected_profit):,.2f}</strong></p>
+    </div>
+    <p>Your investment is now active and will automatically complete at the end of the duration.</p>
+    <p>You will receive another email when your investment completes with your profit.</p>
+    '''
+    html_body = get_email_template(subject, content, 'View Investments', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your investment of ${amount:,.2f} in {plan_name} has started.", html_body)
+
+def send_investment_completed_email(user, amount, plan_name, profit):
+    subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
+    content = f'''
+    <p>Dear <strong>{user.get('full_name', user['username'])}</strong>,</p>
+    <div style="background: #d1fae5; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+        <p><strong>🎉 Investment Completed!</strong></p>
+        <p>Plan: <strong>{plan_name}</strong></p>
+        <p>Initial Investment: <strong>${amount:,.2f}</strong></p>
+        <p>Profit Earned: <strong>${profit:,.2f}</strong></p>
+        <p>Total Return: <strong>${(amount + profit):,.2f}</strong></p>
+    </div>
+    <p>Your investment has been successfully completed. The profit has been added to your wallet balance.</p>
+    <p>You can start a new investment or withdraw your funds.</p>
+    '''
+    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
+    return send_email(user['email'], subject, f"Your investment of ${amount:,.2f} has completed. You earned ${profit:,.2f} profit!", html_body)
+
 # ==================== AUTO-PROFIT SCHEDULER ====================
 def process_investment_profits():
+    """Process completed investments and add profits to user wallets"""
     if investments_collection is None or users_collection is None:
         return
     
@@ -408,8 +488,10 @@ def process_investment_profits():
         for investment in cursor:
             try:
                 user_id = investment['user_id']
+                user = users_collection.find_one({'_id': ObjectId(user_id)})
                 amount = investment['amount']
                 expected_profit = investment.get('expected_profit', 0)
+                plan_name = investment.get('plan_name', 'Investment')
                 
                 result = users_collection.update_one(
                     {'_id': ObjectId(user_id)},
@@ -425,12 +507,21 @@ def process_investment_profits():
                     if transactions_collection:
                         transactions_collection.insert_one({
                             'user_id': user_id, 'type': 'profit', 'amount': expected_profit,
-                            'status': 'completed', 'description': f'Profit from {investment.get("plan_name", "Investment")}',
+                            'status': 'completed', 'description': f'Profit from {plan_name}',
                             'investment_id': str(investment['_id']), 'created_at': datetime.now(timezone.utc)
                         })
                     
+                    # Send notification
                     create_notification(user_id, 'Investment Completed! 🎉',
                         f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!', 'success')
+                    
+                    # Send email confirmation
+                    if user:
+                        try:
+                            send_investment_completed_email(user, amount, plan_name, expected_profit)
+                        except Exception as e:
+                            logger.error(f"Failed to send investment completion email: {e}")
+                    
                     processed_count += 1
             except Exception as e:
                 logger.error(f"Error processing investment: {e}")
@@ -584,6 +675,455 @@ def verify_token():
     })
     return add_cors_headers(response)
 
+# ==================== USER DEPOSITS ====================
+@app.route('/api/deposits', methods=['POST', 'OPTIONS'])
+def create_deposit():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        crypto = data.get('crypto', 'usdt')
+        transaction_hash = data.get('transaction_hash', '').strip()
+        wallet_address = data.get('wallet_address', '')
+        
+        # Get settings
+        settings = settings_collection.find_one({}) if settings_collection else None
+        min_deposit = settings.get('min_deposit', 10) if settings else 10
+        max_deposit = settings.get('max_deposit', 100000) if settings else 100000
+        
+        if amount < min_deposit:
+            return jsonify({'success': False, 'message': f'Minimum deposit amount is ${min_deposit}'}), 400
+        if amount > max_deposit:
+            return jsonify({'success': False, 'message': f'Maximum deposit amount is ${max_deposit}'}), 400
+        
+        deposit_id = 'DEP-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=12))
+        
+        deposit_data = {
+            'deposit_id': deposit_id,
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'amount': amount,
+            'crypto': crypto,
+            'transaction_hash': transaction_hash,
+            'wallet_address': wallet_address,
+            'status': 'pending',
+            'created_at': datetime.now(timezone.utc),
+            'approved_at': None,
+            'rejected_at': None,
+            'rejection_reason': None
+        }
+        
+        deposits_collection.insert_one(deposit_data)
+        
+        # Record transaction
+        transactions_collection.insert_one({
+            'user_id': str(user['_id']),
+            'type': 'deposit',
+            'amount': amount,
+            'status': 'pending',
+            'description': f'Deposit request of ${amount:,.2f} via {crypto.upper()}',
+            'deposit_id': deposit_id,
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        create_notification(user['_id'], 'Deposit Request Submitted', 
+            f'Your deposit request of ${amount:,.2f} has been submitted and is pending approval.', 'info')
+        
+        response = jsonify({'success': True, 'message': 'Deposit request submitted', 
+                           'data': {'deposit_id': deposit_id}})
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"Create deposit error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/deposits', methods=['GET', 'OPTIONS'])
+def get_user_deposits():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1)) if deposits_collection else []
+        
+        for deposit in deposits:
+            deposit['_id'] = str(deposit['_id'])
+            if 'created_at' in deposit:
+                deposit['created_at'] = deposit['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'deposits': deposits}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get deposits error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER WITHDRAWALS ====================
+@app.route('/api/withdrawals', methods=['POST', 'OPTIONS'])
+def create_withdrawal():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        currency = data.get('currency', 'usdt')
+        wallet_address = data.get('wallet_address', '').strip()
+        
+        if not wallet_address:
+            return jsonify({'success': False, 'message': 'Wallet address is required'}), 400
+        
+        # Get settings
+        settings = settings_collection.find_one({}) if settings_collection else None
+        min_withdrawal = settings.get('min_withdrawal', 50) if settings else 50
+        max_withdrawal = settings.get('max_withdrawal', 50000) if settings else 50000
+        withdrawal_fee = settings.get('withdrawal_fee', 0) if settings else 0
+        
+        if amount < min_withdrawal:
+            return jsonify({'success': False, 'message': f'Minimum withdrawal amount is ${min_withdrawal}'}), 400
+        if amount > max_withdrawal:
+            return jsonify({'success': False, 'message': f'Maximum withdrawal amount is ${max_withdrawal}'}), 400
+        
+        fee_amount = amount * (withdrawal_fee / 100)
+        net_amount = amount - fee_amount
+        
+        if user['wallet']['balance'] < amount:
+            return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
+        
+        withdrawal_id = 'WIT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=12))
+        
+        withdrawal_data = {
+            'withdrawal_id': withdrawal_id,
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'amount': amount,
+            'fee': fee_amount,
+            'net_amount': net_amount,
+            'currency': currency,
+            'wallet_address': wallet_address,
+            'status': 'pending',
+            'created_at': datetime.now(timezone.utc),
+            'approved_at': None,
+            'rejected_at': None,
+            'rejection_reason': None
+        }
+        
+        withdrawals_collection.insert_one(withdrawal_data)
+        
+        # Deduct from wallet immediately for pending withdrawal
+        users_collection.update_one(
+            {'_id': user['_id']},
+            {'$inc': {'wallet.balance': -amount}}
+        )
+        
+        # Record transaction
+        transactions_collection.insert_one({
+            'user_id': str(user['_id']),
+            'type': 'withdrawal',
+            'amount': amount,
+            'status': 'pending',
+            'description': f'Withdrawal request of ${amount:,.2f} to {currency.upper()}',
+            'withdrawal_id': withdrawal_id,
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        create_notification(user['_id'], 'Withdrawal Request Submitted', 
+            f'Your withdrawal request of ${amount:,.2f} has been submitted and is pending approval.', 'info')
+        
+        response = jsonify({'success': True, 'message': 'Withdrawal request submitted', 
+                           'data': {'withdrawal_id': withdrawal_id}})
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"Create withdrawal error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/withdrawals', methods=['GET', 'OPTIONS'])
+def get_user_withdrawals():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1)) if withdrawals_collection else []
+        
+        for withdrawal in withdrawals:
+            withdrawal['_id'] = str(withdrawal['_id'])
+            if 'created_at' in withdrawal:
+                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'withdrawals': withdrawals}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get withdrawals error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER INVESTMENTS ====================
+@app.route('/api/invest', methods=['POST', 'OPTIONS'])
+def create_investment():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json()
+        plan_type = data.get('plan') or data.get('plan_type')
+        amount = float(data.get('amount', 0))
+        
+        plan = INVESTMENT_PLANS.get(plan_type)
+        if not plan:
+            return jsonify({'success': False, 'message': 'Invalid investment plan'}), 400
+        
+        if amount < plan['min_deposit']:
+            return jsonify({'success': False, 'message': f'Minimum investment is ${plan["min_deposit"]}'}), 400
+        if amount > plan['max_deposit']:
+            return jsonify({'success': False, 'message': f'Maximum investment is ${plan["max_deposit"]}'}), 400
+        
+        if user['wallet']['balance'] < amount:
+            return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
+        
+        expected_profit = amount * plan['roi'] / 100
+        end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
+        
+        # Deduct from wallet
+        users_collection.update_one(
+            {'_id': user['_id']},
+            {'$inc': {'wallet.balance': -amount, 'wallet.total_invested': amount}}
+        )
+        
+        investment_data = {
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'plan': plan_type,
+            'plan_name': plan['name'],
+            'amount': amount,
+            'roi': plan['roi'],
+            'expected_profit': expected_profit,
+            'duration_hours': plan['duration_hours'],
+            'start_date': datetime.now(timezone.utc),
+            'end_date': end_date,
+            'status': 'active'
+        }
+        
+        result = investments_collection.insert_one(investment_data)
+        
+        # Record transaction
+        transactions_collection.insert_one({
+            'user_id': str(user['_id']),
+            'type': 'investment',
+            'amount': amount,
+            'status': 'completed',
+            'description': f'Investment in {plan["name"]}',
+            'investment_id': str(result.inserted_id),
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        # Send notification
+        create_notification(user['_id'], 'Investment Started!', 
+            f'You have invested ${amount:,.2f} in {plan["name"]}. Expected profit: ${expected_profit:,.2f}', 'success')
+        
+        # Send email confirmation
+        try:
+            send_investment_confirmation_email(user, amount, plan['name'], plan['roi'], expected_profit)
+        except Exception as e:
+            logger.error(f"Failed to send investment confirmation email: {e}")
+        
+        response = jsonify({'success': True, 'message': 'Investment successful', 
+                           'data': {'expected_profit': expected_profit, 'end_date': end_date.isoformat()}})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Investment error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/investments', methods=['GET', 'OPTIONS'])
+def get_user_investments():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1)) if investments_collection else []
+        
+        for inv in investments:
+            inv['_id'] = str(inv['_id'])
+            if 'start_date' in inv and inv['start_date']:
+                inv['start_date'] = inv['start_date'].isoformat()
+            if 'end_date' in inv and inv['end_date']:
+                inv['end_date'] = inv['end_date'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'investments': investments}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get investments error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER TRANSACTIONS ====================
+@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
+def get_transactions():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        transactions = list(transactions_collection.find(
+            {'user_id': str(user['_id'])}
+        ).sort('created_at', -1))
+        
+        for tx in transactions:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx:
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'transactions': transactions}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get transactions error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER DASHBOARD ====================
+@app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
+def user_dashboard():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        # Get active investments
+        active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'})) if investments_collection else []
+        total_active = sum(inv.get('amount', 0) for inv in active_investments)
+        pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
+        
+        # Get recent transactions
+        recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10)) if transactions_collection else []
+        for tx in recent_transactions:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx:
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        # Get unread notifications count
+        unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False}) if notifications_collection else 0
+        
+        # Get pending counts
+        pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'}) if deposits_collection else 0
+        pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'}) if withdrawals_collection else 0
+        
+        dashboard_data = {
+            'wallet': user.get('wallet', {'balance': 0.00, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}),
+            'investments': {
+                'total_active': total_active,
+                'total_profit': user.get('wallet', {}).get('total_profit', 0),
+                'pending_profit': pending_profit,
+                'count': len(active_investments)
+            },
+            'recent_transactions': recent_transactions,
+            'notification_count': unread_count,
+            'kyc_status': user.get('kyc_status', 'pending'),
+            'pending_requests': {
+                'deposits': pending_deposits,
+                'withdrawals': pending_withdrawals
+            }
+        }
+        
+        response = jsonify({'success': True, 'data': dashboard_data})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER NOTIFICATIONS ====================
+@app.route('/api/notifications', methods=['GET', 'OPTIONS'])
+def get_notifications():
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        notifications = list(notifications_collection.find(
+            {'user_id': str(user['_id'])}
+        ).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for notif in notifications:
+            notif['_id'] = str(notif['_id'])
+            if 'created_at' in notif:
+                notif['created_at'] = notif['created_at'].isoformat()
+        
+        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
+        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'notifications': notifications,
+                'total': total,
+                'unread': unread,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get notifications error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
+def mark_notification_read(notification_id):
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        result = notifications_collection.update_one(
+            {'_id': ObjectId(notification_id), 'user_id': str(user['_id'])},
+            {'$set': {'read': True}}
+        )
+        
+        if result.modified_count == 0:
+            return jsonify({'success': False, 'message': 'Notification not found'}), 404
+        
+        response = jsonify({'success': True, 'message': 'Notification marked as read'})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Mark notification read error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 # ==================== ADMIN API ENDPOINTS ====================
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -592,39 +1132,26 @@ def admin_get_stats():
         return handle_preflight()
     
     try:
-        total_users = 0
+        total_users = users_collection.count_documents({}) if users_collection else 0
         total_deposit_amount = 0
         total_withdrawal_amount = 0
         active_investments = 0
         pending_deposits = 0
         pending_withdrawals = 0
-        banned_users = 0
-        
-        if users_collection:
-            total_users = users_collection.count_documents({})
-            banned_users = users_collection.count_documents({'is_banned': True})
+        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection else 0
         
         if deposits_collection:
-            try:
-                approved_deposits = list(deposits_collection.find({'status': 'approved'}))
-                total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-                pending_deposits = deposits_collection.count_documents({'status': 'pending'})
-            except Exception as e:
-                logger.error(f"Error fetching deposits: {e}")
+            approved_deposits = list(deposits_collection.find({'status': 'approved'}))
+            total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
+            pending_deposits = deposits_collection.count_documents({'status': 'pending'})
         
         if withdrawals_collection:
-            try:
-                approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
-                total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-                pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
-            except Exception as e:
-                logger.error(f"Error fetching withdrawals: {e}")
+            approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
+            total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
+            pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
         
         if investments_collection:
-            try:
-                active_investments = investments_collection.count_documents({'status': 'active'})
-            except Exception as e:
-                logger.error(f"Error fetching investments: {e}")
+            active_investments = investments_collection.count_documents({'status': 'active'})
         
         response = jsonify({
             'success': True, 
@@ -641,18 +1168,10 @@ def admin_get_stats():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Stats error: {e}", exc_info=True)
-        return jsonify({
-            'success': True, 
-            'data': {
-                'total_users': 0,
-                'total_deposit_amount': 0,
-                'total_withdrawal_amount': 0,
-                'active_investments': 0,
-                'pending_deposits': 0,
-                'pending_withdrawals': 0,
-                'banned_users': 0
-            }
-        }), 200
+        return jsonify({'success': True, 'data': {
+            'total_users': 0, 'total_deposit_amount': 0, 'total_withdrawal_amount': 0,
+            'active_investments': 0, 'pending_deposits': 0, 'pending_withdrawals': 0, 'banned_users': 0
+        }}), 200
 
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -661,11 +1180,7 @@ def admin_get_users():
         return handle_preflight()
     
     if users_collection is None:
-        return jsonify({
-            'success': False,
-            'message': 'Database connection error',
-            'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 500
+        return jsonify({'success': False, 'message': 'Database connection error', 'data': {'users': [], 'total': 0}}), 500
     
     try:
         page = int(request.args.get('page', 1))
@@ -686,32 +1201,28 @@ def admin_get_users():
         
         formatted_users = []
         for user in users:
-            try:
-                user_data = {
-                    '_id': str(user['_id']),
-                    'username': user.get('username', ''),
-                    'email': user.get('email', ''),
-                    'full_name': user.get('full_name', ''),
-                    'phone': user.get('phone', ''),
-                    'country': user.get('country', ''),
-                    'wallet': user.get('wallet', {'balance': 0, 'total_deposited': 0, 'total_profit': 0}),
-                    'is_admin': user.get('is_admin', False),
-                    'is_banned': user.get('is_banned', False),
-                    'is_verified': user.get('is_verified', False),
-                    'kyc_status': user.get('kyc_status', 'pending'),
-                    'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
-                    'last_login': user.get('last_login').isoformat() if user.get('last_login') else None,
-                    'referral_code': user.get('referral_code', ''),
-                    'referrals': user.get('referrals', [])
-                }
-                formatted_users.append(user_data)
-            except Exception as e:
-                logger.error(f"Error formatting user: {e}")
-                continue
+            user_data = {
+                '_id': str(user['_id']),
+                'username': user.get('username', ''),
+                'email': user.get('email', ''),
+                'full_name': user.get('full_name', ''),
+                'phone': user.get('phone', ''),
+                'country': user.get('country', ''),
+                'wallet': user.get('wallet', {'balance': 0, 'total_deposited': 0, 'total_profit': 0}),
+                'is_admin': user.get('is_admin', False),
+                'is_banned': user.get('is_banned', False),
+                'is_verified': user.get('is_verified', False),
+                'kyc_status': user.get('kyc_status', 'pending'),
+                'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
+                'last_login': user.get('last_login').isoformat() if user.get('last_login') else None,
+                'referral_code': user.get('referral_code', ''),
+                'referrals': user.get('referrals', [])
+            }
+            formatted_users.append(user_data)
         
         total_pages = (total + limit - 1) // limit if total > 0 else 1
         
-        response_data = {
+        response = jsonify({
             'success': True,
             'data': {
                 'users': formatted_users,
@@ -720,18 +1231,11 @@ def admin_get_users():
                 'pages': total_pages,
                 'limit': limit
             }
-        }
-        
-        response = jsonify(response_data)
+        })
         return add_cors_headers(response)
-        
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'message': str(e),
-            'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 500
+        return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
 
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -839,10 +1343,7 @@ def admin_get_deposits():
         return handle_preflight()
     
     if deposits_collection is None:
-        return jsonify({
-            'success': True,
-            'data': {'deposits': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -859,23 +1360,19 @@ def admin_get_deposits():
         
         result_deposits = []
         for deposit in deposits:
-            try:
-                deposit['_id'] = str(deposit['_id'])
-                if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
-                    deposit['created_at'] = deposit['created_at'].isoformat()
-                
-                if users_collection is not None and 'user_id' in deposit:
-                    try:
-                        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                        deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-                    except:
-                        deposit['username'] = 'Unknown'
-                else:
+            deposit['_id'] = str(deposit['_id'])
+            if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
+                deposit['created_at'] = deposit['created_at'].isoformat()
+            
+            if users_collection is not None and 'user_id' in deposit:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                    deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
                     deposit['username'] = 'Unknown'
-                result_deposits.append(deposit)
-            except Exception as e:
-                logger.error(f"Error processing deposit: {e}")
-                continue
+            else:
+                deposit['username'] = 'Unknown'
+            result_deposits.append(deposit)
         
         response = jsonify({
             'success': True, 
@@ -889,10 +1386,7 @@ def admin_get_deposits():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get deposits error: {e}", exc_info=True)
-        return jsonify({
-            'success': True,
-            'data': {'deposits': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
 
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -906,7 +1400,7 @@ def admin_process_deposit(deposit_id):
     try:
         data = request.get_json()
         action = data.get('action')
-        send_email_notification = data.get('send_email', True)
+        reason = data.get('reason', 'Not specified')
         
         deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
         if not deposit:
@@ -926,12 +1420,20 @@ def admin_process_deposit(deposit_id):
             if transactions_collection:
                 transactions_collection.insert_one({
                     'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
-                    'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved by admin',
+                    'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved',
                     'created_at': datetime.now(timezone.utc)
                 })
             
-            create_notification(deposit['user_id'], 'Deposit Approved! ✅', f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
+            create_notification(deposit['user_id'], 'Deposit Approved! ✅', 
+                f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
+            
+            try:
+                send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
+            except Exception as e:
+                logger.error(f"Failed to send deposit approval email: {e}")
+            
             message = 'Deposit approved successfully'
+            
         elif action == 'reject':
             reason = data.get('reason', 'Not specified')
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
@@ -943,7 +1445,14 @@ def admin_process_deposit(deposit_id):
                     'created_at': datetime.now(timezone.utc)
                 })
             
-            create_notification(deposit['user_id'], 'Deposit Rejected ❌', f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
+            create_notification(deposit['user_id'], 'Deposit Rejected ❌', 
+                f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
+            
+            try:
+                send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
+            except Exception as e:
+                logger.error(f"Failed to send deposit rejection email: {e}")
+            
             message = 'Deposit rejected'
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
@@ -961,10 +1470,7 @@ def admin_get_withdrawals():
         return handle_preflight()
     
     if withdrawals_collection is None:
-        return jsonify({
-            'success': True,
-            'data': {'withdrawals': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -981,23 +1487,19 @@ def admin_get_withdrawals():
         
         result_withdrawals = []
         for withdrawal in withdrawals:
-            try:
-                withdrawal['_id'] = str(withdrawal['_id'])
-                if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
-                    withdrawal['created_at'] = withdrawal['created_at'].isoformat()
-                
-                if users_collection is not None and 'user_id' in withdrawal:
-                    try:
-                        user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
-                        withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-                    except:
-                        withdrawal['username'] = 'Unknown'
-                else:
+            withdrawal['_id'] = str(withdrawal['_id'])
+            if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
+                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
+            
+            if users_collection is not None and 'user_id' in withdrawal:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
+                    withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
                     withdrawal['username'] = 'Unknown'
-                result_withdrawals.append(withdrawal)
-            except Exception as e:
-                logger.error(f"Error processing withdrawal: {e}")
-                continue
+            else:
+                withdrawal['username'] = 'Unknown'
+            result_withdrawals.append(withdrawal)
         
         response = jsonify({
             'success': True, 
@@ -1011,10 +1513,7 @@ def admin_get_withdrawals():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}", exc_info=True)
-        return jsonify({
-            'success': True,
-            'data': {'withdrawals': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
 
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -1028,7 +1527,7 @@ def admin_process_withdrawal(withdrawal_id):
     try:
         data = request.get_json()
         action = data.get('action')
-        send_email_notification = data.get('send_email', True)
+        reason = data.get('reason', 'Not specified')
         
         withdrawal = withdrawals_collection.find_one({'_id': ObjectId(withdrawal_id)})
         if not withdrawal:
@@ -1039,10 +1538,6 @@ def admin_process_withdrawal(withdrawal_id):
         user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
         
         if action == 'approve':
-            users_collection.update_one(
-                {'_id': ObjectId(withdrawal['user_id'])},
-                {'$inc': {'wallet.balance': -withdrawal['amount'], 'wallet.total_withdrawn': withdrawal['amount']}}
-            )
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
             
             if transactions_collection:
@@ -1052,11 +1547,24 @@ def admin_process_withdrawal(withdrawal_id):
                     sort=[('created_at', -1)]
                 )
             
-            create_notification(withdrawal['user_id'], 'Withdrawal Approved! ✅', f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.', 'success')
+            create_notification(withdrawal['user_id'], 'Withdrawal Approved! ✅', 
+                f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.', 'success')
+            
+            try:
+                send_withdrawal_approved_email(user, withdrawal['amount'], withdrawal['currency'], withdrawal['wallet_address'])
+            except Exception as e:
+                logger.error(f"Failed to send withdrawal approval email: {e}")
+            
             message = 'Withdrawal approved successfully'
+            
         elif action == 'reject':
-            reason = data.get('reason', 'Not specified')
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
+            
+            # Refund the amount back to user
+            users_collection.update_one(
+                {'_id': ObjectId(withdrawal['user_id'])},
+                {'$inc': {'wallet.balance': withdrawal['amount']}}
+            )
             
             if transactions_collection:
                 transactions_collection.update_one(
@@ -1065,7 +1573,14 @@ def admin_process_withdrawal(withdrawal_id):
                     sort=[('created_at', -1)]
                 )
             
-            create_notification(withdrawal['user_id'], 'Withdrawal Rejected ❌', f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
+            create_notification(withdrawal['user_id'], 'Withdrawal Rejected ❌', 
+                f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
+            
+            try:
+                send_withdrawal_rejected_email(user, withdrawal['amount'], withdrawal['currency'], reason)
+            except Exception as e:
+                logger.error(f"Failed to send withdrawal rejection email: {e}")
+            
             message = 'Withdrawal rejected'
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
@@ -1083,10 +1598,7 @@ def admin_get_investments():
         return handle_preflight()
     
     if investments_collection is None:
-        return jsonify({
-            'success': True,
-            'data': {'investments': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -1099,29 +1611,25 @@ def admin_get_investments():
             query['status'] = status
         
         total = investments_collection.count_documents(query)
-        investments = list(investments_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        investments = list(investments_collection.find(query).sort('start_date', -1).skip(skip).limit(limit))
         
         result_investments = []
         for inv in investments:
-            try:
-                inv['_id'] = str(inv['_id'])
-                if 'start_date' in inv and isinstance(inv['start_date'], datetime):
-                    inv['start_date'] = inv['start_date'].isoformat()
-                if 'end_date' in inv and isinstance(inv['end_date'], datetime):
-                    inv['end_date'] = inv['end_date'].isoformat()
-                
-                if users_collection is not None and 'user_id' in inv:
-                    try:
-                        user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-                        inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-                    except:
-                        inv['username'] = 'Unknown'
-                else:
+            inv['_id'] = str(inv['_id'])
+            if 'start_date' in inv and isinstance(inv['start_date'], datetime):
+                inv['start_date'] = inv['start_date'].isoformat()
+            if 'end_date' in inv and isinstance(inv['end_date'], datetime):
+                inv['end_date'] = inv['end_date'].isoformat()
+            
+            if users_collection is not None and 'user_id' in inv:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
+                    inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
                     inv['username'] = 'Unknown'
-                result_investments.append(inv)
-            except Exception as e:
-                logger.error(f"Error processing investment: {e}")
-                continue
+            else:
+                inv['username'] = 'Unknown'
+            result_investments.append(inv)
         
         response = jsonify({
             'success': True, 
@@ -1135,10 +1643,7 @@ def admin_get_investments():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get investments error: {e}", exc_info=True)
-        return jsonify({
-            'success': True,
-            'data': {'investments': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
 
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
@@ -1147,10 +1652,7 @@ def admin_get_transactions():
         return handle_preflight()
     
     if transactions_collection is None:
-        return jsonify({
-            'success': True,
-            'data': {'transactions': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -1167,26 +1669,22 @@ def admin_get_transactions():
         
         result_transactions = []
         for tx in transactions:
-            try:
-                tx['_id'] = str(tx['_id'])
-                if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                    tx['created_at'] = tx['created_at'].isoformat()
-                
-                if users_collection is not None and 'user_id' in tx:
-                    try:
-                        user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-                        tx['user'] = {
-                            'username': user.get('username', 'Unknown') if user else 'Unknown',
-                            'email': user.get('email', '') if user else ''
-                        }
-                    except:
-                        tx['user'] = {'username': 'Unknown', 'email': ''}
-                else:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
+                tx['created_at'] = tx['created_at'].isoformat()
+            
+            if users_collection is not None and 'user_id' in tx:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                    tx['user'] = {
+                        'username': user.get('username', 'Unknown') if user else 'Unknown',
+                        'email': user.get('email', '') if user else ''
+                    }
+                except:
                     tx['user'] = {'username': 'Unknown', 'email': ''}
-                result_transactions.append(tx)
-            except Exception as e:
-                logger.error(f"Error processing transaction: {e}")
-                continue
+            else:
+                tx['user'] = {'username': 'Unknown', 'email': ''}
+            result_transactions.append(tx)
         
         response = jsonify({
             'success': True,
@@ -1200,10 +1698,7 @@ def admin_get_transactions():
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Get admin transactions error: {e}", exc_info=True)
-        return jsonify({
-            'success': True,
-            'data': {'transactions': [], 'total': 0, 'page': 1, 'pages': 1}
-        }), 200
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
 
 @app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
