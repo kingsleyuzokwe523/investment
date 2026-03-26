@@ -104,15 +104,27 @@ email_logs_collection = None
 referral_stats_collection = None
 
 def init_mongo():
-    """Initialize MongoDB connection properly"""
+    """Initialize MongoDB connection with enhanced error handling"""
     global client, db, users_collection, investments_collection, transactions_collection
     global deposits_collection, withdrawals_collection, notifications_collection, kyc_collection
     global support_tickets_collection, admin_logs_collection, settings_collection, email_logs_collection, referral_stats_collection
     
     try:
-        logger.info("🔄 Connecting to MongoDB...")
-        client = MongoClient(app.config['MONGO_URI'], serverSelectionTimeoutMS=5000)
+        logger.info("🔄 Attempting to connect to MongoDB...")
+        
+        # Get MongoDB URI with validation
+        mongo_uri = app.config['MONGO_URI']
+        if not mongo_uri or mongo_uri == 'mongodb://localhost:27017/':
+            logger.warning("⚠️ Using default MongoDB URI")
+        
+        # Connect with timeout
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000)
+        
+        # Test connection
         client.admin.command('ping')
+        logger.info("✅ MongoDB ping successful")
+        
+        # Initialize database
         db = client['veloxtrades_db']
         
         # Initialize collections
@@ -128,35 +140,66 @@ def init_mongo():
         settings_collection = db['platform_settings']
         email_logs_collection = db['email_logs']
         referral_stats_collection = db['referral_stats']
+        logger.info("✅ All collections initialized")
         
-        # Create indexes
-        users_collection.create_index('email', unique=True, sparse=True)
-        users_collection.create_index('username', unique=True, sparse=True)
-        users_collection.create_index('referral_code', unique=True, sparse=True)
-        transactions_collection.create_index('user_id')
-        transactions_collection.create_index('created_at')
-        support_tickets_collection.create_index('user_id')
-        support_tickets_collection.create_index('status')
+        # Create indexes (with error handling)
+        try:
+            users_collection.create_index('email', unique=True, sparse=True)
+            users_collection.create_index('username', unique=True, sparse=True)
+            users_collection.create_index('referral_code', unique=True, sparse=True)
+            transactions_collection.create_index('user_id')
+            transactions_collection.create_index('created_at')
+            support_tickets_collection.create_index('user_id')
+            support_tickets_collection.create_index('status')
+            logger.info("✅ Database indexes created")
+        except Exception as e:
+            logger.warning(f"⚠️ Index creation warning: {e}")
+            # Don't fail if indexes already exist
         
         # Initialize settings if not exists
-        if settings_collection.count_documents({}) == 0:
-            settings_collection.insert_one(PLATFORM_SETTINGS)
+        try:
+            if settings_collection.count_documents({}) == 0:
+                settings_collection.insert_one(PLATFORM_SETTINGS)
+                logger.info("✅ Default platform settings initialized")
+        except Exception as e:
+            logger.error(f"❌ Error initializing settings: {e}")
+            # Continue even if settings init fails
         
         logger.info("✅ MongoDB Connected Successfully!")
         return True
+        
     except Exception as e:
         logger.error(f"❌ MongoDB Connection Error: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 # Initialize MongoDB
 mongo_connected = init_mongo()
 
 @app.before_request
-def before_request():
-    """Check MongoDB connection before each request"""
-    global mongo_connected
-    if not mongo_connected:
+def ensure_db_connection():
+    """Ensure database is connected before processing requests"""
+    global mongo_connected, users_collection
+    
+    # Skip for health endpoints to avoid infinite loops
+    if request.path in ['/health', '/api/health', '/api/db-health', '/api/test-db']:
+        return
+    
+    # Check if collections are initialized
+    if users_collection is None:
+        logger.warning(f"⚠️ Database not connected for request: {request.path}")
+        
+        # Try to reconnect
+        global mongo_connected
         mongo_connected = init_mongo()
+        
+        if users_collection is None:
+            # Return error for API endpoints
+            if request.path.startswith('/api/') and request.path not in ['/api/health', '/api/db-health', '/api/test-db']:
+                return jsonify({
+                    'success': False, 
+                    'message': 'Database connection error. Please try again later.'
+                }), 503
 
 @app.after_request
 def after_request(response):
@@ -552,6 +595,94 @@ scheduler.add_job(func=process_investment_profits, trigger="interval", hours=1, 
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 
+# ==================== ENHANCED DATABASE HEALTH CHECKS ====================
+@app.route('/api/db-health', methods=['GET', 'OPTIONS'])
+def db_health_check():
+    """Detailed database health check endpoint"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        health_status = {
+            'mongo_connected': users_collection is not None,
+            'collections': {},
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        
+        if users_collection is not None:
+            try:
+                # Check if collections are accessible
+                health_status['collections']['users'] = users_collection.count_documents({}) >= 0 if users_collection else False
+                health_status['collections']['settings'] = settings_collection.count_documents({}) >= 0 if settings_collection else False
+                health_status['collections']['transactions'] = transactions_collection.count_documents({}) >= 0 if transactions_collection else False
+                health_status['collections']['investments'] = investments_collection.count_documents({}) >= 0 if investments_collection else False
+                health_status['collections']['kyc'] = kyc_collection.count_documents({}) >= 0 if kyc_collection else False
+                health_status['collections']['tickets'] = support_tickets_collection.count_documents({}) >= 0 if support_tickets_collection else False
+                
+                # Get MongoDB server info
+                if client:
+                    server_info = client.server_info()
+                    health_status['server_version'] = server_info.get('version', 'unknown')
+                    health_status['server_ok'] = server_info.get('ok', 0) == 1
+                
+            except Exception as e:
+                health_status['error'] = str(e)
+                logger.error(f"Error checking collections: {e}")
+        
+        response = jsonify({'success': True, 'data': health_status})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/test-db', methods=['GET', 'OPTIONS'])
+def test_db_connection():
+    """Test endpoint to check database connection"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    try:
+        result = {
+            'collections_exist': {
+                'users': users_collection is not None,
+                'settings': settings_collection is not None,
+                'transactions': transactions_collection is not None,
+                'investments': investments_collection is not None,
+                'kyc': kyc_collection is not None,
+                'tickets': support_tickets_collection is not None
+            }
+        }
+        
+        if users_collection is not None:
+            try:
+                # Try a simple query
+                user_count = users_collection.count_documents({})
+                result['user_count'] = user_count
+                result['query_successful'] = True
+                
+                # Test settings collection
+                if settings_collection is not None:
+                    settings = settings_collection.find_one({})
+                    result['settings_found'] = settings is not None
+                    if settings:
+                        result['maintenance_mode'] = settings.get('maintenance_mode', False)
+                
+                # Test a sample user exists
+                sample_user = users_collection.find_one({})
+                result['has_users'] = sample_user is not None
+                
+            except Exception as e:
+                result['query_error'] = str(e)
+                result['query_successful'] = False
+        
+        response = jsonify({'success': True, 'data': result})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Test DB error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
@@ -618,47 +749,152 @@ def login():
     if request.method == 'OPTIONS':
         return handle_preflight()
     
+    # Check MongoDB connection first
     if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+        logger.error("❌ Login attempted but users_collection is None")
+        return jsonify({'success': False, 'message': 'Database connection error. Please try again later.'}), 503
     
     try:
+        # Log incoming request
+        logger.info(f"📝 Login attempt received from IP: {request.remote_addr}")
+        
         data = request.get_json()
         if not data:
+            logger.warning("⚠️ Login attempt with no data")
             return jsonify({'success': False, 'message': 'No credentials provided'}), 400
             
         username_or_email = data.get('username', '').strip().lower()
         password = data.get('password', '')
+        
+        # Log attempt (without password)
+        logger.info(f"🔐 Login attempt for: {username_or_email}")
+        
+        if not username_or_email or not password:
+            logger.warning(f"⚠️ Missing credentials for: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Username/email and password are required'}), 400
 
-        user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
+        # Find user
+        try:
+            user = users_collection.find_one({
+                '$or': [
+                    {'email': username_or_email}, 
+                    {'username': username_or_email}
+                ]
+            })
+        except Exception as e:
+            logger.error(f"❌ Database query error: {e}")
+            return jsonify({'success': False, 'message': 'Database error occurred'}), 500
 
-        if not user or not verify_password(user['password'], password):
+        # Check if user exists
+        if not user:
+            logger.warning(f"⚠️ User not found: {username_or_email}")
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
 
+        # Verify password
+        try:
+            password_valid = verify_password(user['password'], password)
+        except Exception as e:
+            logger.error(f"❌ Password verification error for user {username_or_email}: {e}")
+            return jsonify({'success': False, 'message': 'Authentication error'}), 500
+
+        if not password_valid:
+            logger.warning(f"⚠️ Invalid password for user: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+
+        # Check if account is banned
         if user.get('is_banned', False):
-            return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
+            logger.warning(f"⚠️ Banned account attempted login: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Account has been suspended. Contact support.'}), 403
 
-        # Check maintenance mode
-        settings = settings_collection.find_one({}) if settings_collection else PLATFORM_SETTINGS
-        if settings and settings.get('maintenance_mode', False) and not user.get('is_admin', False):
-            return jsonify({'success': False, 'message': settings.get('maintenance_message', 'Site under maintenance')}), 503
-
-        token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
-        users_collection.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
-
-        user_data = {
-            'id': str(user['_id']), 'username': user['username'], 'full_name': user.get('full_name', ''),
-            'email': user['email'], 'balance': user.get('wallet', {}).get('balance', 0.00),
-            'is_admin': user.get('is_admin', False), 'kyc_status': user.get('kyc_status', 'pending')
-        }
-
-        response = make_response(jsonify({'success': True, 'message': 'Login successful!', 'data': {'token': token, 'user': user_data}}))
-        response.set_cookie('veloxtrades_token', value=token, httponly=True, secure=True, samesite='Lax', 
-                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
+        # Check maintenance mode with safe error handling
+        maintenance_mode = False
+        maintenance_message = 'Site under maintenance. Please check back later.'
         
-        return add_cors_headers(response), 200
+        try:
+            if settings_collection is not None:
+                settings = settings_collection.find_one({})
+                if settings:
+                    maintenance_mode = settings.get('maintenance_mode', False)
+                    maintenance_message = settings.get('maintenance_message', maintenance_message)
+                    logger.info(f"📊 Maintenance mode status: {maintenance_mode}")
+            else:
+                logger.warning("⚠️ settings_collection is None, using default settings")
+        except Exception as e:
+            logger.error(f"❌ Error fetching settings: {e}")
+            # Continue with default settings if error occurs
+        
+        # Block non-admin users during maintenance
+        if maintenance_mode and not user.get('is_admin', False):
+            logger.info(f"🚫 Maintenance mode blocked login for: {username_or_email}")
+            return jsonify({'success': False, 'message': maintenance_message}), 503
+
+        # Generate JWT token
+        try:
+            token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
+            logger.info(f"✅ JWT token created for user: {username_or_email}")
+        except Exception as e:
+            logger.error(f"❌ Token creation error: {e}")
+            return jsonify({'success': False, 'message': 'Authentication error'}), 500
+
+        # Update last login
+        try:
+            users_collection.update_one(
+                {'_id': user['_id']}, 
+                {'$set': {'last_login': datetime.now(timezone.utc)}}
+            )
+            logger.info(f"📅 Updated last login for: {username_or_email}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to update last login: {e}")
+            # Don't fail login if this fails
+
+        # Prepare user data for response
+        try:
+            user_data = {
+                'id': str(user['_id']),
+                'username': user['username'],
+                'full_name': user.get('full_name', ''),
+                'email': user['email'],
+                'balance': user.get('wallet', {}).get('balance', 0.00),
+                'is_admin': user.get('is_admin', False),
+                'kyc_status': user.get('kyc_status', 'pending'),
+                'is_verified': user.get('is_verified', False)
+            }
+        except Exception as e:
+            logger.error(f"❌ Error preparing user data: {e}")
+            return jsonify({'success': False, 'message': 'Error preparing response'}), 500
+
+        # Create response
+        try:
+            response_data = {
+                'success': True, 
+                'message': 'Login successful!', 
+                'data': {'token': token, 'user': user_data}
+            }
+            
+            response = make_response(jsonify(response_data))
+            
+            # Set cookie with proper security settings
+            response.set_cookie(
+                'veloxtrades_token', 
+                value=token, 
+                httponly=True, 
+                secure=True, 
+                samesite='Lax',
+                max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
+                path='/'
+            )
+            
+            logger.info(f"✅ Login successful for user: {username_or_email}")
+            return add_cors_headers(response), 200
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating response: {e}")
+            return jsonify({'success': False, 'message': 'Error creating response'}), 500
+
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        return jsonify({'success': False, 'message': 'Login failed'}), 500
+        logger.error(f"❌ Unexpected login error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': 'An unexpected error occurred. Please try again.'}), 500
 
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
@@ -1590,7 +1826,7 @@ def serve_index():
         'success': True, 
         'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
-        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/verify-token']
+        'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/verify-token', '/api/db-health', '/api/test-db']
     })
     return add_cors_headers(response)
 
@@ -1614,6 +1850,7 @@ if __name__ == '__main__':
     print("🎫 Support Tickets: Enabled")
     print("📊 Referral System: Enabled")
     print("📧 Email Logs: Enabled")
+    print("🔍 Database Health Checks: Enabled at /api/db-health and /api/test-db")
     print("=" * 70)
     print("📝 TO CREATE ADMIN:")
     print(f"   Visit: {BACKEND_URL}/api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
