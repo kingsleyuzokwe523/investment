@@ -130,16 +130,19 @@ def init_mongo():
         referral_stats_collection = db['referral_stats']
         
         # Create indexes
-        users_collection.create_index('email', unique=True, sparse=True)
-        users_collection.create_index('username', unique=True, sparse=True)
-        users_collection.create_index('referral_code', unique=True, sparse=True)
-        transactions_collection.create_index('user_id')
-        transactions_collection.create_index('created_at')
-        support_tickets_collection.create_index('user_id')
-        support_tickets_collection.create_index('status')
+        if users_collection is not None:
+            users_collection.create_index('email', unique=True, sparse=True)
+            users_collection.create_index('username', unique=True, sparse=True)
+            users_collection.create_index('referral_code', unique=True, sparse=True)
+        if transactions_collection is not None:
+            transactions_collection.create_index('user_id')
+            transactions_collection.create_index('created_at')
+        if support_tickets_collection is not None:
+            support_tickets_collection.create_index('user_id')
+            support_tickets_collection.create_index('status')
         
         # Initialize settings if not exists
-        if settings_collection.count_documents({}) == 0:
+        if settings_collection is not None and settings_collection.count_documents({}) == 0:
             settings_collection.insert_one(PLATFORM_SETTINGS)
             logger.info("✅ Default settings created")
         
@@ -504,7 +507,7 @@ def process_investment_profits():
                         {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}}
                     )
                     
-                    if transactions_collection:
+                    if transactions_collection is not None:
                         transactions_collection.insert_one({
                             'user_id': user_id, 'type': 'profit', 'amount': expected_profit,
                             'status': 'completed', 'description': f'Profit from {plan_name}',
@@ -685,6 +688,9 @@ def create_deposit():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
+    if deposits_collection is None or users_collection is None or transactions_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
     try:
         data = request.get_json()
         amount = float(data.get('amount', 0))
@@ -693,7 +699,9 @@ def create_deposit():
         wallet_address = data.get('wallet_address', '')
         
         # Get settings
-        settings = settings_collection.find_one({}) if settings_collection else None
+        settings = None
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
         min_deposit = settings.get('min_deposit', 10) if settings else 10
         max_deposit = settings.get('max_deposit', 100000) if settings else 100000
         
@@ -722,15 +730,16 @@ def create_deposit():
         deposits_collection.insert_one(deposit_data)
         
         # Record transaction
-        transactions_collection.insert_one({
-            'user_id': str(user['_id']),
-            'type': 'deposit',
-            'amount': amount,
-            'status': 'pending',
-            'description': f'Deposit request of ${amount:,.2f} via {crypto.upper()}',
-            'deposit_id': deposit_id,
-            'created_at': datetime.now(timezone.utc)
-        })
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
+                'user_id': str(user['_id']),
+                'type': 'deposit',
+                'amount': amount,
+                'status': 'pending',
+                'description': f'Deposit request of ${amount:,.2f} via {crypto.upper()}',
+                'deposit_id': deposit_id,
+                'created_at': datetime.now(timezone.utc)
+            })
         
         create_notification(user['_id'], 'Deposit Request Submitted', 
             f'Your deposit request of ${amount:,.2f} has been submitted and is pending approval.', 'info')
@@ -753,7 +762,9 @@ def get_user_deposits():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1)) if deposits_collection else []
+        deposits = []
+        if deposits_collection is not None:
+            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         
         for deposit in deposits:
             deposit['_id'] = str(deposit['_id'])
@@ -776,6 +787,9 @@ def create_withdrawal():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
+    if withdrawals_collection is None or users_collection is None or transactions_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
     try:
         data = request.get_json()
         amount = float(data.get('amount', 0))
@@ -786,7 +800,9 @@ def create_withdrawal():
             return jsonify({'success': False, 'message': 'Wallet address is required'}), 400
         
         # Get settings
-        settings = settings_collection.find_one({}) if settings_collection else None
+        settings = None
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
         min_withdrawal = settings.get('min_withdrawal', 50) if settings else 50
         max_withdrawal = settings.get('max_withdrawal', 50000) if settings else 50000
         withdrawal_fee = settings.get('withdrawal_fee', 0) if settings else 0
@@ -829,15 +845,16 @@ def create_withdrawal():
         )
         
         # Record transaction
-        transactions_collection.insert_one({
-            'user_id': str(user['_id']),
-            'type': 'withdrawal',
-            'amount': amount,
-            'status': 'pending',
-            'description': f'Withdrawal request of ${amount:,.2f} to {currency.upper()}',
-            'withdrawal_id': withdrawal_id,
-            'created_at': datetime.now(timezone.utc)
-        })
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
+                'user_id': str(user['_id']),
+                'type': 'withdrawal',
+                'amount': amount,
+                'status': 'pending',
+                'description': f'Withdrawal request of ${amount:,.2f} to {currency.upper()}',
+                'withdrawal_id': withdrawal_id,
+                'created_at': datetime.now(timezone.utc)
+            })
         
         create_notification(user['_id'], 'Withdrawal Request Submitted', 
             f'Your withdrawal request of ${amount:,.2f} has been submitted and is pending approval.', 'info')
@@ -860,7 +877,9 @@ def get_user_withdrawals():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1)) if withdrawals_collection else []
+        withdrawals = []
+        if withdrawals_collection is not None:
+            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         
         for withdrawal in withdrawals:
             withdrawal['_id'] = str(withdrawal['_id'])
@@ -882,6 +901,9 @@ def create_investment():
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if investments_collection is None or users_collection is None or transactions_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
         data = request.get_json()
@@ -926,15 +948,16 @@ def create_investment():
         result = investments_collection.insert_one(investment_data)
         
         # Record transaction
-        transactions_collection.insert_one({
-            'user_id': str(user['_id']),
-            'type': 'investment',
-            'amount': amount,
-            'status': 'completed',
-            'description': f'Investment in {plan["name"]}',
-            'investment_id': str(result.inserted_id),
-            'created_at': datetime.now(timezone.utc)
-        })
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
+                'user_id': str(user['_id']),
+                'type': 'investment',
+                'amount': amount,
+                'status': 'completed',
+                'description': f'Investment in {plan["name"]}',
+                'investment_id': str(result.inserted_id),
+                'created_at': datetime.now(timezone.utc)
+            })
         
         # Send notification
         create_notification(user['_id'], 'Investment Started!', 
@@ -964,7 +987,9 @@ def get_user_investments():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1)) if investments_collection else []
+        investments = []
+        if investments_collection is not None:
+            investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
         
         for inv in investments:
             inv['_id'] = str(inv['_id'])
@@ -990,9 +1015,11 @@ def get_transactions():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        transactions = list(transactions_collection.find(
-            {'user_id': str(user['_id'])}
-        ).sort('created_at', -1))
+        transactions = []
+        if transactions_collection is not None:
+            transactions = list(transactions_collection.find(
+                {'user_id': str(user['_id'])}
+            ).sort('created_at', -1))
         
         for tx in transactions:
             tx['_id'] = str(tx['_id'])
@@ -1017,23 +1044,34 @@ def user_dashboard():
     
     try:
         # Get active investments
-        active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'})) if investments_collection else []
+        active_investments = []
+        if investments_collection is not None:
+            active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'}))
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
         pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
         
         # Get recent transactions
-        recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10)) if transactions_collection else []
+        recent_transactions = []
+        if transactions_collection is not None:
+            recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10))
         for tx in recent_transactions:
             tx['_id'] = str(tx['_id'])
             if 'created_at' in tx:
                 tx['created_at'] = tx['created_at'].isoformat()
         
         # Get unread notifications count
-        unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False}) if notifications_collection else 0
+        unread_count = 0
+        if notifications_collection is not None:
+            unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
         
         # Get pending counts
-        pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'}) if deposits_collection else 0
-        pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'}) if withdrawals_collection else 0
+        pending_deposits = 0
+        if deposits_collection is not None:
+            pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        
+        pending_withdrawals = 0
+        if withdrawals_collection is not None:
+            pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
         
         dashboard_data = {
             'wallet': user.get('wallet', {'balance': 0.00, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}),
@@ -1067,6 +1105,9 @@ def get_notifications():
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if notifications_collection is None:
+        return jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}}), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -1109,6 +1150,9 @@ def mark_notification_read(notification_id):
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
+    if notifications_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
     try:
         result = notifications_collection.update_one(
             {'_id': ObjectId(notification_id), 'user_id': str(user['_id'])},
@@ -1132,25 +1176,25 @@ def admin_get_stats():
         return handle_preflight()
     
     try:
-        total_users = users_collection.count_documents({}) if users_collection else 0
+        total_users = users_collection.count_documents({}) if users_collection is not None else 0
         total_deposit_amount = 0
         total_withdrawal_amount = 0
         active_investments = 0
         pending_deposits = 0
         pending_withdrawals = 0
-        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection else 0
+        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection is not None else 0
         
-        if deposits_collection:
+        if deposits_collection is not None:
             approved_deposits = list(deposits_collection.find({'status': 'approved'}))
             total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
             pending_deposits = deposits_collection.count_documents({'status': 'pending'})
         
-        if withdrawals_collection:
+        if withdrawals_collection is not None:
             approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
             total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
             pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
         
-        if investments_collection:
+        if investments_collection is not None:
             active_investments = investments_collection.count_documents({'status': 'active'})
         
         response = jsonify({
@@ -1263,7 +1307,7 @@ def admin_adjust_balance(user_id):
         if result.modified_count == 0:
             return jsonify({'success': False, 'message': 'Failed to update balance'}), 500
         
-        if transactions_collection:
+        if transactions_collection is not None:
             transactions_collection.insert_one({
                 'user_id': str(user_id), 'type': 'adjustment', 'amount': abs(amount),
                 'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
@@ -1317,15 +1361,15 @@ def admin_delete_user(user_id):
             return jsonify({'success': False, 'message': 'User not found'}), 404
         username = user.get('username', 'Unknown')
         
-        if investments_collection:
+        if investments_collection is not None:
             investments_collection.delete_many({'user_id': str(user_id)})
-        if transactions_collection:
+        if transactions_collection is not None:
             transactions_collection.delete_many({'user_id': str(user_id)})
-        if deposits_collection:
+        if deposits_collection is not None:
             deposits_collection.delete_many({'user_id': str(user_id)})
-        if withdrawals_collection:
+        if withdrawals_collection is not None:
             withdrawals_collection.delete_many({'user_id': str(user_id)})
-        if notifications_collection:
+        if notifications_collection is not None:
             notifications_collection.delete_many({'user_id': str(user_id)})
         
         users_collection.delete_one({'_id': ObjectId(user_id)})
@@ -1417,7 +1461,7 @@ def admin_process_deposit(deposit_id):
             )
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
             
-            if transactions_collection:
+            if transactions_collection is not None:
                 transactions_collection.insert_one({
                     'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
                     'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved',
@@ -1438,7 +1482,7 @@ def admin_process_deposit(deposit_id):
             reason = data.get('reason', 'Not specified')
             deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
             
-            if transactions_collection:
+            if transactions_collection is not None:
                 transactions_collection.insert_one({
                     'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
                     'status': 'failed', 'description': f'Deposit of ${deposit["amount"]} rejected: {reason}',
@@ -1540,7 +1584,7 @@ def admin_process_withdrawal(withdrawal_id):
         if action == 'approve':
             withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
             
-            if transactions_collection:
+            if transactions_collection is not None:
                 transactions_collection.update_one(
                     {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
                     {'$set': {'status': 'completed', 'description': f'Withdrawal of ${withdrawal["amount"]} approved and sent'}},
@@ -1566,7 +1610,7 @@ def admin_process_withdrawal(withdrawal_id):
                 {'$inc': {'wallet.balance': withdrawal['amount']}}
             )
             
-            if transactions_collection:
+            if transactions_collection is not None:
                 transactions_collection.update_one(
                     {'user_id': withdrawal['user_id'], 'type': 'withdrawal', 'status': 'pending'},
                     {'$set': {'status': 'failed', 'description': f'Withdrawal of ${withdrawal["amount"]} rejected: {reason}'}},
@@ -1760,7 +1804,7 @@ def admin_broadcast_email():
         elif recipients_type == 'depositors':
             query = {'wallet.total_deposited': {'$gt': 0}}
         elif recipients_type == 'investors':
-            if investments_collection:
+            if investments_collection is not None:
                 active_investors = investments_collection.distinct('user_id', {'status': 'active'})
                 if active_investors:
                     query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
@@ -1788,10 +1832,12 @@ def reset_all_admin():
     if not secret_key or secret_key != ADMIN_RESET_SECRET:
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
     try:
-        if users_collection is not None:
-            users_collection.delete_many({'is_admin': True})
-            users_collection.delete_many({'username': 'admin'})
+        users_collection.delete_many({'is_admin': True})
+        users_collection.delete_many({'username': 'admin'})
         
         hashed_password = hash_password('admin123')
         
