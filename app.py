@@ -197,7 +197,7 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USER = 'kingsleyuzokwe523@gmail.com'
 EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
-EMAIL_FROM = 'admin@veloxtrades.ltd'
+EMAIL_FROM = 'Veloxtrades'
 
 # Email Templates with Styling
 def get_email_template(title, content, button_text=None, button_link=None):
