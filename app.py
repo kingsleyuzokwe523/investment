@@ -64,7 +64,6 @@ PLATFORM_SETTINGS = {
     'maintenance_mode': False,
     'maintenance_message': 'Site under maintenance. Please check back later.'
 }
-
 # ==================== CORS CONFIGURATION ====================
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
@@ -79,7 +78,7 @@ ALLOWED_ORIGINS = [
     "https://investment-gto3.onrender.com"
 ]
 
-# Configure CORS with proper settings
+# Configure CORS
 CORS(app, 
      origins=ALLOWED_ORIGINS,
      supports_credentials=True,
@@ -88,6 +87,25 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
+# Add this after CORS - IMPORTANT FOR ALL RESPONSES
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers to every response"""
+    origin = request.headers.get('Origin', '')
+    
+    # Allow all your domains
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        response.headers['Access-Control-Max-Age'] = '86400'
+    
+    # Security headers
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    
+    return response
 
 # ==================== MONGO DB CONNECTION ====================
 client = None
@@ -205,16 +223,24 @@ def after_request(response):
     
     return response
 
-def add_cors_headers(response):
-    """Helper to ensure CORS headers"""
-    origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    else:
-        response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
-
+@app.before_request
+def handle_preflight():
+    """Handle preflight OPTIONS requests"""
+    if request.method == 'OPTIONS':
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
+        
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Max-Age'] = '86400'
+        
+        return response
 # ==================== EMAIL CONFIGURATION ====================
 # ==================== EMAIL CONFIGURATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
@@ -3609,7 +3635,125 @@ def admin_create_investment():
         logger.error(f"Admin create investment error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
+# ==================== ADMIN RESEND EMAILS ENDPOINT ====================
 
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_emails():
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json() or {}
+        status_filter = data.get('status', 'approved')
+        
+        # Build query based on status filter
+        if status_filter == 'approved':
+            query = {'status': 'approved'}
+        elif status_filter == 'rejected':
+            query = {'status': 'rejected'}
+        else:
+            query = {'status': {'$in': ['approved', 'rejected']}}
+        
+        deposits = list(deposits_collection.find(query))
+        
+        if not deposits:
+            response = jsonify({
+                'success': True,
+                'message': 'No deposits found to resend emails',
+                'data': {'sent': 0, 'failed': 0}
+            })
+            return add_cors_headers(response)
+        
+        sent_count = 0
+        failed_count = 0
+        
+        for deposit in deposits:
+            try:
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                if not user:
+                    failed_count += 1
+                    continue
+                
+                if deposit['status'] == 'approved':
+                    email_sent = send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('transaction_hash', '')
+                    )
+                else:
+                    email_sent = send_deposit_rejected_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('rejection_reason', 'Not specified')
+                    )
+                
+                if email_sent:
+                    sent_count += 1
+                else:
+                    failed_count += 1
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Error resending email for deposit {deposit.get('deposit_id')}: {e}")
+        
+        response = jsonify({
+            'success': True,
+            'message': f'Emails resent: {sent_count} sent, {failed_count} failed',
+            'data': {'sent': sent_count, 'failed': failed_count}
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Resend emails error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_single_deposit_email(deposit_id):
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+        if not deposit:
+            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+        
+        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if deposit['status'] == 'approved':
+            email_sent = send_deposit_approved_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                deposit.get('transaction_hash', '')
+            )
+        elif deposit['status'] == 'rejected':
+            email_sent = send_deposit_rejected_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                deposit.get('rejection_reason', 'Not specified')
+            )
+        else:
+            return jsonify({'success': False, 'message': 'Deposit not processed yet'}), 400
+        
+        if email_sent:
+            response = jsonify({'success': True, 'message': 'Email resent successfully'})
+        else:
+            response = jsonify({'success': False, 'message': 'Failed to send email'}), 500
+        
+        return add_cors_headers(response)
+            
+    except Exception as e:
+        logger.error(f"Resend email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 @app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_create_transaction():
