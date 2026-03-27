@@ -839,6 +839,7 @@ def verify_referral():
 
 @app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
 def get_user_referral_info():
+    """Get user's referral code and stats"""
     if request.method == 'OPTIONS':
         return handle_preflight()
     
@@ -850,19 +851,32 @@ def get_user_referral_info():
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
+        # Get user's referral code
         referral_code = user.get('referral_code', '')
         
+        # Get users who used this referral code
         referred_users = list(users_collection.find(
             {'referred_by': referral_code},
             {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
         ).sort('created_at', -1))
         
+        # Get referral bonus settings
+        settings = None
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
+        referral_bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
+        
+        # Calculate commission for each referred user
         formatted_referrals = []
         total_commission = 0
         
         for ref in referred_users:
-            total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
-            commission = total_deposited * 0.05
+            # Safely get total_deposited
+            total_deposited = 0
+            if ref.get('wallet') and ref['wallet'].get('total_deposited'):
+                total_deposited = ref['wallet']['total_deposited']
+            
+            commission = total_deposited * (referral_bonus_percentage / 100)
             total_commission += commission
             
             formatted_referrals.append({
@@ -874,12 +888,12 @@ def get_user_referral_info():
                 'commission_earned': commission
             })
         
-        settings = settings_collection.find_one({}) if settings_collection else None
-        referral_bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
+        # Create the referral link
+        referral_link = f"{FRONTEND_URL}/register?ref={referral_code}"
         
         response_data = {
             'referral_code': referral_code,
-            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
+            'referral_link': referral_link,
             'referral_bonus_percentage': referral_bonus_percentage,
             'total_referrals': len(formatted_referrals),
             'total_commission': total_commission,
@@ -889,6 +903,10 @@ def get_user_referral_info():
         response = jsonify({'success': True, 'data': response_data})
         return add_cors_headers(response)
         
+    except Exception as e:
+        logger.error(f"Get referral info error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
     except Exception as e:
         logger.error(f"Get referral info error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -986,7 +1004,6 @@ def verify_token():
     return add_cors_headers(response)
 
 # ==================== USER DEPOSITS ====================
-@app.route('/api/deposits', methods=['POST', 'OPTIONS'])
 def create_deposit():
     if request.method == 'OPTIONS':
         return handle_preflight()
@@ -1000,11 +1017,15 @@ def create_deposit():
     
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+            
         amount = float(data.get('amount', 0))
         crypto = data.get('crypto', 'usdt')
         transaction_hash = data.get('transaction_hash', '').strip()
         wallet_address = data.get('wallet_address', '')
         
+        # Get settings
         settings = None
         if settings_collection is not None:
             settings = settings_collection.find_one({})
@@ -1033,8 +1054,9 @@ def create_deposit():
             'rejection_reason': None
         }
         
-        deposits_collection.insert_one(deposit_data)
+        result = deposits_collection.insert_one(deposit_data)
         
+        # Record transaction
         if transactions_collection is not None:
             transactions_collection.insert_one({
                 'user_id': str(user['_id']),
@@ -1049,14 +1071,21 @@ def create_deposit():
         create_notification(user['_id'], 'Deposit Request Submitted', 
             f'Your deposit request of ${amount:,.2f} has been submitted and is pending approval.', 'info')
         
-        response = jsonify({'success': True, 'message': 'Deposit request submitted', 
-                           'data': {'deposit_id': deposit_id}})
+        response = jsonify({
+            'success': True, 
+            'message': 'Deposit request submitted', 
+            'data': {
+                'deposit_id': deposit_id,
+                'amount': amount,
+                'status': 'pending'
+            }
+        })
         return add_cors_headers(response), 201
         
     except Exception as e:
         logger.error(f"Create deposit error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
-
 @app.route('/api/deposits', methods=['GET', 'OPTIONS'])
 def get_user_deposits():
     if request.method == 'OPTIONS':
@@ -1802,7 +1831,14 @@ def admin_get_deposits():
 @require_admin
 def admin_process_deposit(deposit_id):
     if request.method == 'OPTIONS':
-        return handle_preflight()
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        return response
     
     if deposits_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
@@ -1811,6 +1847,7 @@ def admin_process_deposit(deposit_id):
         data = request.get_json()
         action = data.get('action')
         reason = data.get('reason', 'Not specified')
+        send_email_notification = data.get('send_email', True)
         
         deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
         if not deposit:
@@ -1823,26 +1860,42 @@ def admin_process_deposit(deposit_id):
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
+            # Update user balance
             users_collection.update_one(
                 {'_id': ObjectId(deposit['user_id'])},
                 {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
             )
-            deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}})
+            deposits_collection.update_one(
+                {'_id': ObjectId(deposit_id)}, 
+                {'$set': {'status': 'approved', 'processed_at': datetime.now(timezone.utc)}}
+            )
             
             if transactions_collection is not None:
                 transactions_collection.insert_one({
-                    'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
-                    'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved',
+                    'user_id': deposit['user_id'], 
+                    'type': 'deposit', 
+                    'amount': deposit['amount'],
+                    'status': 'completed', 
+                    'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved',
                     'created_at': datetime.now(timezone.utc)
                 })
             
             create_notification(deposit['user_id'], 'Deposit Approved! ✅', 
                 f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
             
-            try:
-                send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
-            except Exception as e:
-                logger.error(f"Failed to send deposit approval email: {e}")
+            # Send email
+            if send_email_notification:
+                try:
+                    email_sent = send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('transaction_hash', '')
+                    )
+                    if email_sent:
+                        logger.info(f"✅ Deposit approval email sent to {user['email']}")
+                except Exception as e:
+                    logger.error(f"Error sending deposit approval email: {e}")
             
             # Add referral commission
             try:
@@ -1853,23 +1906,31 @@ def admin_process_deposit(deposit_id):
             message = 'Deposit approved successfully'
             
         elif action == 'reject':
-            reason = data.get('reason', 'Not specified')
-            deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}})
+            deposits_collection.update_one(
+                {'_id': ObjectId(deposit_id)}, 
+                {'$set': {'status': 'rejected', 'rejection_reason': reason, 'processed_at': datetime.now(timezone.utc)}}
+            )
             
             if transactions_collection is not None:
                 transactions_collection.insert_one({
-                    'user_id': deposit['user_id'], 'type': 'deposit', 'amount': deposit['amount'],
-                    'status': 'failed', 'description': f'Deposit of ${deposit["amount"]} rejected: {reason}',
+                    'user_id': deposit['user_id'], 
+                    'type': 'deposit', 
+                    'amount': deposit['amount'],
+                    'status': 'failed', 
+                    'description': f'Deposit of ${deposit["amount"]} rejected: {reason}',
                     'created_at': datetime.now(timezone.utc)
                 })
             
             create_notification(deposit['user_id'], 'Deposit Rejected ❌', 
                 f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             
-            try:
-                send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
-            except Exception as e:
-                logger.error(f"Failed to send deposit rejection email: {e}")
+            if send_email_notification:
+                try:
+                    email_sent = send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
+                    if email_sent:
+                        logger.info(f"✅ Deposit rejection email sent to {user['email']}")
+                except Exception as e:
+                    logger.error(f"Error sending deposit rejection email: {e}")
             
             message = 'Deposit rejected'
         else:
@@ -1877,6 +1938,7 @@ def admin_process_deposit(deposit_id):
         
         response = jsonify({'success': True, 'message': message})
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Process deposit error: {e}")
         logger.error(traceback.format_exc())
@@ -1885,6 +1947,7 @@ def admin_process_deposit(deposit_id):
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_email(deposit_id):
+    """Resend email for a specific deposit"""
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
@@ -1940,9 +2003,13 @@ def admin_resend_deposit_email(deposit_id):
         response = jsonify({'success': False, 'message': str(e)})
         return add_cors_headers(response), 500
 
+
+# FIXED BULK RESEND DEPOSIT EMAILS
+
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
+    """Resend emails for all existing processed deposits"""
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
@@ -1963,6 +2030,7 @@ def admin_resend_deposit_emails():
             data = {}
         status_filter = data.get('status', 'approved')
         
+        # Build query
         query = {}
         if status_filter == 'approved':
             query['status'] = 'approved'
@@ -1971,6 +2039,7 @@ def admin_resend_deposit_emails():
         elif status_filter == 'all':
             query['status'] = {'$in': ['approved', 'rejected']}
         
+        # Get all processed deposits
         deposits = list(deposits_collection.find(query))
         
         if not deposits:
