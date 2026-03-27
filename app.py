@@ -1702,24 +1702,42 @@ def user_dashboard():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
+        # Safely get wallet data
+        wallet = user.get('wallet', {})
+        if not isinstance(wallet, dict):
+            wallet = {'balance': 0, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}
+        
+        # Get active investments
         active_investments = []
         if investments_collection is not None:
             active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'}))
+        
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
         pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
         
+        # Get recent transactions
         recent_transactions = []
         if transactions_collection is not None:
             recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10))
-        for tx in recent_transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx:
-                tx['created_at'] = tx['created_at'].isoformat()
         
+        # Format transactions
+        formatted_transactions = []
+        for tx in recent_transactions:
+            formatted_transactions.append({
+                '_id': str(tx['_id']),
+                'type': tx.get('type', 'unknown'),
+                'amount': tx.get('amount', 0),
+                'status': tx.get('status', 'pending'),
+                'description': tx.get('description', ''),
+                'created_at': tx.get('created_at').isoformat() if tx.get('created_at') else None
+            })
+        
+        # Get notification count
         unread_count = 0
         if notifications_collection is not None:
             unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
         
+        # Get pending counts
         pending_deposits = 0
         if deposits_collection is not None:
             pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
@@ -1729,14 +1747,20 @@ def user_dashboard():
             pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
         
         dashboard_data = {
-            'wallet': user.get('wallet', {'balance': 0.00, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}),
+            'wallet': {
+                'balance': wallet.get('balance', 0),
+                'total_deposited': wallet.get('total_deposited', 0),
+                'total_withdrawn': wallet.get('total_withdrawn', 0),
+                'total_invested': wallet.get('total_invested', 0),
+                'total_profit': wallet.get('total_profit', 0)
+            },
             'investments': {
                 'total_active': total_active,
-                'total_profit': user.get('wallet', {}).get('total_profit', 0),
+                'total_profit': wallet.get('total_profit', 0),
                 'pending_profit': pending_profit,
                 'count': len(active_investments)
             },
-            'recent_transactions': recent_transactions,
+            'recent_transactions': formatted_transactions,
             'notification_count': unread_count,
             'kyc_status': user.get('kyc_status', 'pending'),
             'pending_requests': {
@@ -1747,10 +1771,22 @@ def user_dashboard():
         
         response = jsonify({'success': True, 'data': dashboard_data})
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Dashboard error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+        logger.error(traceback.format_exc())
+        # Return default data on error
+        return jsonify({
+            'success': True,
+            'data': {
+                'wallet': {'balance': 0, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0},
+                'investments': {'total_active': 0, 'total_profit': 0, 'pending_profit': 0, 'count': 0},
+                'recent_transactions': [],
+                'notification_count': 0,
+                'kyc_status': user.get('kyc_status', 'pending') if user else 'pending',
+                'pending_requests': {'deposits': 0, 'withdrawals': 0}
+            }
+        }), 200
 # ==================== USER NOTIFICATIONS ====================
 @app.route('/api/notifications', methods=['GET', 'OPTIONS'])
 def get_notifications():
@@ -1923,6 +1959,156 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
+
+def add_referral_commission(user_id, deposit_amount):
+    """Add referral commission to referrer when a deposit is made"""
+    try:
+        if users_collection is None:
+            return False
+        
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            logger.warning(f"User {user_id} not found for referral commission")
+            return False
+        
+        referred_by_code = user.get('referred_by')
+        if not referred_by_code:
+            return False
+        
+        referrer = users_collection.find_one({'referral_code': referred_by_code})
+        if not referrer:
+            logger.warning(f"Referrer with code {referred_by_code} not found")
+            return False
+        
+        # Get bonus percentage from settings
+        bonus_percentage = 5
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
+            if settings:
+                bonus_percentage = settings.get('referral_bonus', 5)
+        
+        commission = deposit_amount * (bonus_percentage / 100)
+        
+        if commission <= 0:
+            return False
+        
+        # Update referrer wallet
+        result = users_collection.update_one(
+            {'_id': referrer['_id']},
+            {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
+        )
+        
+        if result.modified_count > 0:
+            # Create transaction record
+            if transactions_collection is not None:
+                try:
+                    transactions_collection.insert_one({
+                        'user_id': str(referrer['_id']),
+                        'type': 'commission',
+                        'amount': commission,
+                        'status': 'completed',
+                        'description': f'Commission from {user["username"]}\'s deposit of ${deposit_amount:,.2f}',
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                except Exception as tx_error:
+                    logger.error(f"Failed to create commission transaction: {tx_error}")
+            
+            # Create notification
+            try:
+                create_notification(
+                    referrer['_id'],
+                    'Referral Commission! 🎉',
+                    f'You earned ${commission:,.2f} from {user["username"]}\'s deposit of ${deposit_amount:,.2f}!',
+                    'success'
+                )
+            except Exception as notif_error:
+                logger.error(f"Failed to create notification: {notif_error}")
+            
+            logger.info(f"✅ Added ${commission} commission to {referrer['username']} from {user['username']}'s deposit")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error adding referral commission: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+@app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
+def get_user_referral_info():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        referral_code = user.get('referral_code', '')
+        
+        # Fix: Find users who used this referral code
+        referred_users = list(users_collection.find(
+            {'referred_by': referral_code},
+            {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
+        ))
+        
+        formatted_referrals = []
+        total_commission = 0
+        
+        for ref in referred_users:
+            # Safely get total_deposited
+            wallet = ref.get('wallet', {})
+            total_deposited = wallet.get('total_deposited', 0) if isinstance(wallet, dict) else 0
+            commission = total_deposited * 0.05
+            total_commission += commission
+            
+            formatted_referrals.append({
+                'id': str(ref['_id']),
+                'username': ref.get('username', ''),
+                'full_name': ref.get('full_name', ''),
+                'joined': ref.get('created_at').isoformat() if ref.get('created_at') else None,
+                'total_deposited': total_deposited,
+                'commission_earned': commission
+            })
+        
+        # Get referral bonus percentage from settings
+        referral_bonus_percentage = 5  # default
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
+            if settings:
+                referral_bonus_percentage = settings.get('referral_bonus', 5)
+        
+        # Build response data
+        response_data = {
+            'referral_code': referral_code,
+            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
+            'referral_bonus_percentage': referral_bonus_percentage,
+            'total_referrals': len(formatted_referrals),
+            'total_commission': total_commission,
+            'referred_users': formatted_referrals
+        }
+        
+        # Log success for debugging
+        logger.info(f"✅ Referral info loaded for user {user['username']}: {len(formatted_referrals)} referrals, ${total_commission} commission")
+        
+        response = jsonify({'success': True, 'data': response_data})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get referral info error: {e}")
+        logger.error(traceback.format_exc())
+        # Return empty data instead of error to prevent dashboard crash
+        return jsonify({
+            'success': True, 
+            'data': {
+                'referral_code': user.get('referral_code', 'N/A'),
+                'referral_link': f"{FRONTEND_URL}/register?ref={user.get('referral_code', '')}",
+                'referral_bonus_percentage': 5,
+                'total_referrals': 0,
+                'total_commission': 0,
+                'referred_users': []
+            }
+        }), 200
 # ==================== ADMIN KYC MANAGEMENT ENDPOINTS ====================
 
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
