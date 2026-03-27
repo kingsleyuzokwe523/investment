@@ -377,7 +377,67 @@ INVESTMENT_PLANS = {
     'professional': {'name': 'Professional Plan', 'roi': 35, 'duration_hours': 96, 'min_deposit': 5001, 'max_deposit': 10000},
     'classic': {'name': 'Classic Plan', 'roi': 50, 'duration_hours': 144, 'min_deposit': 10001, 'max_deposit': float('inf')}
 }
-
+@app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
+def get_user_referral_info():
+    """Get user's referral code and stats"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        # Get user's referral code
+        referral_code = user.get('referral_code', '')
+        
+        # Get users who used this referral code
+        referred_users = list(users_collection.find(
+            {'referred_by': referral_code},
+            {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
+        ).sort('created_at', -1))
+        
+        # Format referred users
+        formatted_referrals = []
+        total_commission = 0
+        
+        for ref in referred_users:
+            # Calculate commission earned from this referral
+            total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
+            commission = total_deposited * 0.05  # 5% commission
+            total_commission += commission
+            
+            formatted_referrals.append({
+                'id': str(ref['_id']),
+                'username': ref.get('username', ''),
+                'full_name': ref.get('full_name', ''),
+                'joined': ref.get('created_at').isoformat() if ref.get('created_at') else None,
+                'total_deposited': total_deposited,
+                'commission_earned': commission
+            })
+        
+        # Get referral bonus settings
+        settings = settings_collection.find_one({}) if settings_collection else None
+        referral_bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
+        
+        response_data = {
+            'referral_code': referral_code,
+            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
+            'referral_bonus_percentage': referral_bonus_percentage,
+            'total_referrals': len(formatted_referrals),
+            'total_commission': total_commission,
+            'referred_users': formatted_referrals
+        }
+        
+        response = jsonify({'success': True, 'data': response_data})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get referral info error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 # ==================== EMAIL TEMPLATES ====================
 def get_email_template(title, content, button_text=None, button_link=None):
     """Return styled HTML email template"""
@@ -1440,7 +1500,217 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
+@app.route('/api/admin/referral-stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_referral_stats():
+    """Get referral statistics for admin"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        # Get all users with referral codes
+        all_users = list(users_collection.find(
+            {},
+            {'_id': 1, 'username': 1, 'email': 1, 'full_name': 1, 'referral_code': 1, 'referred_by': 1, 'created_at': 1, 'wallet.total_deposited': 1}
+        ))
+        
+        # Build referral network
+        referral_network = []
+        for user in all_users:
+            referral_code = user.get('referral_code', '')
+            
+            # Find users referred by this user
+            referrals = [u for u in all_users if u.get('referred_by') == referral_code]
+            
+            # Calculate total commission from referrals
+            total_commission = 0
+            for ref in referrals:
+                total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
+                total_commission += total_deposited * 0.05
+            
+            referral_network.append({
+                'user_id': str(user['_id']),
+                'username': user.get('username', ''),
+                'email': user.get('email', ''),
+                'full_name': user.get('full_name', ''),
+                'referral_code': referral_code,
+                'referred_by': user.get('referred_by', 'None'),
+                'joined': user.get('created_at').isoformat() if user.get('created_at') else None,
+                'total_deposited': user.get('wallet', {}).get('total_deposited', 0),
+                'referrals_count': len(referrals),
+                'total_commission': total_commission,
+                'referrals': [{
+                    'username': r.get('username', ''),
+                    'email': r.get('email', ''),
+                    'joined': r.get('created_at').isoformat() if r.get('created_at') else None,
+                    'total_deposited': r.get('wallet', {}).get('total_deposited', 0)
+                } for r in referrals]
+            })
+        
+        # Sort by referrals count
+        referral_network.sort(key=lambda x: x['referrals_count'], reverse=True)
+        
+        # Get top referrers
+        top_referrers = referral_network[:10]
+        
+        # Get total stats
+        total_users = len(all_users)
+        users_with_referrals = len([u for u in referral_network if u['referrals_count'] > 0])
+        total_referrals = sum(u['referrals_count'] for u in referral_network)
+        total_commission_paid = sum(u['total_commission'] for u in referral_network)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'stats': {
+                    'total_users': total_users,
+                    'users_with_referrals': users_with_referrals,
+                    'total_referrals': total_referrals,
+                    'total_commission_paid': total_commission_paid,
+                    'top_referrer': top_referrers[0] if top_referrers else None
+                },
+                'top_referrers': top_referrers,
+                'referral_network': referral_network
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get referral stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
+
+@app.route('/api/admin/add-referral-commission', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_add_referral_commission():
+    """Add referral commission to a user"""
+    if request.method == 'OPTIONS':
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        return response
+    
+    if users_collection is None or transactions_collection is None:
+        response = jsonify({'success': False, 'message': 'Database connection error'})
+        return add_cors_headers(response), 500
+    
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        amount = float(data.get('amount', 0))
+        referrer_username = data.get('referrer_username', '')
+        
+        if not user_id:
+            response = jsonify({'success': False, 'message': 'User ID required'})
+            return add_cors_headers(response), 400
+        
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            response = jsonify({'success': False, 'message': 'User not found'})
+            return add_cors_headers(response), 404
+        
+        # Update balance
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$inc': {'wallet.balance': amount, 'wallet.total_profit': amount}}
+        )
+        
+        # Create transaction
+        transactions_collection.insert_one({
+            'user_id': user_id,
+            'type': 'commission',
+            'amount': amount,
+            'status': 'completed',
+            'description': f'Referral commission from {referrer_username} (Admin added)',
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        create_notification(user_id, 'Referral Commission! 🎉', 
+            f'You earned ${amount:,.2f} in referral commission!', 'success')
+        
+        response = jsonify({'success': True, 'message': f'Commission added: ${amount}'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Add commission error: {e}")
+        response = jsonify({'success': False, 'message': str(e)})
+        return add_cors_headers(response), 500
+
+
+@app.route('/api/admin/give-referral-bonus/<user_id>', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_give_referral_bonus(user_id):
+    """Give referral bonus to a user based on their referrals' deposits"""
+    if request.method == 'OPTIONS':
+        return handle_preflight()
+    
+    if users_collection is None or transactions_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        referral_code = user.get('referral_code', '')
+        if not referral_code:
+            return jsonify({'success': False, 'message': 'User has no referral code'}), 400
+        
+        # Get all referred users
+        referred_users = list(users_collection.find({'referred_by': referral_code}))
+        
+        if not referred_users:
+            return jsonify({'success': False, 'message': 'No referrals found'}), 400
+        
+        # Calculate total commission
+        settings = settings_collection.find_one({}) if settings_collection else None
+        bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
+        
+        total_commission = 0
+        for ref in referred_users:
+            total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
+            commission = total_deposited * (bonus_percentage / 100)
+            total_commission += commission
+        
+        if total_commission <= 0:
+            return jsonify({'success': False, 'message': 'No commission to give'}), 400
+        
+        # Add bonus to user balance
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$inc': {'wallet.balance': total_commission, 'wallet.total_profit': total_commission}}
+        )
+        
+        # Create transaction
+        transactions_collection.insert_one({
+            'user_id': user_id,
+            'type': 'bonus',
+            'amount': total_commission,
+            'status': 'completed',
+            'description': f'Referral bonus from {len(referred_users)} referrals',
+            'created_at': datetime.now(timezone.utc)
+        })
+        
+        create_notification(user_id, 'Referral Bonus! 🎉', 
+            f'You earned ${total_commission:,.2f} from {len(referred_users)} referrals!', 'success')
+        
+        response = jsonify({
+            'success': True,
+            'message': f'Added ${total_commission:,.2f} bonus to {user["username"]}',
+            'data': {'bonus_amount': total_commission, 'referrals_count': len(referred_users)}
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Give referral bonus error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
