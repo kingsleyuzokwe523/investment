@@ -88,6 +88,7 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
+
 # ==================== MONGO DB CONNECTION ====================
 client = None
 db = None
@@ -159,7 +160,6 @@ def init_mongo():
 
 # Initialize MongoDB
 mongo_connected = init_mongo()
-
 @app.before_request
 def before_request():
     """Check MongoDB connection and handle preflight requests"""
@@ -167,12 +167,13 @@ def before_request():
     if not mongo_connected:
         mongo_connected = init_mongo()
     
-    # Handle preflight requests
+    # Handle preflight requests - THIS IS CRITICAL FOR CORS
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
         
-        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+        # Allow all your domains
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
             response.headers['Access-Control-Allow-Origin'] = origin
         else:
             response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
@@ -183,21 +184,24 @@ def before_request():
         response.headers['Access-Control-Max-Age'] = '86400'
         
         return response
-
+# Add this AFTER CORS configuration
 @app.after_request
 def after_request(response):
     """Add security headers and CORS headers"""
-    response.headers.add('X-Content-Type-Options', 'nosniff')
-    response.headers.add('X-Frame-Options', 'DENY')
-    response.headers.add('X-XSS-Protection', '1; mode=block')
-    
-    # CORS headers - Always add for all responses
     origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+    
+    # Allow all your domains
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        response.headers['Access-Control-Max-Age'] = '86400'
+    
+    # Security headers
+    response.headers.add('X-Content-Type-Options', 'nosniff')
+    response.headers.add('X-Frame-Options', 'DENY')
+    response.headers.add('X-XSS-Protection', '1; mode=block')
     
     return response
 
@@ -3135,6 +3139,74 @@ def admin_resend_deposit_email(deposit_id):
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN BROADCAST ENDPOINTS ====================
+
+@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_broadcast_email():
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        recipients_type = data.get('recipients', 'all')
+        subject = data.get('subject')
+        message = data.get('message')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        query = {}
+        if recipients_type == 'active':
+            query = {'is_banned': False}
+        elif recipients_type == 'depositors':
+            query = {'wallet.total_deposited': {'$gt': 0}}
+        elif recipients_type == 'investors':
+            if investments_collection is not None:
+                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
+                if active_investors:
+                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
+                else:
+                    query = {'_id': {'$in': []}}
+        
+        users = list(users_collection.find(query))
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                <h1>Veloxtrades</h1>
+            </div>
+            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
+                <h2>{subject}</h2>
+                <p>{message.replace(chr(10), '<br>')}</p>
+                <hr style="margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
+            </div>
+        </div>
+        """
+        
+        sent_count = 0
+        for user in users:
+            try:
+                if send_email(user['email'], subject, message, html_body):
+                    create_notification(user['_id'], subject, message, 'info')
+                    sent_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send to {user['email']}: {e}")
+        
+        response = jsonify({
+            'success': True, 
+            'message': f'Broadcast sent to {sent_count} out of {len(users)} users', 
+            'data': {'sent': sent_count, 'total': len(users)}
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
@@ -3767,62 +3839,7 @@ def admin_send_email():
         logger.error(f"Send email error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_broadcast_email():
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        recipients_type = data.get('recipients', 'all')
-        subject = data.get('subject')
-        message = data.get('message')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        query = {}
-        if recipients_type == 'active':
-            query = {'is_banned': False}
-        elif recipients_type == 'depositors':
-            query = {'wallet.total_deposited': {'$gt': 0}}
-        elif recipients_type == 'investors':
-            if investments_collection is not None:
-                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-                if active_investors:
-                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
-                else:
-                    query = {'_id': {'$in': []}}
-        
-        users = list(users_collection.find(query))
-        
-        html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
-                <h1>Veloxtrades</h1>
-            </div>
-            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
-                <h2>{subject}</h2>
-                <p>{message.replace(chr(10), '<br>')}</p>
-                <hr style="margin: 20px 0;">
-                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
-            </div>
-        </div>
-        """
-        
-        sent_count = 0
-        for user in users:
-            if send_email(user['email'], subject, message, html_body):
-                create_notification(user['_id'], subject, message, 'info')
-                sent_count += 1
-        
-        response = jsonify({'success': True, 'message': f'Broadcast sent to {sent_count} users', 'data': {'count': sent_count}})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @app.route('/api/admin/reset-all', methods=['GET'])
 def reset_all_admin():
