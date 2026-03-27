@@ -212,11 +212,12 @@ def add_cors_headers(response):
     return response
 
 # ==================== EMAIL CONFIGURATION ====================
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USER = 'kingsleyuzokwe523@gmail.com'
-EMAIL_PASSWORD = 'aonjmqllcpuwlwkp'
-EMAIL_FROM = 'Veloxtrades'
+# ==================== EMAIL CONFIGURATION ====================
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
+EMAIL_USER = os.getenv('EMAIL_USER', '')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
 
 def send_email(to_email, subject, body, html_body=None, max_retries=3):
     """Send email with logging and retry logic"""
@@ -275,7 +276,405 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
                 return False
     
     return False
+# ==================== SUPPORT TICKET ENDPOINTS ====================
 
+@app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
+def create_ticket():
+    """Create a new support ticket"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        subject = data.get('subject', '').strip()
+        message = data.get('message', '').strip()
+        category = data.get('category', 'general')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        # Generate ticket ID
+        ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
+        
+        ticket_data = {
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'subject': subject,
+            'message': message,
+            'category': category,
+            'priority': data.get('priority', 'medium'),
+            'status': 'open',
+            'created_at': datetime.now(timezone.utc),
+            'updated_at': datetime.now(timezone.utc),
+            'messages': [
+                {
+                    'sender': 'user',
+                    'sender_name': user['username'],
+                    'message': message,
+                    'created_at': datetime.now(timezone.utc)
+                }
+            ]
+        }
+        
+        result = support_tickets_collection.insert_one(ticket_data)
+        
+        # Create notification
+        create_notification(
+            user['_id'],
+            f'Ticket Created: {ticket_id}',
+            f'Your support ticket has been created. We will respond within 24 hours.',
+            'info'
+        )
+        
+        response = jsonify({
+            'success': True,
+            'message': 'Support ticket created successfully',
+            'data': {
+                'ticket_id': ticket_id,
+                'status': 'open'
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"Create ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
+def get_tickets():
+    """Get all tickets for logged in user"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        query = {'user_id': str(user['_id'])}
+        
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            # Remove messages from list view
+            ticket.pop('messages', None)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get tickets error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
+def get_ticket(ticket_id):
+    """Get single ticket details with messages"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        ticket['_id'] = str(ticket['_id'])
+        if ticket.get('created_at'):
+            ticket['created_at'] = ticket['created_at'].isoformat()
+        if ticket.get('updated_at'):
+            ticket['updated_at'] = ticket['updated_at'].isoformat()
+        
+        # Format messages
+        for msg in ticket.get('messages', []):
+            if msg.get('created_at'):
+                msg['created_at'] = msg['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': ticket})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
+def reply_ticket(ticket_id):
+    """Reply to a support ticket"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        
+        if not message:
+            return jsonify({'success': False, 'message': 'Message is required'}), 400
+        
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Cannot reply to a closed ticket'}), 400
+        
+        # Add reply
+        reply = {
+            'sender': 'user',
+            'sender_name': user['username'],
+            'message': message,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$push': {'messages': reply},
+                '$set': {
+                    'updated_at': datetime.now(timezone.utc),
+                    'status': 'open'
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Reply ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
+def close_ticket(ticket_id):
+    """Close a support ticket"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'closed',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Ticket closed successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Close ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== KYC VERIFICATION ENDPOINTS ====================
+
+@app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
+def submit_kyc():
+    """Submit KYC documents for verification"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        # Required fields
+        full_name = data.get('full_name', '').strip()
+        date_of_birth = data.get('date_of_birth', '')
+        country = data.get('country', '')
+        id_type = data.get('id_type', '')
+        id_number = data.get('id_number', '')
+        id_front_url = data.get('id_front_url', '')
+        
+        if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
+            return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
+        
+        # Check existing KYC
+        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
+        if existing:
+            status = existing.get('status', 'pending')
+            if status == 'pending':
+                return jsonify({'success': False, 'message': 'You already have a pending KYC application'}), 400
+            elif status == 'approved':
+                return jsonify({'success': False, 'message': 'Your KYC is already verified'}), 400
+        
+        # Create KYC record
+        kyc_data = {
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'full_name': full_name,
+            'date_of_birth': date_of_birth,
+            'country': country,
+            'id_type': id_type,
+            'id_number': id_number,
+            'id_front_url': id_front_url,
+            'id_back_url': data.get('id_back_url', ''),
+            'selfie_url': data.get('selfie_url', ''),
+            'address': data.get('address', ''),
+            'status': 'pending',
+            'submitted_at': datetime.now(timezone.utc),
+            'reviewed_at': None,
+            'rejection_reason': None
+        }
+        
+        result = kyc_collection.insert_one(kyc_data)
+        
+        # Update user status
+        users_collection.update_one(
+            {'_id': user['_id']},
+            {'$set': {'kyc_status': 'pending'}}
+        )
+        
+        # Create notification
+        create_notification(
+            user['_id'],
+            'KYC Application Submitted',
+            'Your KYC documents have been submitted. Review typically takes 24-48 hours.',
+            'info'
+        )
+        
+        response = jsonify({
+            'success': True,
+            'message': 'KYC application submitted successfully',
+            'data': {
+                'kyc_id': str(result.inserted_id),
+                'status': 'pending'
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"KYC submit error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/kyc/status', methods=['GET', 'OPTIONS'])
+def get_kyc_status():
+    """Get KYC verification status"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
+        
+        if not kyc:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'status': 'not_submitted',
+                    'message': 'No KYC application found'
+                }
+            })
+        
+        result = {
+            'status': kyc.get('status'),
+            'full_name': kyc.get('full_name'),
+            'submitted_at': kyc.get('submitted_at').isoformat() if kyc.get('submitted_at') else None,
+            'rejection_reason': kyc.get('rejection_reason')
+        }
+        
+        response = jsonify({'success': True, 'data': result})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get KYC status error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/kyc', methods=['GET', 'OPTIONS'])
+def get_kyc_details():
+    """Get full KYC details"""
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
+        
+        if not kyc:
+            return jsonify({'success': True, 'data': None})
+        
+        kyc['_id'] = str(kyc['_id'])
+        if kyc.get('submitted_at'):
+            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': kyc})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get KYC details error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -1524,7 +1923,689 @@ def admin_get_users():
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
+# ==================== ADMIN KYC MANAGEMENT ENDPOINTS ====================
 
+@app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_kyc_applications():
+    """Get all KYC applications for admin review"""
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'pending')
+        search = request.args.get('search', '')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        if search:
+            query['$or'] = [
+                {'username': {'$regex': search, '$options': 'i'}},
+                {'email': {'$regex': search, '$options': 'i'}},
+                {'full_name': {'$regex': search, '$options': 'i'}},
+                {'id_number': {'$regex': search, '$options': 'i'}}
+            ]
+        
+        total = kyc_collection.count_documents(query)
+        applications = list(kyc_collection.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
+        
+        result_applications = []
+        for app in applications:
+            app['_id'] = str(app['_id'])
+            if app.get('submitted_at'):
+                app['submitted_at'] = app['submitted_at'].isoformat()
+            if app.get('reviewed_at'):
+                app['reviewed_at'] = app['reviewed_at'].isoformat()
+            
+            # Get user details
+            if users_collection and app.get('user_id'):
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
+                    if user:
+                        app['user_details'] = {
+                            'username': user.get('username', ''),
+                            'email': user.get('email', ''),
+                            'phone': user.get('phone', ''),
+                            'registered_at': user.get('created_at').isoformat() if user.get('created_at') else None,
+                            'total_deposited': user.get('wallet', {}).get('total_deposited', 0),
+                            'wallet_balance': user.get('wallet', {}).get('balance', 0)
+                        }
+                except:
+                    app['user_details'] = {'username': 'Unknown', 'email': ''}
+            
+            result_applications.append(app)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'applications': result_applications,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get KYC applications error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/kyc/<kyc_id>', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_kyc_application(kyc_id):
+    """Get single KYC application details"""
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
+        
+        kyc['_id'] = str(kyc['_id'])
+        if kyc.get('submitted_at'):
+            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
+        if kyc.get('reviewed_at'):
+            kyc['reviewed_at'] = kyc['reviewed_at'].isoformat()
+        
+        # Get full user details
+        if users_collection and kyc.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+            if user:
+                kyc['user_details'] = {
+                    '_id': str(user['_id']),
+                    'username': user.get('username', ''),
+                    'email': user.get('email', ''),
+                    'full_name': user.get('full_name', ''),
+                    'phone': user.get('phone', ''),
+                    'country': user.get('country', ''),
+                    'wallet': user.get('wallet', {}),
+                    'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
+                    'last_login': user.get('last_login').isoformat() if user.get('last_login') else None
+                }
+        
+        response = jsonify({'success': True, 'data': kyc})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get KYC application error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_approve_kyc(kyc_id):
+    """Approve KYC application"""
+    if kyc_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json() or {}
+        notes = data.get('notes', '')
+        
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
+        
+        if kyc['status'] != 'pending':
+            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
+        
+        admin_user = get_user_from_request()
+        
+        # Update KYC status
+        kyc_collection.update_one(
+            {'_id': ObjectId(kyc_id)},
+            {
+                '$set': {
+                    'status': 'approved',
+                    'reviewed_at': datetime.now(timezone.utc),
+                    'reviewed_by': str(admin_user['_id']),
+                    'reviewer_username': admin_user.get('username', 'Admin'),
+                    'reviewer_notes': notes
+                }
+            }
+        )
+        
+        # Update user's KYC status
+        users_collection.update_one(
+            {'_id': ObjectId(kyc['user_id'])},
+            {'$set': {'kyc_status': 'verified', 'is_verified': True}}
+        )
+        
+        # Create notification
+        create_notification(
+            kyc['user_id'],
+            'KYC Approved! ✅',
+            'Congratulations! Your KYC verification has been approved. You now have full access to all features.',
+            'success'
+        )
+        
+        # Send email
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+        if user:
+            html_body = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
+                    <h1>KYC Approved!</h1>
+                </div>
+                <div style="padding: 20px; border: 1px solid #e2e8f0;">
+                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
+                    <p>Congratulations! Your KYC verification has been <strong style="color: #10b981;">APPROVED</strong>.</p>
+                    <p>You now have full access to all Veloxtrades features including deposits, withdrawals, and investments.</p>
+                    <p>Thank you for choosing Veloxtrades!</p>
+                    <br>
+                    <p>Best regards,<br>Veloxtrades Team</p>
+                </div>
+            </div>
+            """
+            send_email(user['email'], 'KYC Verification Approved', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour KYC has been approved.\n\nBest regards,\nVeloxtrades Team", html_body)
+        
+        # Log admin action
+        log_admin_action(admin_user['_id'], 'KYC Approved', f'Approved KYC for user {kyc["username"]}')
+        
+        response = jsonify({'success': True, 'message': 'KYC application approved successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin approve KYC error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/kyc/<kyc_id>/reject', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_reject_kyc(kyc_id):
+    """Reject KYC application"""
+    if kyc_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        reason = data.get('reason', '').strip()
+        notes = data.get('notes', '')
+        
+        if not reason:
+            return jsonify({'success': False, 'message': 'Rejection reason is required'}), 400
+        
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
+        
+        if kyc['status'] != 'pending':
+            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
+        
+        admin_user = get_user_from_request()
+        
+        # Update KYC status
+        kyc_collection.update_one(
+            {'_id': ObjectId(kyc_id)},
+            {
+                '$set': {
+                    'status': 'rejected',
+                    'reviewed_at': datetime.now(timezone.utc),
+                    'reviewed_by': str(admin_user['_id']),
+                    'reviewer_username': admin_user.get('username', 'Admin'),
+                    'rejection_reason': reason,
+                    'reviewer_notes': notes
+                }
+            }
+        )
+        
+        # Update user's KYC status
+        users_collection.update_one(
+            {'_id': ObjectId(kyc['user_id'])},
+            {'$set': {'kyc_status': 'rejected'}}
+        )
+        
+        # Create notification
+        create_notification(
+            kyc['user_id'],
+            'KYC Rejected ❌',
+            f'Your KYC verification was rejected. Reason: {reason}. Please submit new documents.',
+            'error'
+        )
+        
+        # Send email
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+        if user:
+            html_body = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: #ef4444; padding: 20px; text-align: center; color: white;">
+                    <h1>KYC Rejected</h1>
+                </div>
+                <div style="padding: 20px; border: 1px solid #e2e8f0;">
+                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
+                    <p>Unfortunately, your KYC verification has been <strong style="color: #ef4444;">REJECTED</strong>.</p>
+                    <div style="background: #fee2e2; padding: 15px; margin: 15px 0;">
+                        <strong>Reason:</strong> {reason}
+                    </div>
+                    <p>Please submit new verification documents with the correct information.</p>
+                    <p>If you have any questions, please contact support.</p>
+                    <br>
+                    <p>Best regards,<br>Veloxtrades Team</p>
+                </div>
+            </div>
+            """
+            send_email(user['email'], 'KYC Verification Rejected', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour KYC was rejected.\nReason: {reason}\n\nPlease submit new documents.\n\nBest regards,\nVeloxtrades Team", html_body)
+        
+        # Log admin action
+        log_admin_action(admin_user['_id'], 'KYC Rejected', f'Rejected KYC for user {kyc["username"]}. Reason: {reason}')
+        
+        response = jsonify({'success': True, 'message': 'KYC application rejected successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin reject KYC error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/kyc/stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_kyc_stats():
+    """Get KYC statistics"""
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}), 200
+    
+    try:
+        pending = kyc_collection.count_documents({'status': 'pending'})
+        approved = kyc_collection.count_documents({'status': 'approved'})
+        rejected = kyc_collection.count_documents({'status': 'rejected'})
+        total = pending + approved + rejected
+        
+        # Get today's submissions
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_submissions = kyc_collection.count_documents({'submitted_at': {'$gte': today_start}})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'pending': pending,
+                'approved': approved,
+                'rejected': rejected,
+                'total': total,
+                'today_submissions': today_submissions
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get KYC stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN SUPPORT TICKET MANAGEMENT ENDPOINTS ====================
+
+@app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_tickets():
+    """Get all support tickets for admin"""
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        category = request.args.get('category', 'all')
+        priority = request.args.get('priority', 'all')
+        search = request.args.get('search', '')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        if category != 'all':
+            query['category'] = category
+        if priority != 'all':
+            query['priority'] = priority
+        
+        if search:
+            query['$or'] = [
+                {'ticket_id': {'$regex': search, '$options': 'i'}},
+                {'username': {'$regex': search, '$options': 'i'}},
+                {'email': {'$regex': search, '$options': 'i'}},
+                {'subject': {'$regex': search, '$options': 'i'}}
+            ]
+        
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        result_tickets = []
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            if ticket.get('closed_at'):
+                ticket['closed_at'] = ticket['closed_at'].isoformat()
+            
+            # Get message count
+            ticket['message_count'] = len(ticket.get('messages', []))
+            # Get last message
+            if ticket.get('messages'):
+                last_msg = ticket['messages'][-1]
+                ticket['last_message'] = {
+                    'sender': last_msg.get('sender'),
+                    'sender_name': last_msg.get('sender_name'),
+                    'message': last_msg.get('message')[:100],
+                    'created_at': last_msg.get('created_at').isoformat() if last_msg.get('created_at') else None
+                }
+            # Remove full messages from list view
+            ticket.pop('messages', None)
+            
+            result_tickets.append(ticket)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': result_tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get tickets error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_ticket(ticket_id):
+    """Get single ticket details with full conversation"""
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        ticket['_id'] = str(ticket['_id'])
+        if ticket.get('created_at'):
+            ticket['created_at'] = ticket['created_at'].isoformat()
+        if ticket.get('updated_at'):
+            ticket['updated_at'] = ticket['updated_at'].isoformat()
+        if ticket.get('closed_at'):
+            ticket['closed_at'] = ticket['closed_at'].isoformat()
+        
+        # Format messages
+        for msg in ticket.get('messages', []):
+            if msg.get('created_at'):
+                msg['created_at'] = msg['created_at'].isoformat()
+        
+        # Get user details
+        if users_collection and ticket.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+            if user:
+                ticket['user_details'] = {
+                    '_id': str(user['_id']),
+                    'username': user.get('username', ''),
+                    'email': user.get('email', ''),
+                    'full_name': user.get('full_name', ''),
+                    'phone': user.get('phone', ''),
+                    'wallet_balance': user.get('wallet', {}).get('balance', 0),
+                    'kyc_status': user.get('kyc_status', 'pending'),
+                    'is_banned': user.get('is_banned', False)
+                }
+        
+        response = jsonify({'success': True, 'data': ticket})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_reply_ticket(ticket_id):
+    """Admin reply to a support ticket"""
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        
+        if not message:
+            return jsonify({'success': False, 'message': 'Message is required'}), 400
+        
+        admin_user = get_user_from_request()
+        
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        # Add admin reply
+        reply = {
+            'sender': 'admin',
+            'sender_id': str(admin_user['_id']),
+            'sender_name': admin_user.get('username', 'Admin'),
+            'message': message,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$push': {'messages': reply},
+                '$set': {
+                    'updated_at': datetime.now(timezone.utc),
+                    'status': 'pending'  # Waiting for user response
+                }
+            }
+        )
+        
+        # Send email notification to user
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+        if user:
+            html_body = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
+                    <h1>New Reply to Your Ticket</h1>
+                </div>
+                <div style="padding: 20px; border: 1px solid #e2e8f0;">
+                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
+                    <p>You have a new reply to your support ticket <strong>{ticket_id}</strong>.</p>
+                    <div style="background: #f3f4f6; padding: 15px; margin: 15px 0;">
+                        <strong>Admin Reply:</strong><br>
+                        {message.replace(chr(10), '<br>')}
+                    </div>
+                    <p>Please login to your dashboard to view and reply.</p>
+                    <a href="{FRONTEND_URL}/support.html" style="background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Ticket</a>
+                    <br><br>
+                    <p>Best regards,<br>Veloxtrades Support Team</p>
+                </div>
+            </div>
+            """
+            send_email(user['email'], f'New Reply to Ticket #{ticket_id}', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYou have a new reply to your ticket.\n\nAdmin Reply:\n{message}\n\nLogin to view.\n\nBest regards,\nVeloxtrades Team", html_body)
+            
+            # Create notification
+            create_notification(
+                ticket['user_id'],
+                f'Support Ticket Updated: {ticket_id}',
+                f'Admin has replied to your ticket. Please check your dashboard.',
+                'info'
+            )
+        
+        # Log admin action
+        log_admin_action(admin_user['_id'], 'Ticket Reply', f'Replied to ticket {ticket_id}')
+        
+        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin reply ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/support/tickets/<ticket_id>/resolve', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resolve_ticket(ticket_id):
+    """Resolve/close a support ticket"""
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json() or {}
+        resolution_notes = data.get('resolution_notes', '')
+        
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        admin_user = get_user_from_request()
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'resolved',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc),
+                    'resolved_by': str(admin_user['_id']),
+                    'resolution_notes': resolution_notes
+                }
+            }
+        )
+        
+        # Notify user
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+        if user:
+            create_notification(
+                ticket['user_id'],
+                f'Ticket Resolved: {ticket_id}',
+                f'Your support ticket has been marked as resolved. If you need further assistance, please open a new ticket.',
+                'success'
+            )
+            
+            html_body = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
+                    <h1>Ticket Resolved</h1>
+                </div>
+                <div style="padding: 20px; border: 1px solid #e2e8f0;">
+                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
+                    <p>Your support ticket <strong>{ticket_id}</strong> has been marked as <strong style="color: #10b981;">RESOLVED</strong>.</p>
+                    {f'<div style="background: #f3f4f6; padding: 15px;"><strong>Resolution Notes:</strong><br>{resolution_notes}</div>' if resolution_notes else ''}
+                    <p>If you need further assistance, please open a new ticket.</p>
+                    <p>Thank you for choosing Veloxtrades!</p>
+                    <br>
+                    <p>Best regards,<br>Veloxtrades Support Team</p>
+                </div>
+            </div>
+            """
+            send_email(user['email'], f'Ticket #{ticket_id} Resolved', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour ticket {ticket_id} has been resolved.\n\nThank you.\n\nVeloxtrades Team", html_body)
+        
+        # Log admin action
+        log_admin_action(admin_user['_id'], 'Ticket Resolved', f'Resolved ticket {ticket_id}')
+        
+        response = jsonify({'success': True, 'message': 'Ticket resolved successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin resolve ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/support/tickets/<ticket_id>/priority', methods=['PUT', 'OPTIONS'])
+@require_admin
+def admin_update_ticket_priority(ticket_id):
+    """Update ticket priority"""
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        priority = data.get('priority', 'medium')
+        
+        if priority not in ['low', 'medium', 'high', 'urgent']:
+            return jsonify({'success': False, 'message': 'Invalid priority value'}), 400
+        
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        admin_user = get_user_from_request()
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'priority': priority,
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        # Log admin action
+        log_admin_action(admin_user['_id'], 'Ticket Priority Updated', f'Updated ticket {ticket_id} priority to {priority}')
+        
+        response = jsonify({'success': True, 'message': f'Ticket priority updated to {priority}'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin update ticket priority error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/admin/support/tickets/stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_ticket_stats():
+    """Get support ticket statistics"""
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}), 200
+    
+    try:
+        open_tickets = support_tickets_collection.count_documents({'status': 'open'})
+        pending_tickets = support_tickets_collection.count_documents({'status': 'pending'})
+        resolved_tickets = support_tickets_collection.count_documents({'status': 'resolved'})
+        closed_tickets = support_tickets_collection.count_documents({'status': 'closed'})
+        total = open_tickets + pending_tickets + resolved_tickets + closed_tickets
+        
+        # Get today's tickets
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_tickets = support_tickets_collection.count_documents({'created_at': {'$gte': today_start}})
+        
+        # Get tickets by category
+        categories = {}
+        for cat in ['general', 'deposit', 'withdrawal', 'investment', 'account', 'kyc']:
+            categories[cat] = support_tickets_collection.count_documents({'category': cat})
+        
+        # Get tickets by priority
+        priorities = {}
+        for pri in ['low', 'medium', 'high', 'urgent']:
+            priorities[pri] = support_tickets_collection.count_documents({'priority': pri})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'open': open_tickets,
+                'pending': pending_tickets,
+                'resolved': resolved_tickets,
+                'closed': closed_tickets,
+                'total': total,
+                'today_tickets': today_tickets,
+                'by_category': categories,
+                'by_priority': priorities
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get ticket stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+        
 @app.route('/api/admin/referral-stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_referral_stats():
