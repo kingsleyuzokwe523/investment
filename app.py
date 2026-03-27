@@ -64,6 +64,7 @@ PLATFORM_SETTINGS = {
     'maintenance_mode': False,
     'maintenance_message': 'Site under maintenance. Please check back later.'
 }
+
 # ==================== CORS CONFIGURATION ====================
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
@@ -87,10 +88,10 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
-# Add this after CORS - IMPORTANT FOR ALL RESPONSES
+# ==================== AFTER REQUEST HANDLER ====================
 @app.after_request
-def add_cors_headers(response):
-    """Add CORS headers to every response"""
+def after_request(response):
+    """Add security headers and CORS headers"""
     origin = request.headers.get('Origin', '')
     
     # Allow all your domains
@@ -104,8 +105,34 @@ def add_cors_headers(response):
     # Security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
     
     return response
+
+# ==================== BEFORE REQUEST HANDLER ====================
+@app.before_request
+def before_request():
+    """Check MongoDB connection and handle preflight requests"""
+    global mongo_connected
+    if not mongo_connected:
+        mongo_connected = init_mongo()
+    
+    # Handle preflight requests
+    if request.method == 'OPTIONS':
+        response = make_response()
+        origin = request.headers.get('Origin', '')
+        
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
+        
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Max-Age'] = '86400'
+        
+        return response
 
 # ==================== MONGO DB CONNECTION ====================
 client = None
@@ -178,70 +205,7 @@ def init_mongo():
 
 # Initialize MongoDB
 mongo_connected = init_mongo()
-@app.before_request
-def before_request():
-    """Check MongoDB connection and handle preflight requests"""
-    global mongo_connected
-    if not mongo_connected:
-        mongo_connected = init_mongo()
-    
-    # Handle preflight requests - THIS IS CRITICAL FOR CORS
-    if request.method == 'OPTIONS':
-        response = make_response()
-        origin = request.headers.get('Origin', '')
-        
-        # Allow all your domains
-        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-            response.headers['Access-Control-Allow-Origin'] = origin
-        else:
-            response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
-        
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '86400'
-        
-        return response
-# Add this AFTER CORS configuration
-@app.after_request
-def after_request(response):
-    """Add security headers and CORS headers"""
-    origin = request.headers.get('Origin', '')
-    
-    # Allow all your domains
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        response.headers['Access-Control-Max-Age'] = '86400'
-    
-    # Security headers
-    response.headers.add('X-Content-Type-Options', 'nosniff')
-    response.headers.add('X-Frame-Options', 'DENY')
-    response.headers.add('X-XSS-Protection', '1; mode=block')
-    
-    return response
 
-@app.before_request
-def handle_preflight():
-    """Handle preflight OPTIONS requests"""
-    if request.method == 'OPTIONS':
-        response = make_response()
-        origin = request.headers.get('Origin', '')
-        
-        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-            response.headers['Access-Control-Allow-Origin'] = origin
-        else:
-            response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
-        
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '86400'
-        
-        return response
-# ==================== EMAIL CONFIGURATION ====================
 # ==================== EMAIL CONFIGURATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
@@ -306,405 +270,7 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
                 return False
     
     return False
-# ==================== SUPPORT TICKET ENDPOINTS ====================
 
-@app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
-def create_ticket():
-    """Create a new support ticket"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        
-        subject = data.get('subject', '').strip()
-        message = data.get('message', '').strip()
-        category = data.get('category', 'general')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        # Generate ticket ID
-        ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
-        
-        ticket_data = {
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id']),
-            'username': user['username'],
-            'email': user['email'],
-            'subject': subject,
-            'message': message,
-            'category': category,
-            'priority': data.get('priority', 'medium'),
-            'status': 'open',
-            'created_at': datetime.now(timezone.utc),
-            'updated_at': datetime.now(timezone.utc),
-            'messages': [
-                {
-                    'sender': 'user',
-                    'sender_name': user['username'],
-                    'message': message,
-                    'created_at': datetime.now(timezone.utc)
-                }
-            ]
-        }
-        
-        result = support_tickets_collection.insert_one(ticket_data)
-        
-        # Create notification
-        create_notification(
-            user['_id'],
-            f'Ticket Created: {ticket_id}',
-            f'Your support ticket has been created. We will respond within 24 hours.',
-            'info'
-        )
-        
-        response = jsonify({
-            'success': True,
-            'message': 'Support ticket created successfully',
-            'data': {
-                'ticket_id': ticket_id,
-                'status': 'open'
-            }
-        })
-        return add_cors_headers(response), 201
-        
-    except Exception as e:
-        logger.error(f"Create ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
-def get_tickets():
-    """Get all tickets for logged in user"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        skip = (page - 1) * limit
-        
-        query = {'user_id': str(user['_id'])}
-        
-        total = support_tickets_collection.count_documents(query)
-        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        for ticket in tickets:
-            ticket['_id'] = str(ticket['_id'])
-            if ticket.get('created_at'):
-                ticket['created_at'] = ticket['created_at'].isoformat()
-            if ticket.get('updated_at'):
-                ticket['updated_at'] = ticket['updated_at'].isoformat()
-            # Remove messages from list view
-            ticket.pop('messages', None)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'tickets': tickets,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get tickets error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
-def get_ticket(ticket_id):
-    """Get single ticket details with messages"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        ticket['_id'] = str(ticket['_id'])
-        if ticket.get('created_at'):
-            ticket['created_at'] = ticket['created_at'].isoformat()
-        if ticket.get('updated_at'):
-            ticket['updated_at'] = ticket['updated_at'].isoformat()
-        
-        # Format messages
-        for msg in ticket.get('messages', []):
-            if msg.get('created_at'):
-                msg['created_at'] = msg['created_at'].isoformat()
-        
-        response = jsonify({'success': True, 'data': ticket})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
-def reply_ticket(ticket_id):
-    """Reply to a support ticket"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        message = data.get('message', '').strip()
-        
-        if not message:
-            return jsonify({'success': False, 'message': 'Message is required'}), 400
-        
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        if ticket['status'] == 'closed':
-            return jsonify({'success': False, 'message': 'Cannot reply to a closed ticket'}), 400
-        
-        # Add reply
-        reply = {
-            'sender': 'user',
-            'sender_name': user['username'],
-            'message': message,
-            'created_at': datetime.now(timezone.utc)
-        }
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$push': {'messages': reply},
-                '$set': {
-                    'updated_at': datetime.now(timezone.utc),
-                    'status': 'open'
-                }
-            }
-        )
-        
-        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Reply ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
-def close_ticket(ticket_id):
-    """Close a support ticket"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        if ticket['status'] == 'closed':
-            return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$set': {
-                    'status': 'closed',
-                    'closed_at': datetime.now(timezone.utc),
-                    'updated_at': datetime.now(timezone.utc)
-                }
-            }
-        )
-        
-        response = jsonify({'success': True, 'message': 'Ticket closed successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Close ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== KYC VERIFICATION ENDPOINTS ====================
-
-@app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
-def submit_kyc():
-    """Submit KYC documents for verification"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        
-        # Required fields
-        full_name = data.get('full_name', '').strip()
-        date_of_birth = data.get('date_of_birth', '')
-        country = data.get('country', '')
-        id_type = data.get('id_type', '')
-        id_number = data.get('id_number', '')
-        id_front_url = data.get('id_front_url', '')
-        
-        if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
-            return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
-        
-        # Check existing KYC
-        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
-        if existing:
-            status = existing.get('status', 'pending')
-            if status == 'pending':
-                return jsonify({'success': False, 'message': 'You already have a pending KYC application'}), 400
-            elif status == 'approved':
-                return jsonify({'success': False, 'message': 'Your KYC is already verified'}), 400
-        
-        # Create KYC record
-        kyc_data = {
-            'user_id': str(user['_id']),
-            'username': user['username'],
-            'email': user['email'],
-            'full_name': full_name,
-            'date_of_birth': date_of_birth,
-            'country': country,
-            'id_type': id_type,
-            'id_number': id_number,
-            'id_front_url': id_front_url,
-            'id_back_url': data.get('id_back_url', ''),
-            'selfie_url': data.get('selfie_url', ''),
-            'address': data.get('address', ''),
-            'status': 'pending',
-            'submitted_at': datetime.now(timezone.utc),
-            'reviewed_at': None,
-            'rejection_reason': None
-        }
-        
-        result = kyc_collection.insert_one(kyc_data)
-        
-        # Update user status
-        users_collection.update_one(
-            {'_id': user['_id']},
-            {'$set': {'kyc_status': 'pending'}}
-        )
-        
-        # Create notification
-        create_notification(
-            user['_id'],
-            'KYC Application Submitted',
-            'Your KYC documents have been submitted. Review typically takes 24-48 hours.',
-            'info'
-        )
-        
-        response = jsonify({
-            'success': True,
-            'message': 'KYC application submitted successfully',
-            'data': {
-                'kyc_id': str(result.inserted_id),
-                'status': 'pending'
-            }
-        })
-        return add_cors_headers(response), 201
-        
-    except Exception as e:
-        logger.error(f"KYC submit error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/kyc/status', methods=['GET', 'OPTIONS'])
-def get_kyc_status():
-    """Get KYC verification status"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
-        
-        if not kyc:
-            return jsonify({
-                'success': True,
-                'data': {
-                    'status': 'not_submitted',
-                    'message': 'No KYC application found'
-                }
-            })
-        
-        result = {
-            'status': kyc.get('status'),
-            'full_name': kyc.get('full_name'),
-            'submitted_at': kyc.get('submitted_at').isoformat() if kyc.get('submitted_at') else None,
-            'rejection_reason': kyc.get('rejection_reason')
-        }
-        
-        response = jsonify({'success': True, 'data': result})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get KYC status error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/kyc', methods=['GET', 'OPTIONS'])
-def get_kyc_details():
-    """Get full KYC details"""
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
-        
-        if not kyc:
-            return jsonify({'success': True, 'data': None})
-        
-        kyc['_id'] = str(kyc['_id'])
-        if kyc.get('submitted_at'):
-            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
-        
-        response = jsonify({'success': True, 'data': kyc})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get KYC details error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -785,56 +351,15 @@ def log_admin_action(admin_id, action, details):
     except Exception as e:
         logger.error(f"Failed to log admin action: {e}")
 
-def add_referral_commission(user_id, deposit_amount):
-    """Add referral commission to referrer when a deposit is made"""
-    try:
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return False
-        
-        referred_by_code = user.get('referred_by')
-        if not referred_by_code:
-            return False
-        
-        referrer = users_collection.find_one({'referral_code': referred_by_code})
-        if not referrer:
-            return False
-        
-        settings = settings_collection.find_one({}) if settings_collection else None
-        bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
-        commission = deposit_amount * (bonus_percentage / 100)
-        
-        if commission <= 0:
-            return False
-        
-        users_collection.update_one(
-            {'_id': referrer['_id']},
-            {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
-        )
-        
-        if transactions_collection is not None:
-            transactions_collection.insert_one({
-                'user_id': str(referrer['_id']),
-                'type': 'commission',
-                'amount': commission,
-                'status': 'completed',
-                'description': f'Commission from {user["username"]}\'s deposit of ${deposit_amount:,.2f}',
-                'created_at': datetime.now(timezone.utc)
-            })
-        
-        create_notification(
-            referrer['_id'],
-            'Referral Commission! 🎉',
-            f'You earned ${commission:,.2f} from {user["username"]}\'s deposit of ${deposit_amount:,.2f}!',
-            'success'
-        )
-        
-        logger.info(f"✅ Added ${commission} commission to {referrer['username']} from {user['username']}'s deposit")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error adding referral commission: {e}")
-        return False
+def add_cors_headers(response):
+    """Helper to ensure CORS headers"""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
@@ -1264,7 +789,6 @@ def verify_referral():
         logger.error(f"Verify referral error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
     if users_collection is None:
@@ -1680,12 +1204,10 @@ def user_dashboard():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        # Safely get wallet data
         wallet = user.get('wallet', {})
         if not isinstance(wallet, dict):
             wallet = {'balance': 0, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}
         
-        # Get active investments
         active_investments = []
         if investments_collection is not None:
             active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'}))
@@ -1693,12 +1215,10 @@ def user_dashboard():
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
         pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
         
-        # Get recent transactions
         recent_transactions = []
         if transactions_collection is not None:
             recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10))
         
-        # Format transactions
         formatted_transactions = []
         for tx in recent_transactions:
             formatted_transactions.append({
@@ -1710,12 +1230,10 @@ def user_dashboard():
                 'created_at': tx.get('created_at').isoformat() if tx.get('created_at') else None
             })
         
-        # Get notification count
         unread_count = 0
         if notifications_collection is not None:
             unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
         
-        # Get pending counts
         pending_deposits = 0
         if deposits_collection is not None:
             pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
@@ -1753,7 +1271,6 @@ def user_dashboard():
     except Exception as e:
         logger.error(f"Dashboard error: {e}")
         logger.error(traceback.format_exc())
-        # Return default data on error
         return jsonify({
             'success': True,
             'data': {
@@ -1765,6 +1282,7 @@ def user_dashboard():
                 'pending_requests': {'deposits': 0, 'withdrawals': 0}
             }
         }), 200
+
 # ==================== USER NOTIFICATIONS ====================
 @app.route('/api/notifications', methods=['GET', 'OPTIONS'])
 def get_notifications():
@@ -1830,6 +1348,518 @@ def mark_notification_read(notification_id):
     except Exception as e:
         logger.error(f"Mark notification read error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== SUPPORT TICKET ENDPOINTS ====================
+@app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
+def create_ticket():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        subject = data.get('subject', '').strip()
+        message = data.get('message', '').strip()
+        category = data.get('category', 'general')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
+        
+        ticket_data = {
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'subject': subject,
+            'message': message,
+            'category': category,
+            'priority': data.get('priority', 'medium'),
+            'status': 'open',
+            'created_at': datetime.now(timezone.utc),
+            'updated_at': datetime.now(timezone.utc),
+            'messages': [
+                {
+                    'sender': 'user',
+                    'sender_name': user['username'],
+                    'message': message,
+                    'created_at': datetime.now(timezone.utc)
+                }
+            ]
+        }
+        
+        result = support_tickets_collection.insert_one(ticket_data)
+        
+        create_notification(
+            user['_id'],
+            f'Ticket Created: {ticket_id}',
+            f'Your support ticket has been created. We will respond within 24 hours.',
+            'info'
+        )
+        
+        response = jsonify({
+            'success': True,
+            'message': 'Support ticket created successfully',
+            'data': {
+                'ticket_id': ticket_id,
+                'status': 'open'
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"Create ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
+def get_tickets():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        query = {'user_id': str(user['_id'])}
+        
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            ticket.pop('messages', None)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get tickets error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
+def get_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        ticket['_id'] = str(ticket['_id'])
+        if ticket.get('created_at'):
+            ticket['created_at'] = ticket['created_at'].isoformat()
+        if ticket.get('updated_at'):
+            ticket['updated_at'] = ticket['updated_at'].isoformat()
+        
+        for msg in ticket.get('messages', []):
+            if msg.get('created_at'):
+                msg['created_at'] = msg['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': ticket})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
+def reply_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        
+        if not message:
+            return jsonify({'success': False, 'message': 'Message is required'}), 400
+        
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Cannot reply to a closed ticket'}), 400
+        
+        reply = {
+            'sender': 'user',
+            'sender_name': user['username'],
+            'message': message,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$push': {'messages': reply},
+                '$set': {
+                    'updated_at': datetime.now(timezone.utc),
+                    'status': 'open'
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Reply ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
+def close_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'closed',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Ticket closed successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Close ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== KYC VERIFICATION ENDPOINTS ====================
+@app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
+def submit_kyc():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        full_name = data.get('full_name', '').strip()
+        date_of_birth = data.get('date_of_birth', '')
+        country = data.get('country', '')
+        id_type = data.get('id_type', '')
+        id_number = data.get('id_number', '')
+        id_front_url = data.get('id_front_url', '')
+        
+        if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
+            return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
+        
+        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
+        if existing:
+            status = existing.get('status', 'pending')
+            if status == 'pending':
+                return jsonify({'success': False, 'message': 'You already have a pending KYC application'}), 400
+            elif status == 'approved':
+                return jsonify({'success': False, 'message': 'Your KYC is already verified'}), 400
+        
+        kyc_data = {
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'full_name': full_name,
+            'date_of_birth': date_of_birth,
+            'country': country,
+            'id_type': id_type,
+            'id_number': id_number,
+            'id_front_url': id_front_url,
+            'id_back_url': data.get('id_back_url', ''),
+            'selfie_url': data.get('selfie_url', ''),
+            'address': data.get('address', ''),
+            'status': 'pending',
+            'submitted_at': datetime.now(timezone.utc),
+            'reviewed_at': None,
+            'rejection_reason': None
+        }
+        
+        result = kyc_collection.insert_one(kyc_data)
+        
+        users_collection.update_one(
+            {'_id': user['_id']},
+            {'$set': {'kyc_status': 'pending'}}
+        )
+        
+        create_notification(
+            user['_id'],
+            'KYC Application Submitted',
+            'Your KYC documents have been submitted. Review typically takes 24-48 hours.',
+            'info'
+        )
+        
+        response = jsonify({
+            'success': True,
+            'message': 'KYC application submitted successfully',
+            'data': {
+                'kyc_id': str(result.inserted_id),
+                'status': 'pending'
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"KYC submit error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/kyc/status', methods=['GET', 'OPTIONS'])
+def get_kyc_status():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
+        
+        if not kyc:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'status': 'not_submitted',
+                    'message': 'No KYC application found'
+                }
+            })
+        
+        result = {
+            'status': kyc.get('status'),
+            'full_name': kyc.get('full_name'),
+            'submitted_at': kyc.get('submitted_at').isoformat() if kyc.get('submitted_at') else None,
+            'rejection_reason': kyc.get('rejection_reason')
+        }
+        
+        response = jsonify({'success': True, 'data': result})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get KYC status error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/kyc', methods=['GET', 'OPTIONS'])
+def get_kyc_details():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
+        
+        if not kyc:
+            return jsonify({'success': True, 'data': None})
+        
+        kyc['_id'] = str(kyc['_id'])
+        if kyc.get('submitted_at'):
+            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': kyc})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get KYC details error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== REFERRAL FUNCTIONS ====================
+def add_referral_commission(user_id, deposit_amount):
+    try:
+        if users_collection is None:
+            return False
+        
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            logger.warning(f"User {user_id} not found for referral commission")
+            return False
+        
+        referred_by_code = user.get('referred_by')
+        if not referred_by_code:
+            return False
+        
+        referrer = users_collection.find_one({'referral_code': referred_by_code})
+        if not referrer:
+            logger.warning(f"Referrer with code {referred_by_code} not found")
+            return False
+        
+        bonus_percentage = 5
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
+            if settings:
+                bonus_percentage = settings.get('referral_bonus', 5)
+        
+        commission = deposit_amount * (bonus_percentage / 100)
+        
+        if commission <= 0:
+            return False
+        
+        result = users_collection.update_one(
+            {'_id': referrer['_id']},
+            {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
+        )
+        
+        if result.modified_count > 0:
+            if transactions_collection is not None:
+                try:
+                    transactions_collection.insert_one({
+                        'user_id': str(referrer['_id']),
+                        'type': 'commission',
+                        'amount': commission,
+                        'status': 'completed',
+                        'description': f'Commission from {user["username"]}\'s deposit of ${deposit_amount:,.2f}',
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                except Exception as tx_error:
+                    logger.error(f"Failed to create commission transaction: {tx_error}")
+            
+            try:
+                create_notification(
+                    referrer['_id'],
+                    'Referral Commission! 🎉',
+                    f'You earned ${commission:,.2f} from {user["username"]}\'s deposit of ${deposit_amount:,.2f}!',
+                    'success'
+                )
+            except Exception as notif_error:
+                logger.error(f"Failed to create notification: {notif_error}")
+            
+            logger.info(f"✅ Added ${commission} commission to {referrer['username']} from {user['username']}'s deposit")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error adding referral commission: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+@app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
+def get_user_referral_info():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        referral_code = user.get('referral_code', '')
+        
+        referred_users = list(users_collection.find(
+            {'referred_by': referral_code},
+            {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
+        ))
+        
+        formatted_referrals = []
+        total_commission = 0
+        
+        for ref in referred_users:
+            wallet = ref.get('wallet', {})
+            total_deposited = wallet.get('total_deposited', 0) if isinstance(wallet, dict) else 0
+            commission = total_deposited * 0.05
+            total_commission += commission
+            
+            formatted_referrals.append({
+                'id': str(ref['_id']),
+                'username': ref.get('username', ''),
+                'full_name': ref.get('full_name', ''),
+                'joined': ref.get('created_at').isoformat() if ref.get('created_at') else None,
+                'total_deposited': total_deposited,
+                'commission_earned': commission
+            })
+        
+        referral_bonus_percentage = 5
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
+            if settings:
+                referral_bonus_percentage = settings.get('referral_bonus', 5)
+        
+        response_data = {
+            'referral_code': referral_code,
+            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
+            'referral_bonus_percentage': referral_bonus_percentage,
+            'total_referrals': len(formatted_referrals),
+            'total_commission': total_commission,
+            'referred_users': formatted_referrals
+        }
+        
+        response = jsonify({'success': True, 'data': response_data})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get referral info error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': True, 
+            'data': {
+                'referral_code': user.get('referral_code', 'N/A'),
+                'referral_link': f"{FRONTEND_URL}/register?ref={user.get('referral_code', '')}",
+                'referral_bonus_percentage': 5,
+                'total_referrals': 0,
+                'total_commission': 0,
+                'referred_users': []
+            }
+        }), 200
 
 # ==================== ADMIN API ENDPOINTS ====================
 @app.route('/api/admin/stats', methods=['GET', 'OPTIONS'])
@@ -1938,902 +1968,6 @@ def admin_get_users():
         logger.error(f"Get users error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
 
-def add_referral_commission(user_id, deposit_amount):
-    """Add referral commission to referrer when a deposit is made"""
-    try:
-        if users_collection is None:
-            return False
-        
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            logger.warning(f"User {user_id} not found for referral commission")
-            return False
-        
-        referred_by_code = user.get('referred_by')
-        if not referred_by_code:
-            return False
-        
-        referrer = users_collection.find_one({'referral_code': referred_by_code})
-        if not referrer:
-            logger.warning(f"Referrer with code {referred_by_code} not found")
-            return False
-        
-        # Get bonus percentage from settings
-        bonus_percentage = 5
-        if settings_collection is not None:
-            settings = settings_collection.find_one({})
-            if settings:
-                bonus_percentage = settings.get('referral_bonus', 5)
-        
-        commission = deposit_amount * (bonus_percentage / 100)
-        
-        if commission <= 0:
-            return False
-        
-        # Update referrer wallet
-        result = users_collection.update_one(
-            {'_id': referrer['_id']},
-            {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
-        )
-        
-        if result.modified_count > 0:
-            # Create transaction record
-            if transactions_collection is not None:
-                try:
-                    transactions_collection.insert_one({
-                        'user_id': str(referrer['_id']),
-                        'type': 'commission',
-                        'amount': commission,
-                        'status': 'completed',
-                        'description': f'Commission from {user["username"]}\'s deposit of ${deposit_amount:,.2f}',
-                        'created_at': datetime.now(timezone.utc)
-                    })
-                except Exception as tx_error:
-                    logger.error(f"Failed to create commission transaction: {tx_error}")
-            
-            # Create notification
-            try:
-                create_notification(
-                    referrer['_id'],
-                    'Referral Commission! 🎉',
-                    f'You earned ${commission:,.2f} from {user["username"]}\'s deposit of ${deposit_amount:,.2f}!',
-                    'success'
-                )
-            except Exception as notif_error:
-                logger.error(f"Failed to create notification: {notif_error}")
-            
-            logger.info(f"✅ Added ${commission} commission to {referrer['username']} from {user['username']}'s deposit")
-            return True
-        
-        return False
-        
-    except Exception as e:
-        logger.error(f"Error adding referral commission: {e}")
-        logger.error(traceback.format_exc())
-        return False
-
-@app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
-def get_user_referral_info():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        referral_code = user.get('referral_code', '')
-        
-        # Find users who used this referral code
-        referred_users = list(users_collection.find(
-            {'referred_by': referral_code},
-            {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
-        ))
-        
-        formatted_referrals = []
-        total_commission = 0
-        
-        for ref in referred_users:
-            wallet = ref.get('wallet', {})
-            total_deposited = wallet.get('total_deposited', 0) if isinstance(wallet, dict) else 0
-            commission = total_deposited * 0.05
-            total_commission += commission
-            
-            formatted_referrals.append({
-                'id': str(ref['_id']),
-                'username': ref.get('username', ''),
-                'full_name': ref.get('full_name', ''),
-                'joined': ref.get('created_at').isoformat() if ref.get('created_at') else None,
-                'total_deposited': total_deposited,
-                'commission_earned': commission
-            })
-        
-        # Get referral bonus percentage
-        referral_bonus_percentage = 5
-        if settings_collection is not None:
-            settings = settings_collection.find_one({})
-            if settings:
-                referral_bonus_percentage = settings.get('referral_bonus', 5)
-        
-        response_data = {
-            'referral_code': referral_code,
-            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
-            'referral_bonus_percentage': referral_bonus_percentage,
-            'total_referrals': len(formatted_referrals),
-            'total_commission': total_commission,
-            'referred_users': formatted_referrals
-        }
-        
-        response = jsonify({'success': True, 'data': response_data})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get referral info error: {e}")
-        logger.error(traceback.format_exc())
-        # Return empty data instead of error
-        return jsonify({
-            'success': True, 
-            'data': {
-                'referral_code': user.get('referral_code', 'N/A'),
-                'referral_link': f"{FRONTEND_URL}/register?ref={user.get('referral_code', '')}",
-                'referral_bonus_percentage': 5,
-                'total_referrals': 0,
-                'total_commission': 0,
-                'referred_users': []
-            }
-        }), 200
-# ==================== ADMIN KYC MANAGEMENT ENDPOINTS ====================
-
-@app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_kyc_applications():
-    """Get all KYC applications for admin review"""
-    if kyc_collection is None:
-        return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'pending')
-        search = request.args.get('search', '')
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        
-        if search:
-            query['$or'] = [
-                {'username': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'full_name': {'$regex': search, '$options': 'i'}},
-                {'id_number': {'$regex': search, '$options': 'i'}}
-            ]
-        
-        total = kyc_collection.count_documents(query)
-        applications = list(kyc_collection.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
-        
-        result_applications = []
-        for app in applications:
-            app['_id'] = str(app['_id'])
-            if app.get('submitted_at'):
-                app['submitted_at'] = app['submitted_at'].isoformat()
-            if app.get('reviewed_at'):
-                app['reviewed_at'] = app['reviewed_at'].isoformat()
-            
-            # Get user details
-            if users_collection and app.get('user_id'):
-                try:
-                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
-                    if user:
-                        app['user_details'] = {
-                            'username': user.get('username', ''),
-                            'email': user.get('email', ''),
-                            'phone': user.get('phone', ''),
-                            'registered_at': user.get('created_at').isoformat() if user.get('created_at') else None,
-                            'total_deposited': user.get('wallet', {}).get('total_deposited', 0),
-                            'wallet_balance': user.get('wallet', {}).get('balance', 0)
-                        }
-                except:
-                    app['user_details'] = {'username': 'Unknown', 'email': ''}
-            
-            result_applications.append(app)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'applications': result_applications,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get KYC applications error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/kyc/<kyc_id>', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_kyc_application(kyc_id):
-    """Get single KYC application details"""
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
-        
-        if not kyc:
-            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
-        
-        kyc['_id'] = str(kyc['_id'])
-        if kyc.get('submitted_at'):
-            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
-        if kyc.get('reviewed_at'):
-            kyc['reviewed_at'] = kyc['reviewed_at'].isoformat()
-        
-        # Get full user details
-        if users_collection and kyc.get('user_id'):
-            user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
-            if user:
-                kyc['user_details'] = {
-                    '_id': str(user['_id']),
-                    'username': user.get('username', ''),
-                    'email': user.get('email', ''),
-                    'full_name': user.get('full_name', ''),
-                    'phone': user.get('phone', ''),
-                    'country': user.get('country', ''),
-                    'wallet': user.get('wallet', {}),
-                    'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
-                    'last_login': user.get('last_login').isoformat() if user.get('last_login') else None
-                }
-        
-        response = jsonify({'success': True, 'data': kyc})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get KYC application error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_approve_kyc(kyc_id):
-    """Approve KYC application"""
-    if kyc_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json() or {}
-        notes = data.get('notes', '')
-        
-        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
-        if not kyc:
-            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
-        
-        if kyc['status'] != 'pending':
-            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
-        
-        admin_user = get_user_from_request()
-        
-        # Update KYC status
-        kyc_collection.update_one(
-            {'_id': ObjectId(kyc_id)},
-            {
-                '$set': {
-                    'status': 'approved',
-                    'reviewed_at': datetime.now(timezone.utc),
-                    'reviewed_by': str(admin_user['_id']),
-                    'reviewer_username': admin_user.get('username', 'Admin'),
-                    'reviewer_notes': notes
-                }
-            }
-        )
-        
-        # Update user's KYC status
-        users_collection.update_one(
-            {'_id': ObjectId(kyc['user_id'])},
-            {'$set': {'kyc_status': 'verified', 'is_verified': True}}
-        )
-        
-        # Create notification
-        create_notification(
-            kyc['user_id'],
-            'KYC Approved! ✅',
-            'Congratulations! Your KYC verification has been approved. You now have full access to all features.',
-            'success'
-        )
-        
-        # Send email
-        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
-        if user:
-            html_body = f"""
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
-                    <h1>KYC Approved!</h1>
-                </div>
-                <div style="padding: 20px; border: 1px solid #e2e8f0;">
-                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
-                    <p>Congratulations! Your KYC verification has been <strong style="color: #10b981;">APPROVED</strong>.</p>
-                    <p>You now have full access to all Veloxtrades features including deposits, withdrawals, and investments.</p>
-                    <p>Thank you for choosing Veloxtrades!</p>
-                    <br>
-                    <p>Best regards,<br>Veloxtrades Team</p>
-                </div>
-            </div>
-            """
-            send_email(user['email'], 'KYC Verification Approved', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour KYC has been approved.\n\nBest regards,\nVeloxtrades Team", html_body)
-        
-        # Log admin action
-        log_admin_action(admin_user['_id'], 'KYC Approved', f'Approved KYC for user {kyc["username"]}')
-        
-        response = jsonify({'success': True, 'message': 'KYC application approved successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin approve KYC error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/kyc/<kyc_id>/reject', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_reject_kyc(kyc_id):
-    """Reject KYC application"""
-    if kyc_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        reason = data.get('reason', '').strip()
-        notes = data.get('notes', '')
-        
-        if not reason:
-            return jsonify({'success': False, 'message': 'Rejection reason is required'}), 400
-        
-        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
-        if not kyc:
-            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
-        
-        if kyc['status'] != 'pending':
-            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
-        
-        admin_user = get_user_from_request()
-        
-        # Update KYC status
-        kyc_collection.update_one(
-            {'_id': ObjectId(kyc_id)},
-            {
-                '$set': {
-                    'status': 'rejected',
-                    'reviewed_at': datetime.now(timezone.utc),
-                    'reviewed_by': str(admin_user['_id']),
-                    'reviewer_username': admin_user.get('username', 'Admin'),
-                    'rejection_reason': reason,
-                    'reviewer_notes': notes
-                }
-            }
-        )
-        
-        # Update user's KYC status
-        users_collection.update_one(
-            {'_id': ObjectId(kyc['user_id'])},
-            {'$set': {'kyc_status': 'rejected'}}
-        )
-        
-        # Create notification
-        create_notification(
-            kyc['user_id'],
-            'KYC Rejected ❌',
-            f'Your KYC verification was rejected. Reason: {reason}. Please submit new documents.',
-            'error'
-        )
-        
-        # Send email
-        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
-        if user:
-            html_body = f"""
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <div style="background: #ef4444; padding: 20px; text-align: center; color: white;">
-                    <h1>KYC Rejected</h1>
-                </div>
-                <div style="padding: 20px; border: 1px solid #e2e8f0;">
-                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
-                    <p>Unfortunately, your KYC verification has been <strong style="color: #ef4444;">REJECTED</strong>.</p>
-                    <div style="background: #fee2e2; padding: 15px; margin: 15px 0;">
-                        <strong>Reason:</strong> {reason}
-                    </div>
-                    <p>Please submit new verification documents with the correct information.</p>
-                    <p>If you have any questions, please contact support.</p>
-                    <br>
-                    <p>Best regards,<br>Veloxtrades Team</p>
-                </div>
-            </div>
-            """
-            send_email(user['email'], 'KYC Verification Rejected', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour KYC was rejected.\nReason: {reason}\n\nPlease submit new documents.\n\nBest regards,\nVeloxtrades Team", html_body)
-        
-        # Log admin action
-        log_admin_action(admin_user['_id'], 'KYC Rejected', f'Rejected KYC for user {kyc["username"]}. Reason: {reason}')
-        
-        response = jsonify({'success': True, 'message': 'KYC application rejected successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin reject KYC error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/kyc/stats', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_kyc_stats():
-    """Get KYC statistics"""
-    if kyc_collection is None:
-        return jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}), 200
-    
-    try:
-        pending = kyc_collection.count_documents({'status': 'pending'})
-        approved = kyc_collection.count_documents({'status': 'approved'})
-        rejected = kyc_collection.count_documents({'status': 'rejected'})
-        total = pending + approved + rejected
-        
-        # Get today's submissions
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_submissions = kyc_collection.count_documents({'submitted_at': {'$gte': today_start}})
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'pending': pending,
-                'approved': approved,
-                'rejected': rejected,
-                'total': total,
-                'today_submissions': today_submissions
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get KYC stats error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== ADMIN SUPPORT TICKET MANAGEMENT ENDPOINTS ====================
-
-@app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_tickets():
-    """Get all support tickets for admin"""
-    if support_tickets_collection is None:
-        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'all')
-        category = request.args.get('category', 'all')
-        priority = request.args.get('priority', 'all')
-        search = request.args.get('search', '')
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        if category != 'all':
-            query['category'] = category
-        if priority != 'all':
-            query['priority'] = priority
-        
-        if search:
-            query['$or'] = [
-                {'ticket_id': {'$regex': search, '$options': 'i'}},
-                {'username': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'subject': {'$regex': search, '$options': 'i'}}
-            ]
-        
-        total = support_tickets_collection.count_documents(query)
-        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        result_tickets = []
-        for ticket in tickets:
-            ticket['_id'] = str(ticket['_id'])
-            if ticket.get('created_at'):
-                ticket['created_at'] = ticket['created_at'].isoformat()
-            if ticket.get('updated_at'):
-                ticket['updated_at'] = ticket['updated_at'].isoformat()
-            if ticket.get('closed_at'):
-                ticket['closed_at'] = ticket['closed_at'].isoformat()
-            
-            # Get message count
-            ticket['message_count'] = len(ticket.get('messages', []))
-            # Get last message
-            if ticket.get('messages'):
-                last_msg = ticket['messages'][-1]
-                ticket['last_message'] = {
-                    'sender': last_msg.get('sender'),
-                    'sender_name': last_msg.get('sender_name'),
-                    'message': last_msg.get('message')[:100],
-                    'created_at': last_msg.get('created_at').isoformat() if last_msg.get('created_at') else None
-                }
-            # Remove full messages from list view
-            ticket.pop('messages', None)
-            
-            result_tickets.append(ticket)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'tickets': result_tickets,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get tickets error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_ticket(ticket_id):
-    """Get single ticket details with full conversation"""
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        ticket['_id'] = str(ticket['_id'])
-        if ticket.get('created_at'):
-            ticket['created_at'] = ticket['created_at'].isoformat()
-        if ticket.get('updated_at'):
-            ticket['updated_at'] = ticket['updated_at'].isoformat()
-        if ticket.get('closed_at'):
-            ticket['closed_at'] = ticket['closed_at'].isoformat()
-        
-        # Format messages
-        for msg in ticket.get('messages', []):
-            if msg.get('created_at'):
-                msg['created_at'] = msg['created_at'].isoformat()
-        
-        # Get user details
-        if users_collection and ticket.get('user_id'):
-            user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
-            if user:
-                ticket['user_details'] = {
-                    '_id': str(user['_id']),
-                    'username': user.get('username', ''),
-                    'email': user.get('email', ''),
-                    'full_name': user.get('full_name', ''),
-                    'phone': user.get('phone', ''),
-                    'wallet_balance': user.get('wallet', {}).get('balance', 0),
-                    'kyc_status': user.get('kyc_status', 'pending'),
-                    'is_banned': user.get('is_banned', False)
-                }
-        
-        response = jsonify({'success': True, 'data': ticket})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_reply_ticket(ticket_id):
-    """Admin reply to a support ticket"""
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        message = data.get('message', '').strip()
-        
-        if not message:
-            return jsonify({'success': False, 'message': 'Message is required'}), 400
-        
-        admin_user = get_user_from_request()
-        
-        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        # Add admin reply
-        reply = {
-            'sender': 'admin',
-            'sender_id': str(admin_user['_id']),
-            'sender_name': admin_user.get('username', 'Admin'),
-            'message': message,
-            'created_at': datetime.now(timezone.utc)
-        }
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$push': {'messages': reply},
-                '$set': {
-                    'updated_at': datetime.now(timezone.utc),
-                    'status': 'pending'  # Waiting for user response
-                }
-            }
-        )
-        
-        # Send email notification to user
-        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
-        if user:
-            html_body = f"""
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
-                    <h1>New Reply to Your Ticket</h1>
-                </div>
-                <div style="padding: 20px; border: 1px solid #e2e8f0;">
-                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
-                    <p>You have a new reply to your support ticket <strong>{ticket_id}</strong>.</p>
-                    <div style="background: #f3f4f6; padding: 15px; margin: 15px 0;">
-                        <strong>Admin Reply:</strong><br>
-                        {message.replace(chr(10), '<br>')}
-                    </div>
-                    <p>Please login to your dashboard to view and reply.</p>
-                    <a href="{FRONTEND_URL}/support.html" style="background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Ticket</a>
-                    <br><br>
-                    <p>Best regards,<br>Veloxtrades Support Team</p>
-                </div>
-            </div>
-            """
-            send_email(user['email'], f'New Reply to Ticket #{ticket_id}', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYou have a new reply to your ticket.\n\nAdmin Reply:\n{message}\n\nLogin to view.\n\nBest regards,\nVeloxtrades Team", html_body)
-            
-            # Create notification
-            create_notification(
-                ticket['user_id'],
-                f'Support Ticket Updated: {ticket_id}',
-                f'Admin has replied to your ticket. Please check your dashboard.',
-                'info'
-            )
-        
-        # Log admin action
-        log_admin_action(admin_user['_id'], 'Ticket Reply', f'Replied to ticket {ticket_id}')
-        
-        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin reply ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/support/tickets/<ticket_id>/resolve', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_resolve_ticket(ticket_id):
-    """Resolve/close a support ticket"""
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json() or {}
-        resolution_notes = data.get('resolution_notes', '')
-        
-        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        admin_user = get_user_from_request()
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$set': {
-                    'status': 'resolved',
-                    'closed_at': datetime.now(timezone.utc),
-                    'updated_at': datetime.now(timezone.utc),
-                    'resolved_by': str(admin_user['_id']),
-                    'resolution_notes': resolution_notes
-                }
-            }
-        )
-        
-        # Notify user
-        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
-        if user:
-            create_notification(
-                ticket['user_id'],
-                f'Ticket Resolved: {ticket_id}',
-                f'Your support ticket has been marked as resolved. If you need further assistance, please open a new ticket.',
-                'success'
-            )
-            
-            html_body = f"""
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <div style="background: #10b981; padding: 20px; text-align: center; color: white;">
-                    <h1>Ticket Resolved</h1>
-                </div>
-                <div style="padding: 20px; border: 1px solid #e2e8f0;">
-                    <p>Dear {user.get('full_name', user.get('username', 'User'))},</p>
-                    <p>Your support ticket <strong>{ticket_id}</strong> has been marked as <strong style="color: #10b981;">RESOLVED</strong>.</p>
-                    {f'<div style="background: #f3f4f6; padding: 15px;"><strong>Resolution Notes:</strong><br>{resolution_notes}</div>' if resolution_notes else ''}
-                    <p>If you need further assistance, please open a new ticket.</p>
-                    <p>Thank you for choosing Veloxtrades!</p>
-                    <br>
-                    <p>Best regards,<br>Veloxtrades Support Team</p>
-                </div>
-            </div>
-            """
-            send_email(user['email'], f'Ticket #{ticket_id} Resolved', f"Dear {user.get('full_name', user.get('username', 'User'))},\n\nYour ticket {ticket_id} has been resolved.\n\nThank you.\n\nVeloxtrades Team", html_body)
-        
-        # Log admin action
-        log_admin_action(admin_user['_id'], 'Ticket Resolved', f'Resolved ticket {ticket_id}')
-        
-        response = jsonify({'success': True, 'message': 'Ticket resolved successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin resolve ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/support/tickets/<ticket_id>/priority', methods=['PUT', 'OPTIONS'])
-@require_admin
-def admin_update_ticket_priority(ticket_id):
-    """Update ticket priority"""
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        priority = data.get('priority', 'medium')
-        
-        if priority not in ['low', 'medium', 'high', 'urgent']:
-            return jsonify({'success': False, 'message': 'Invalid priority value'}), 400
-        
-        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        admin_user = get_user_from_request()
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$set': {
-                    'priority': priority,
-                    'updated_at': datetime.now(timezone.utc)
-                }
-            }
-        )
-        
-        # Log admin action
-        log_admin_action(admin_user['_id'], 'Ticket Priority Updated', f'Updated ticket {ticket_id} priority to {priority}')
-        
-        response = jsonify({'success': True, 'message': f'Ticket priority updated to {priority}'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin update ticket priority error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/support/tickets/stats', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_ticket_stats():
-    """Get support ticket statistics"""
-    if support_tickets_collection is None:
-        return jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}), 200
-    
-    try:
-        open_tickets = support_tickets_collection.count_documents({'status': 'open'})
-        pending_tickets = support_tickets_collection.count_documents({'status': 'pending'})
-        resolved_tickets = support_tickets_collection.count_documents({'status': 'resolved'})
-        closed_tickets = support_tickets_collection.count_documents({'status': 'closed'})
-        total = open_tickets + pending_tickets + resolved_tickets + closed_tickets
-        
-        # Get today's tickets
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_tickets = support_tickets_collection.count_documents({'created_at': {'$gte': today_start}})
-        
-        # Get tickets by category
-        categories = {}
-        for cat in ['general', 'deposit', 'withdrawal', 'investment', 'account', 'kyc']:
-            categories[cat] = support_tickets_collection.count_documents({'category': cat})
-        
-        # Get tickets by priority
-        priorities = {}
-        for pri in ['low', 'medium', 'high', 'urgent']:
-            priorities[pri] = support_tickets_collection.count_documents({'priority': pri})
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'open': open_tickets,
-                'pending': pending_tickets,
-                'resolved': resolved_tickets,
-                'closed': closed_tickets,
-                'total': total,
-                'today_tickets': today_tickets,
-                'by_category': categories,
-                'by_priority': priorities
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get ticket stats error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-        
-@app.route('/api/admin/referral-stats', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_referral_stats():
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        all_users = list(users_collection.find(
-            {},
-            {'_id': 1, 'username': 1, 'email': 1, 'full_name': 1, 'referral_code': 1, 'referred_by': 1, 'created_at': 1, 'wallet.total_deposited': 1}
-        ))
-        
-        referral_network = []
-        for user in all_users:
-            referral_code = user.get('referral_code', '')
-            referrals = [u for u in all_users if u.get('referred_by') == referral_code]
-            
-            total_commission = 0
-            for ref in referrals:
-                total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
-                total_commission += total_deposited * 0.05
-            
-            referral_network.append({
-                'user_id': str(user['_id']),
-                'username': user.get('username', ''),
-                'email': user.get('email', ''),
-                'full_name': user.get('full_name', ''),
-                'referral_code': referral_code,
-                'referred_by': user.get('referred_by', 'None'),
-                'joined': user.get('created_at').isoformat() if user.get('created_at') else None,
-                'total_deposited': user.get('wallet', {}).get('total_deposited', 0),
-                'referrals_count': len(referrals),
-                'total_commission': total_commission,
-                'referrals': [{
-                    'username': r.get('username', ''),
-                    'email': r.get('email', ''),
-                    'joined': r.get('created_at').isoformat() if r.get('created_at') else None,
-                    'total_deposited': r.get('wallet', {}).get('total_deposited', 0)
-                } for r in referrals]
-            })
-        
-        referral_network.sort(key=lambda x: x['referrals_count'], reverse=True)
-        top_referrers = referral_network[:10]
-        
-        total_users = len(all_users)
-        users_with_referrals = len([u for u in referral_network if u['referrals_count'] > 0])
-        total_referrals = sum(u['referrals_count'] for u in referral_network)
-        total_commission_paid = sum(u['total_commission'] for u in referral_network)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'stats': {
-                    'total_users': total_users,
-                    'users_with_referrals': users_with_referrals,
-                    'total_referrals': total_referrals,
-                    'total_commission_paid': total_commission_paid,
-                    'top_referrer': top_referrers[0] if top_referrers else None
-                },
-                'top_referrers': top_referrers,
-                'referral_network': referral_network
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get referral stats error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
@@ -2924,6 +2058,7 @@ def admin_delete_user(user_id):
         logger.error(f"Delete user error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN DEPOSITS ====================
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
@@ -3014,14 +2149,12 @@ def admin_process_deposit(deposit_id):
             create_notification(deposit['user_id'], 'Deposit Approved! ✅', 
                 f'Your deposit of ${deposit["amount"]:,.2f} via {deposit["crypto"]} has been approved and added to your wallet.', 'success')
             
-            # Send email notification
             try:
                 email_sent = send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
                 logger.info(f"Deposit approval email sent to {user['email']}: {email_sent}")
             except Exception as e:
                 logger.error(f"Failed to send deposit approval email: {e}")
             
-            # Add referral commission
             try:
                 add_referral_commission(deposit['user_id'], deposit['amount'])
             except Exception as e:
@@ -3045,7 +2178,6 @@ def admin_process_deposit(deposit_id):
             create_notification(deposit['user_id'], 'Deposit Rejected ❌', 
                 f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             
-            # Send rejection email
             try:
                 email_sent = send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
                 logger.info(f"Deposit rejection email sent to {user['email']}: {email_sent}")
@@ -3108,160 +2240,7 @@ def admin_resend_deposit_email(deposit_id):
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN BROADCAST ENDPOINTS ====================
-
-@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_broadcast_email():
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        recipients_type = data.get('recipients', 'all')
-        subject = data.get('subject')
-        message = data.get('message')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        query = {}
-        if recipients_type == 'active':
-            query = {'is_banned': False}
-        elif recipients_type == 'depositors':
-            query = {'wallet.total_deposited': {'$gt': 0}}
-        elif recipients_type == 'investors':
-            if investments_collection is not None:
-                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-                if active_investors:
-                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
-                else:
-                    query = {'_id': {'$in': []}}
-        
-        users = list(users_collection.find(query))
-        
-        html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
-                <h1>Veloxtrades</h1>
-            </div>
-            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
-                <h2>{subject}</h2>
-                <p>{message.replace(chr(10), '<br>')}</p>
-                <hr style="margin: 20px 0;">
-                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
-            </div>
-        </div>
-        """
-        
-        sent_count = 0
-        for user in users:
-            try:
-                if send_email(user['email'], subject, message, html_body):
-                    create_notification(user['_id'], subject, message, 'info')
-                    sent_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send to {user['email']}: {e}")
-        
-        response = jsonify({
-            'success': True, 
-            'message': f'Broadcast sent to {sent_count} out of {len(users)} users', 
-            'data': {'sent': sent_count, 'total': len(users)}
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_resend_deposit_emails():
-    if deposits_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json() or {}
-        status_filter = data.get('status', 'approved')
-        
-        query = {}
-        if status_filter == 'approved':
-            query['status'] = 'approved'
-        elif status_filter == 'rejected':
-            query['status'] = 'rejected'
-        elif status_filter == 'all':
-            query['status'] = {'$in': ['approved', 'rejected']}
-        else:
-            query['status'] = 'approved'
-        
-        deposits = list(deposits_collection.find(query))
-        
-        if not deposits:
-            response = jsonify({
-                'success': True,
-                'message': 'No deposits found to resend emails',
-                'data': {'sent': 0, 'failed': 0}
-            })
-            return add_cors_headers(response)
-        
-        sent_count = 0
-        failed_count = 0
-        errors = []
-        
-        for deposit in deposits:
-            try:
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                if not user:
-                    failed_count += 1
-                    errors.append(f"User not found for deposit {deposit.get('deposit_id', 'unknown')}")
-                    continue
-                
-                email_sent = False
-                if deposit['status'] == 'approved':
-                    email_sent = send_deposit_approved_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('transaction_hash', '')
-                    )
-                elif deposit['status'] == 'rejected':
-                    email_sent = send_deposit_rejected_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('rejection_reason', 'Not specified')
-                    )
-                
-                if email_sent:
-                    sent_count += 1
-                    logger.info(f"✅ Resent email for deposit {deposit.get('deposit_id', 'unknown')} to {user['email']}")
-                else:
-                    failed_count += 1
-                    errors.append(f"Failed to send email for deposit {deposit.get('deposit_id', 'unknown')}")
-                    
-            except Exception as e:
-                failed_count += 1
-                errors.append(f"Error for deposit {deposit.get('deposit_id', 'unknown')}: {str(e)}")
-                logger.error(f"Error resending email: {e}")
-        
-        response = jsonify({
-            'success': True,
-            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
-            'data': {
-                'sent': sent_count,
-                'failed': failed_count,
-                'errors': errors[:10]
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Resend emails error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+# ==================== ADMIN WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_withdrawals():
@@ -3348,7 +2327,6 @@ def admin_process_withdrawal(withdrawal_id):
             create_notification(withdrawal['user_id'], 'Withdrawal Approved! ✅', 
                 f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet.', 'success')
             
-            # Send approval email
             try:
                 email_sent = send_withdrawal_approved_email(user, withdrawal['amount'], withdrawal['currency'], withdrawal['wallet_address'])
                 logger.info(f"Withdrawal approval email sent to {user['email']}: {email_sent}")
@@ -3363,7 +2341,6 @@ def admin_process_withdrawal(withdrawal_id):
                 {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
             )
             
-            # Return funds to user
             users_collection.update_one(
                 {'_id': ObjectId(withdrawal['user_id'])},
                 {'$inc': {'wallet.balance': withdrawal['amount']}}
@@ -3379,7 +2356,6 @@ def admin_process_withdrawal(withdrawal_id):
             create_notification(withdrawal['user_id'], 'Withdrawal Rejected ❌', 
                 f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}', 'error')
             
-            # Send rejection email
             try:
                 email_sent = send_withdrawal_rejected_email(user, withdrawal['amount'], withdrawal['currency'], reason)
                 logger.info(f"Withdrawal rejection email sent to {user['email']}: {email_sent}")
@@ -3397,6 +2373,7 @@ def admin_process_withdrawal(withdrawal_id):
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN INVESTMENTS ====================
 @app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_investments():
@@ -3495,7 +2472,6 @@ def admin_complete_investment(investment_id):
             create_notification(user_id, 'Investment Completed! 🎉', 
                 f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!', 'success')
             
-            # Send completion email
             try:
                 email_sent = send_investment_completed_email(user, amount, plan_name, expected_profit)
                 logger.info(f"Investment completion email sent to {user['email']}: {email_sent}")
@@ -3513,130 +2489,196 @@ def admin_complete_investment(investment_id):
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/create-investment', methods=['POST', 'OPTIONS'])
+# ==================== ADMIN TRANSACTIONS ====================
+@app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
-def admin_create_investment():
-    if investments_collection is None or users_collection is None or transactions_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+def admin_get_transactions():
+    if transactions_collection is None:
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
     
     try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        plan_type = data.get('plan_type')
-        amount = float(data.get('amount', 0))
-        add_referral_bonus = data.get('add_referral_bonus', True)
-        deduct_from_balance = data.get('deduct_from_balance', True)
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))
+        tx_type = request.args.get('type', 'all')
+        skip = (page - 1) * limit
         
-        if not user_id or not plan_type:
-            return jsonify({'success': False, 'message': 'User ID and plan type required'}), 400
+        query = {}
+        if tx_type != 'all':
+            query['type'] = tx_type
         
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
+        total = transactions_collection.count_documents(query)
+        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
-        plan = INVESTMENT_PLANS.get(plan_type)
-        if not plan:
-            return jsonify({'success': False, 'message': 'Invalid investment plan'}), 400
-        
-        if amount < plan['min_deposit']:
-            return jsonify({'success': False, 'message': f'Minimum investment is ${plan["min_deposit"]}'}), 400
-        
-        if deduct_from_balance and user['wallet']['balance'] < amount:
-            return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
-        
-        expected_profit = amount * plan['roi'] / 100
-        end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
-        
-        if deduct_from_balance:
-            users_collection.update_one(
-                {'_id': ObjectId(user_id)},
-                {'$inc': {'wallet.balance': -amount, 'wallet.total_invested': amount}}
-            )
-        
-        investment_data = {
-            'user_id': user_id,
-            'username': user['username'],
-            'plan': plan_type,
-            'plan_name': plan['name'],
-            'amount': amount,
-            'roi': plan['roi'],
-            'expected_profit': expected_profit,
-            'duration_hours': plan['duration_hours'],
-            'start_date': datetime.now(timezone.utc),
-            'end_date': end_date,
-            'status': 'active',
-            'created_by_admin': True
-        }
-        
-        result = investments_collection.insert_one(investment_data)
-        
-        transactions_collection.insert_one({
-            'user_id': user_id,
-            'type': 'investment',
-            'amount': amount,
-            'status': 'completed',
-            'description': f'Investment in {plan["name"]} (Admin created)',
-            'investment_id': str(result.inserted_id),
-            'created_at': datetime.now(timezone.utc)
-        })
-        
-        referral_bonus_added = 0
-        if add_referral_bonus and user.get('referral_code'):
-            settings = settings_collection.find_one({}) if settings_collection else None
-            bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
-            referral_bonus = amount * bonus_percentage / 100
+        result_transactions = []
+        for tx in transactions:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
+                tx['created_at'] = tx['created_at'].isoformat()
             
-            if referral_bonus > 0:
-                referrer = users_collection.find_one({'referral_code': user.get('referred_by')}) if user.get('referred_by') else None
-                
-                if referrer:
-                    users_collection.update_one(
-                        {'_id': ObjectId(referrer['_id'])},
-                        {'$inc': {'wallet.balance': referral_bonus, 'wallet.total_profit': referral_bonus}}
-                    )
-                    
-                    transactions_collection.insert_one({
-                        'user_id': str(referrer['_id']),
-                        'type': 'bonus',
-                        'amount': referral_bonus,
-                        'status': 'completed',
-                        'description': f'Referral bonus from {user["username"]}\'s investment of ${amount:,.2f}',
-                        'created_at': datetime.now(timezone.utc)
-                    })
-                    
-                    create_notification(referrer['_id'], 'Referral Bonus! 🎉', 
-                        f'You earned ${referral_bonus:,.2f} from {user["username"]}\'s investment!', 'success')
-                    
-                    referral_bonus_added = referral_bonus
-        
-        create_notification(user_id, 'Investment Created! 🚀', 
-            f'Your investment of ${amount:,.2f} in {plan["name"]} has been created. Expected profit: ${expected_profit:,.2f}', 'success')
-        
-        # Send confirmation email
-        try:
-            email_sent = send_investment_confirmation_email(user, amount, plan['name'], plan['roi'], expected_profit)
-            logger.info(f"Investment confirmation email sent to {user['email']}: {email_sent}")
-        except Exception as e:
-            logger.error(f"Failed to send investment confirmation email: {e}")
+            if users_collection is not None and 'user_id' in tx:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                    tx['user'] = {
+                        'username': user.get('username', 'Unknown') if user else 'Unknown',
+                        'email': user.get('email', '') if user else ''
+                    }
+                except:
+                    tx['user'] = {'username': 'Unknown', 'email': ''}
+            else:
+                tx['user'] = {'username': 'Unknown', 'email': ''}
+            result_transactions.append(tx)
         
         response = jsonify({
             'success': True,
-            'message': f'Investment created successfully for {user["username"]}',
             'data': {
-                'investment_id': str(result.inserted_id),
-                'expected_profit': expected_profit,
-                'end_date': end_date.isoformat(),
-                'referral_bonus_added': referral_bonus_added
+                'transactions': result_transactions,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get admin transactions error: {e}", exc_info=True)
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+
+# ==================== ADMIN REFERRAL STATS ====================
+@app.route('/api/admin/referral-stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_referral_stats():
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        all_users = list(users_collection.find(
+            {},
+            {'_id': 1, 'username': 1, 'email': 1, 'full_name': 1, 'referral_code': 1, 'referred_by': 1, 'created_at': 1, 'wallet.total_deposited': 1}
+        ))
+        
+        referral_network = []
+        for user in all_users:
+            referral_code = user.get('referral_code', '')
+            referrals = [u for u in all_users if u.get('referred_by') == referral_code]
+            
+            total_commission = 0
+            for ref in referrals:
+                total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
+                total_commission += total_deposited * 0.05
+            
+            referral_network.append({
+                'user_id': str(user['_id']),
+                'username': user.get('username', ''),
+                'email': user.get('email', ''),
+                'full_name': user.get('full_name', ''),
+                'referral_code': referral_code,
+                'referred_by': user.get('referred_by', 'None'),
+                'joined': user.get('created_at').isoformat() if user.get('created_at') else None,
+                'total_deposited': user.get('wallet', {}).get('total_deposited', 0),
+                'referrals_count': len(referrals),
+                'total_commission': total_commission,
+                'referrals': [{
+                    'username': r.get('username', ''),
+                    'email': r.get('email', ''),
+                    'joined': r.get('created_at').isoformat() if r.get('created_at') else None,
+                    'total_deposited': r.get('wallet', {}).get('total_deposited', 0)
+                } for r in referrals]
+            })
+        
+        referral_network.sort(key=lambda x: x['referrals_count'], reverse=True)
+        top_referrers = referral_network[:10]
+        
+        total_users = len(all_users)
+        users_with_referrals = len([u for u in referral_network if u['referrals_count'] > 0])
+        total_referrals = sum(u['referrals_count'] for u in referral_network)
+        total_commission_paid = sum(u['total_commission'] for u in referral_network)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'stats': {
+                    'total_users': total_users,
+                    'users_with_referrals': users_with_referrals,
+                    'total_referrals': total_referrals,
+                    'total_commission_paid': total_commission_paid,
+                    'top_referrer': top_referrers[0] if top_referrers else None
+                },
+                'top_referrers': top_referrers,
+                'referral_network': referral_network
             }
         })
         return add_cors_headers(response)
         
     except Exception as e:
-        logger.error(f"Admin create investment error: {e}")
+        logger.error(f"Get referral stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN BROADCAST ====================
+@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_broadcast_email():
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        recipients_type = data.get('recipients', 'all')
+        subject = data.get('subject')
+        message = data.get('message')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        query = {}
+        if recipients_type == 'active':
+            query = {'is_banned': False}
+        elif recipients_type == 'depositors':
+            query = {'wallet.total_deposited': {'$gt': 0}}
+        elif recipients_type == 'investors':
+            if investments_collection is not None:
+                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
+                if active_investors:
+                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
+                else:
+                    query = {'_id': {'$in': []}}
+        
+        users = list(users_collection.find(query))
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                <h1>Veloxtrades</h1>
+            </div>
+            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
+                <h2>{subject}</h2>
+                <p>{message.replace(chr(10), '<br>')}</p>
+                <hr style="margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
+            </div>
+        </div>
+        """
+        
+        sent_count = 0
+        for user in users:
+            try:
+                if send_email(user['email'], subject, message, html_body):
+                    create_notification(user['_id'], subject, message, 'info')
+                    sent_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send to {user['email']}: {e}")
+        
+        response = jsonify({
+            'success': True, 
+            'message': f'Broadcast sent to {sent_count} out of {len(users)} users', 
+            'data': {'sent': sent_count, 'total': len(users)}
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
-# ==================== ADMIN RESEND EMAILS ENDPOINT ====================
 
+# ==================== ADMIN RESEND EMAILS ====================
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
@@ -3647,7 +2689,6 @@ def admin_resend_deposit_emails():
         data = request.get_json() or {}
         status_filter = data.get('status', 'approved')
         
-        # Build query based on status filter
         if status_filter == 'approved':
             query = {'status': 'approved'}
         elif status_filter == 'rejected':
@@ -3697,7 +2738,7 @@ def admin_resend_deposit_emails():
                     
             except Exception as e:
                 failed_count += 1
-                logger.error(f"Error resending email for deposit {deposit.get('deposit_id')}: {e}")
+                logger.error(f"Error resending email: {e}")
         
         response = jsonify({
             'success': True,
@@ -3711,49 +2752,55 @@ def admin_resend_deposit_emails():
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
-@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
+# ==================== ADMIN SEND EMAIL ====================
+@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
-def admin_resend_single_deposit_email(deposit_id):
-    if deposits_collection is None or users_collection is None:
+def admin_send_email():
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
-        if not deposit:
-            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+        data = request.get_json()
+        user_id = data.get('user_id')
+        subject = data.get('subject')
+        message = data.get('message')
         
-        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user_id or not subject or not message:
+            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
+        
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
-        if deposit['status'] == 'approved':
-            email_sent = send_deposit_approved_email(
-                user, 
-                deposit['amount'], 
-                deposit['crypto'], 
-                deposit.get('transaction_hash', '')
-            )
-        elif deposit['status'] == 'rejected':
-            email_sent = send_deposit_rejected_email(
-                user, 
-                deposit['amount'], 
-                deposit['crypto'], 
-                deposit.get('rejection_reason', 'Not specified')
-            )
-        else:
-            return jsonify({'success': False, 'message': 'Deposit not processed yet'}), 400
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                <h1>Veloxtrades</h1>
+            </div>
+            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
+                <h2>{subject}</h2>
+                <p>{message.replace(chr(10), '<br>')}</p>
+                <hr style="margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">This is an automated message from Veloxtrades.</p>
+            </div>
+        </div>
+        """
+        
+        email_sent = send_email(user['email'], subject, message, html_body)
         
         if email_sent:
-            response = jsonify({'success': True, 'message': 'Email resent successfully'})
+            create_notification(user_id, subject, message, 'info')
+            response = jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
         else:
             response = jsonify({'success': False, 'message': 'Failed to send email'}), 500
         
         return add_cors_headers(response)
-            
+        
     except Exception as e:
-        logger.error(f"Resend email error: {e}")
+        logger.error(f"Send email error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN CREATE TRANSACTION ====================
 @app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_create_transaction():
@@ -3827,107 +2874,445 @@ def admin_create_transaction():
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
+# ==================== ADMIN KYC ====================
+@app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
 @require_admin
-def admin_get_transactions():
-    if transactions_collection is None:
-        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+def admin_get_kyc_applications():
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
     
     try:
         page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 50))
-        tx_type = request.args.get('type', 'all')
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'pending')
         skip = (page - 1) * limit
         
         query = {}
-        if tx_type != 'all':
-            query['type'] = tx_type
+        if status != 'all':
+            query['status'] = status
         
-        total = transactions_collection.count_documents(query)
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = kyc_collection.count_documents(query)
+        applications = list(kyc_collection.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
         
-        result_transactions = []
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
+        result_applications = []
+        for app in applications:
+            app['_id'] = str(app['_id'])
+            if app.get('submitted_at'):
+                app['submitted_at'] = app['submitted_at'].isoformat()
+            if app.get('reviewed_at'):
+                app['reviewed_at'] = app['reviewed_at'].isoformat()
             
-            if users_collection is not None and 'user_id' in tx:
+            if users_collection and app.get('user_id'):
                 try:
-                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-                    tx['user'] = {
-                        'username': user.get('username', 'Unknown') if user else 'Unknown',
-                        'email': user.get('email', '') if user else ''
-                    }
+                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
+                    if user:
+                        app['user_details'] = {
+                            'username': user.get('username', ''),
+                            'email': user.get('email', ''),
+                            'phone': user.get('phone', ''),
+                            'wallet_balance': user.get('wallet', {}).get('balance', 0)
+                        }
                 except:
-                    tx['user'] = {'username': 'Unknown', 'email': ''}
-            else:
-                tx['user'] = {'username': 'Unknown', 'email': ''}
-            result_transactions.append(tx)
+                    app['user_details'] = {'username': 'Unknown', 'email': ''}
+            
+            result_applications.append(app)
         
         response = jsonify({
             'success': True,
             'data': {
-                'transactions': result_transactions,
+                'applications': result_applications,
                 'total': total,
                 'page': page,
                 'pages': (total + limit - 1) // limit if total > 0 else 1
             }
         })
         return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get admin transactions error: {e}", exc_info=True)
-        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+        logger.error(f"Admin get KYC applications error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
+@app.route('/api/admin/kyc/<kyc_id>', methods=['GET', 'OPTIONS'])
 @require_admin
-def admin_send_email():
-    if users_collection is None:
+def admin_get_kyc_application(kyc_id):
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
+        
+        kyc['_id'] = str(kyc['_id'])
+        if kyc.get('submitted_at'):
+            kyc['submitted_at'] = kyc['submitted_at'].isoformat()
+        if kyc.get('reviewed_at'):
+            kyc['reviewed_at'] = kyc['reviewed_at'].isoformat()
+        
+        if users_collection and kyc.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+            if user:
+                kyc['user_details'] = {
+                    '_id': str(user['_id']),
+                    'username': user.get('username', ''),
+                    'email': user.get('email', ''),
+                    'full_name': user.get('full_name', ''),
+                    'phone': user.get('phone', ''),
+                    'wallet_balance': user.get('wallet', {}).get('balance', 0)
+                }
+        
+        response = jsonify({'success': True, 'data': kyc})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get KYC application error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_approve_kyc(kyc_id):
+    if kyc_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
+        
+        if kyc['status'] != 'pending':
+            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
+        
+        admin_user = get_user_from_request()
+        
+        kyc_collection.update_one(
+            {'_id': ObjectId(kyc_id)},
+            {
+                '$set': {
+                    'status': 'approved',
+                    'reviewed_at': datetime.now(timezone.utc),
+                    'reviewed_by': str(admin_user['_id']),
+                    'reviewer_username': admin_user.get('username', 'Admin')
+                }
+            }
+        )
+        
+        users_collection.update_one(
+            {'_id': ObjectId(kyc['user_id'])},
+            {'$set': {'kyc_status': 'verified', 'is_verified': True}}
+        )
+        
+        create_notification(
+            kyc['user_id'],
+            'KYC Approved! ✅',
+            'Congratulations! Your KYC verification has been approved.',
+            'success'
+        )
+        
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+        if user:
+            send_email(user['email'], 'KYC Verification Approved', f'Dear {user.get("username")},\n\nYour KYC has been approved.\n\nBest regards,\nVeloxtrades Team')
+        
+        log_admin_action(admin_user['_id'], 'KYC Approved', f'Approved KYC for user {kyc["username"]}')
+        
+        response = jsonify({'success': True, 'message': 'KYC application approved successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin approve KYC error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/kyc/<kyc_id>/reject', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_reject_kyc(kyc_id):
+    if kyc_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
         data = request.get_json()
-        user_id = data.get('user_id')
-        subject = data.get('subject')
-        message = data.get('message')
+        reason = data.get('reason', '').strip()
         
-        if not user_id or not subject or not message:
-            return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
+        if not reason:
+            return jsonify({'success': False, 'message': 'Rejection reason is required'}), 400
         
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
-        if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
+        if not kyc:
+            return jsonify({'success': False, 'message': 'KYC application not found'}), 404
         
-        html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
-                <h1>Veloxtrades</h1>
-            </div>
-            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
-                <h2>{subject}</h2>
-                <p>{message.replace(chr(10), '<br>')}</p>
-                <hr style="margin: 20px 0;">
-                <p style="color: #666; font-size: 12px;">This is an automated message from Veloxtrades.</p>
-            </div>
-        </div>
-        """
+        if kyc['status'] != 'pending':
+            return jsonify({'success': False, 'message': f'This application has already been {kyc["status"]}'}), 400
         
-        email_sent = send_email(user['email'], subject, message, html_body)
+        admin_user = get_user_from_request()
         
-        if email_sent:
-            create_notification(user_id, subject, message, 'info')
-            response = jsonify({'success': True, 'message': f'Email sent to {user["email"]}'})
-        else:
-            response = jsonify({'success': False, 'message': 'Failed to send email'}), 500
+        kyc_collection.update_one(
+            {'_id': ObjectId(kyc_id)},
+            {
+                '$set': {
+                    'status': 'rejected',
+                    'reviewed_at': datetime.now(timezone.utc),
+                    'reviewed_by': str(admin_user['_id']),
+                    'reviewer_username': admin_user.get('username', 'Admin'),
+                    'rejection_reason': reason
+                }
+            }
+        )
         
+        users_collection.update_one(
+            {'_id': ObjectId(kyc['user_id'])},
+            {'$set': {'kyc_status': 'rejected'}}
+        )
+        
+        create_notification(
+            kyc['user_id'],
+            'KYC Rejected ❌',
+            f'Your KYC verification was rejected. Reason: {reason}',
+            'error'
+        )
+        
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
+        if user:
+            send_email(user['email'], 'KYC Verification Rejected', f'Dear {user.get("username")},\n\nYour KYC was rejected.\nReason: {reason}\n\nPlease submit new documents.\n\nBest regards,\nVeloxtrades Team')
+        
+        log_admin_action(admin_user['_id'], 'KYC Rejected', f'Rejected KYC for user {kyc["username"]}. Reason: {reason}')
+        
+        response = jsonify({'success': True, 'message': 'KYC application rejected successfully'})
         return add_cors_headers(response)
         
     except Exception as e:
-        logger.error(f"Send email error: {e}")
+        logger.error(f"Admin reject KYC error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/admin/kyc/stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_kyc_stats():
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}), 200
+    
+    try:
+        pending = kyc_collection.count_documents({'status': 'pending'})
+        approved = kyc_collection.count_documents({'status': 'approved'})
+        rejected = kyc_collection.count_documents({'status': 'rejected'})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'pending': pending,
+                'approved': approved,
+                'rejected': rejected,
+                'total': pending + approved + rejected
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get KYC stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN SUPPORT TICKETS ====================
+@app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_tickets():
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        result_tickets = []
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            
+            ticket['message_count'] = len(ticket.get('messages', []))
+            ticket.pop('messages', None)
+            
+            result_tickets.append(ticket)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': result_tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get tickets error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/admin/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_ticket(ticket_id):
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        ticket['_id'] = str(ticket['_id'])
+        if ticket.get('created_at'):
+            ticket['created_at'] = ticket['created_at'].isoformat()
+        if ticket.get('updated_at'):
+            ticket['updated_at'] = ticket['updated_at'].isoformat()
+        
+        for msg in ticket.get('messages', []):
+            if msg.get('created_at'):
+                msg['created_at'] = msg['created_at'].isoformat()
+        
+        if users_collection and ticket.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+            if user:
+                ticket['user_details'] = {
+                    'username': user.get('username', ''),
+                    'email': user.get('email', ''),
+                    'wallet_balance': user.get('wallet', {}).get('balance', 0)
+                }
+        
+        response = jsonify({'success': True, 'data': ticket})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_reply_ticket(ticket_id):
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        
+        if not message:
+            return jsonify({'success': False, 'message': 'Message is required'}), 400
+        
+        admin_user = get_user_from_request()
+        
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        reply = {
+            'sender': 'admin',
+            'sender_id': str(admin_user['_id']),
+            'sender_name': admin_user.get('username', 'Admin'),
+            'message': message,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$push': {'messages': reply},
+                '$set': {
+                    'updated_at': datetime.now(timezone.utc),
+                    'status': 'pending'
+                }
+            }
+        )
+        
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+        if user:
+            send_email(user['email'], f'New Reply to Ticket #{ticket_id}', f'Admin replied: {message}')
+            create_notification(ticket['user_id'], f'Ticket Updated: {ticket_id}', 'Admin has replied to your ticket.', 'info')
+        
+        log_admin_action(admin_user['_id'], 'Ticket Reply', f'Replied to ticket {ticket_id}')
+        
+        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin reply ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/support/tickets/<ticket_id>/resolve', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resolve_ticket(ticket_id):
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        admin_user = get_user_from_request()
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'resolved',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc),
+                    'resolved_by': str(admin_user['_id'])
+                }
+            }
+        )
+        
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
+        if user:
+            create_notification(ticket['user_id'], f'Ticket Resolved: {ticket_id}', 'Your ticket has been resolved.', 'success')
+        
+        log_admin_action(admin_user['_id'], 'Ticket Resolved', f'Resolved ticket {ticket_id}')
+        
+        response = jsonify({'success': True, 'message': 'Ticket resolved successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin resolve ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/admin/support/tickets/stats', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_ticket_stats():
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}), 200
+    
+    try:
+        open_tickets = support_tickets_collection.count_documents({'status': 'open'})
+        pending_tickets = support_tickets_collection.count_documents({'status': 'pending'})
+        resolved_tickets = support_tickets_collection.count_documents({'status': 'resolved'})
+        closed_tickets = support_tickets_collection.count_documents({'status': 'closed'})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'open': open_tickets,
+                'pending': pending_tickets,
+                'resolved': resolved_tickets,
+                'closed': closed_tickets,
+                'total': open_tickets + pending_tickets + resolved_tickets + closed_tickets
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Admin get ticket stats error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN RESET ====================
 @app.route('/api/admin/reset-all', methods=['GET'])
 def reset_all_admin():
     secret_key = request.args.get('secret')
