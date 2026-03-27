@@ -1238,58 +1238,6 @@ def verify_referral():
         logger.error(f"Verify referral error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/user/referral-info', methods=['GET', 'OPTIONS'])
-def get_user_referral_info():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        referral_code = user.get('referral_code', '')
-        
-        referred_users = list(users_collection.find(
-            {'referred_by': referral_code},
-            {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
-        ).sort('created_at', -1))
-        
-        formatted_referrals = []
-        total_commission = 0
-        
-        for ref in referred_users:
-            total_deposited = ref.get('wallet', {}).get('total_deposited', 0)
-            commission = total_deposited * 0.05
-            total_commission += commission
-            
-            formatted_referrals.append({
-                'id': str(ref['_id']),
-                'username': ref.get('username', ''),
-                'full_name': ref.get('full_name', ''),
-                'joined': ref.get('created_at').isoformat() if ref.get('created_at') else None,
-                'total_deposited': total_deposited,
-                'commission_earned': commission
-            })
-        
-        settings = settings_collection.find_one({}) if settings_collection else None
-        referral_bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
-        
-        response_data = {
-            'referral_code': referral_code,
-            'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
-            'referral_bonus_percentage': referral_bonus_percentage,
-            'total_referrals': len(formatted_referrals),
-            'total_commission': total_commission,
-            'referred_users': formatted_referrals
-        }
-        
-        response = jsonify({'success': True, 'data': response_data})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get referral info error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
@@ -2050,7 +1998,7 @@ def get_user_referral_info():
     try:
         referral_code = user.get('referral_code', '')
         
-        # Fix: Find users who used this referral code
+        # Find users who used this referral code
         referred_users = list(users_collection.find(
             {'referred_by': referral_code},
             {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
@@ -2060,7 +2008,6 @@ def get_user_referral_info():
         total_commission = 0
         
         for ref in referred_users:
-            # Safely get total_deposited
             wallet = ref.get('wallet', {})
             total_deposited = wallet.get('total_deposited', 0) if isinstance(wallet, dict) else 0
             commission = total_deposited * 0.05
@@ -2075,14 +2022,13 @@ def get_user_referral_info():
                 'commission_earned': commission
             })
         
-        # Get referral bonus percentage from settings
-        referral_bonus_percentage = 5  # default
+        # Get referral bonus percentage
+        referral_bonus_percentage = 5
         if settings_collection is not None:
             settings = settings_collection.find_one({})
             if settings:
                 referral_bonus_percentage = settings.get('referral_bonus', 5)
         
-        # Build response data
         response_data = {
             'referral_code': referral_code,
             'referral_link': f"{FRONTEND_URL}/register?ref={referral_code}",
@@ -2092,16 +2038,13 @@ def get_user_referral_info():
             'referred_users': formatted_referrals
         }
         
-        # Log success for debugging
-        logger.info(f"✅ Referral info loaded for user {user['username']}: {len(formatted_referrals)} referrals, ${total_commission} commission")
-        
         response = jsonify({'success': True, 'data': response_data})
         return add_cors_headers(response)
         
     except Exception as e:
         logger.error(f"Get referral info error: {e}")
         logger.error(traceback.format_exc())
-        # Return empty data instead of error to prevent dashboard crash
+        # Return empty data instead of error
         return jsonify({
             'success': True, 
             'data': {
