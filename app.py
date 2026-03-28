@@ -148,7 +148,7 @@ admin_logs_collection = None
 settings_collection = None
 email_logs_collection = None
 referral_stats_collection = None
-
+connection', methods=['GET', 'OPTIONS'])
 def init_mongo():
     """Initialize MongoDB connection properly"""
     global client, db, users_collection, investments_collection, transactions_collection
@@ -163,47 +163,26 @@ def init_mongo():
         
         if not mongo_uri:
             logger.error("❌ MONGO_URI not set in environment variables!")
-            # Try to get from os.environ directly
-            mongo_uri = os.getenv('MONGO_URI')
-            if not mongo_uri:
-                logger.error("❌ MONGO_URI not found in environment!")
-                return False
+            return False
         
-        logger.info(f"📡 Connecting with URI: {mongo_uri[:50]}...")  # Log first 50 chars only
+        logger.info(f"📡 Connecting with URI: {mongo_uri[:50]}...")
         
-        # Fix password encoding issues
-        # If password contains @ or ., they need to be URL encoded
-        if '@' in mongo_uri and '%40' not in mongo_uri:
-            # Replace @ with %40 in password part
-            parts = mongo_uri.split('@')
-            if len(parts) > 1:
-                auth_part = parts[0]
-                if '://' in auth_part:
-                    scheme = auth_part.split('://')[0] + '://'
-                    credentials = auth_part.split('://')[1]
-                    if ':' in credentials:
-                        username, password = credentials.split(':', 1)
-                        password = password.replace('@', '%40').replace('.', '%2E')
-                        fixed_auth = f"{scheme}{username}:{password}"
-                        mongo_uri = f"{fixed_auth}@{parts[1]}"
-                        logger.info("🔧 Fixed password encoding in URI")
-        
-        # Create client with SSL options for Atlas
+        # Create client
         client = MongoClient(
             mongo_uri,
-            serverSelectionTimeoutMS=30000,  # 30 second timeout
+            serverSelectionTimeoutMS=30000,
             socketTimeoutMS=30000,
             connectTimeoutMS=30000,
             tls=True,
-            tlsAllowInvalidCertificates=True  # For development only
+            tlsAllowInvalidCertificates=True
         )
         
         # Test connection
         client.admin.command('ping')
         logger.info("✅ MongoDB ping successful!")
         
-        # Set database
-        db = client['investment_db']
+        # ✅ FIXED: Use veloxtrades_db instead of investment_db
+        db = client['veloxtrades_db']  # ← THIS IS THE FIX!
         
         # Initialize collections
         users_collection = db['users']
@@ -219,7 +198,7 @@ def init_mongo():
         email_logs_collection = db['email_logs']
         referral_stats_collection = db['referral_stats']
         
-        # Test each collection by counting (this will verify access)
+        # Count users to verify
         try:
             user_count = users_collection.count_documents({})
             logger.info(f"📊 Users collection has {user_count} documents")
@@ -241,37 +220,15 @@ def init_mongo():
             settings_collection.insert_one(PLATFORM_SETTINGS)
             logger.info("✅ Default settings created")
         
-        logger.info("✅ MongoDB Connected Successfully!")
+        logger.info("✅ MongoDB Connected Successfully to veloxtrades_db!")
         return True
         
     except Exception as e:
         logger.error(f"❌ MongoDB Connection Error: {e}")
-        logger.error(f"Error type: {type(e).__name__}")
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.error(traceback.format_exc())
         return False
 
-def init_mongo_with_retry(max_retries=3, delay=5):
-    """Initialize MongoDB with retry logic"""
-    for attempt in range(max_retries):
-        logger.info(f"🔄 MongoDB connection attempt {attempt + 1}/{max_retries}")
-        if init_mongo():
-            return True
-        if attempt < max_retries - 1:
-            logger.info(f"⏳ Waiting {delay} seconds before retry...")
-            time.sleep(delay)
-    logger.error("❌ Failed to connect to MongoDB after all retries")
-    return False
 
-# Start MongoDB connection
-mongo_connected = init_mongo_with_retry()
-
-if not mongo_connected:
-    logger.error("=" * 70)
-    logger.error("⚠️  WARNING: MongoDB connection failed!")
-    logger.error("The API will still run but database operations will fail.")
-    logger.error("Please check your MONGO_URI environment variable.")
-    logger.error("=" * 70)
-@app.route('/api/debug/connection', methods=['GET', 'OPTIONS'])
 def debug_connection():
     """Debug endpoint to check connection status"""
     mongo_status = {
