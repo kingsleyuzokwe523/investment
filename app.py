@@ -145,7 +145,33 @@ admin_logs_collection = None
 settings_collection = None
 email_logs_collection = None
 referral_stats_collection = None
-
+# Add this right after your init_mongo() function
+def test_mongo_connection():
+    """Test MongoDB connection with detailed error reporting"""
+    try:
+        # Get the URI from environment
+        uri = app.config['MONGO_URI']
+        logger.info(f"Attempting to connect to MongoDB with URI: {uri.replace('Trewqasd15e', '****')}")
+        
+        # Try to connect with a timeout
+        client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+        client.admin.command('ping')
+        logger.info("✅ MongoDB connection successful!")
+        
+        # List databases to verify access
+        dbs = client.list_database_names()
+        logger.info(f"Available databases: {dbs}")
+        
+        # Check if investment_db exists, create if not
+        db = client['investment_db']
+        collections = db.list_collection_names()
+        logger.info(f"Collections in investment_db: {collections}")
+        
+        return True, client
+    except Exception as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+        logger.error(traceback.format_exc())
+        return False, None
 def init_mongo():
     """Initialize MongoDB connection properly"""
     global client, db, users_collection, investments_collection, transactions_collection
@@ -154,9 +180,22 @@ def init_mongo():
     
     try:
         logger.info("🔄 Connecting to MongoDB...")
-        client = MongoClient(app.config['MONGO_URI'], serverSelectionTimeoutMS=5000)
+        
+        # Get MongoDB URI from config
+        mongo_uri = app.config['MONGO_URI']
+        if not mongo_uri:
+            logger.error("❌ MONGO_URI not set in environment variables!")
+            return False
+        
+        # Create client with timeout
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
+        
+        # Test connection
         client.admin.command('ping')
-        db = client['veloxtrades_db']
+        logger.info("✅ MongoDB ping successful!")
+        
+        # Set database
+        db = client['investment_db']
         
         # Initialize collections
         users_collection = db['users']
@@ -178,12 +217,7 @@ def init_mongo():
                 users_collection.create_index('email', unique=True, sparse=True)
                 users_collection.create_index('username', unique=True, sparse=True)
                 users_collection.create_index('referral_code', unique=True, sparse=True)
-            if transactions_collection is not None:
-                transactions_collection.create_index('user_id')
-                transactions_collection.create_index('created_at')
-            if support_tickets_collection is not None:
-                support_tickets_collection.create_index('user_id')
-                support_tickets_collection.create_index('status')
+                logger.info("✅ Indexes created on users collection")
         except Exception as idx_error:
             logger.warning(f"Index creation warning: {idx_error}")
         
@@ -194,6 +228,7 @@ def init_mongo():
         
         logger.info("✅ MongoDB Connected Successfully!")
         return True
+        
     except Exception as e:
         logger.error(f"❌ MongoDB Connection Error: {e}")
         logger.error(traceback.format_exc())
