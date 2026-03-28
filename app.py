@@ -2291,24 +2291,7 @@ def admin_get_stats():
             'total_users': 0, 'total_deposit_amount': 0, 'total_withdrawal_amount': 0,
             'active_investments': 0, 'pending_deposits': 0, 'pending_withdrawals': 0, 'banned_users': 0
         }}), 200
-@app.route('/api/admin/email-config', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_email_config_check():
-    """Check email configuration status"""
-    is_valid, message = check_email_configuration()
-    
-    return jsonify({
-        'success': True,
-        'data': {
-            'configured': EMAIL_CONFIGURED,
-            'valid': is_valid,
-            'message': message,
-            'host': EMAIL_HOST,
-            'port': EMAIL_PORT,
-            'from': EMAIL_FROM,
-            'user': EMAIL_USER if EMAIL_USER else 'Not set'
-        }
-    })
+
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
