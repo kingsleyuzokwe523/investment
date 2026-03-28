@@ -62,7 +62,9 @@ client = None
 veloxtrades_db = None
 investment_db = None
 
-# Collections for veloxtrades_db
+# ==================== COLLECTIONS FOR BOTH DATABASES ====================
+# Each database will have ALL these collections
+# veloxtrades_db collections
 veloxtrades_users = None
 veloxtrades_transactions = None
 veloxtrades_notifications = None
@@ -71,14 +73,27 @@ veloxtrades_support_tickets = None
 veloxtrades_admin_logs = None
 veloxtrades_settings = None
 veloxtrades_email_logs = None
+veloxtrades_investments = None
+veloxtrades_deposits = None
+veloxtrades_withdrawals = None
+veloxtrades_referral_stats = None
 
-# Collections for investment_db
+# investment_db collections
+investment_users = None
+investment_transactions = None
+investment_notifications = None
+investment_kyc = None
+investment_support_tickets = None
+investment_admin_logs = None
+investment_settings = None
+investment_email_logs = None
 investment_investments = None
 investment_deposits = None
 investment_withdrawals = None
 investment_referral_stats = None
 
-# Combined collections (will search across both databases)
+# ==================== COMBINED COLLECTIONS (SEARCH ACROSS BOTH DATABASES) ====================
+# These will search across both databases for each data type
 users_collection = None
 investments_collection = None
 transactions_collection = None
@@ -93,12 +108,23 @@ email_logs_collection = None
 referral_stats_collection = None
 
 def connect_to_databases():
-    """Connect to both databases and set up collections"""
+    """Connect to both databases and set up all collections in both"""
     global client, veloxtrades_db, investment_db
-    global veloxtrades_users, veloxtrades_transactions, veloxtrades_notifications, veloxtrades_kyc, veloxtrades_support_tickets, veloxtrades_admin_logs, veloxtrades_settings, veloxtrades_email_logs
+    
+    # veloxtrades_db collections
+    global veloxtrades_users, veloxtrades_transactions, veloxtrades_notifications, veloxtrades_kyc
+    global veloxtrades_support_tickets, veloxtrades_admin_logs, veloxtrades_settings, veloxtrades_email_logs
+    global veloxtrades_investments, veloxtrades_deposits, veloxtrades_withdrawals, veloxtrades_referral_stats
+    
+    # investment_db collections
+    global investment_users, investment_transactions, investment_notifications, investment_kyc
+    global investment_support_tickets, investment_admin_logs, investment_settings, investment_email_logs
     global investment_investments, investment_deposits, investment_withdrawals, investment_referral_stats
-    global users_collection, investments_collection, transactions_collection, deposits_collection, withdrawals_collection
-    global notifications_collection, kyc_collection, support_tickets_collection, admin_logs_collection, settings_collection, email_logs_collection, referral_stats_collection
+    
+    # Combined collections
+    global users_collection, investments_collection, transactions_collection, deposits_collection
+    global withdrawals_collection, notifications_collection, kyc_collection, support_tickets_collection
+    global admin_logs_collection, settings_collection, email_logs_collection, referral_stats_collection
     
     try:
         # Connect to MongoDB
@@ -113,7 +139,7 @@ def connect_to_databases():
         veloxtrades_db = client[DB_VELOXTRADES]
         investment_db = client[DB_INVESTMENT]
         
-        # ==================== VELOXTRADES DB COLLECTIONS ====================
+        # ==================== CREATE ALL COLLECTIONS IN VELOXTRADES DB ====================
         veloxtrades_users = veloxtrades_db['users']
         veloxtrades_transactions = veloxtrades_db['transactions']
         veloxtrades_notifications = veloxtrades_db['notifications']
@@ -122,56 +148,108 @@ def connect_to_databases():
         veloxtrades_admin_logs = veloxtrades_db['admin_logs']
         veloxtrades_settings = veloxtrades_db['settings']
         veloxtrades_email_logs = veloxtrades_db['email_logs']
+        veloxtrades_investments = veloxtrades_db['investments']
+        veloxtrades_deposits = veloxtrades_db['deposits']
+        veloxtrades_withdrawals = veloxtrades_db['withdrawals']
+        veloxtrades_referral_stats = veloxtrades_db['referral_stats']
         
-        # ==================== INVESTMENT DB COLLECTIONS ====================
+        # ==================== CREATE ALL COLLECTIONS IN INVESTMENT DB ====================
+        investment_users = investment_db['users']
+        investment_transactions = investment_db['transactions']
+        investment_notifications = investment_db['notifications']
+        investment_kyc = investment_db['kyc']
+        investment_support_tickets = investment_db['support_tickets']
+        investment_admin_logs = investment_db['admin_logs']
+        investment_settings = investment_db['settings']
+        investment_email_logs = investment_db['email_logs']
         investment_investments = investment_db['investments']
         investment_deposits = investment_db['deposits']
         investment_withdrawals = investment_db['withdrawals']
         investment_referral_stats = investment_db['referral_stats']
         
         # ==================== SET UP COMBINED COLLECTIONS (SEARCH ACROSS BOTH) ====================
-        # Users - primary from veloxtrades_db
-        users_collection = veloxtrades_users
+        # Users - search across both databases
+        users_collection = DualDatabaseCollection(
+            [veloxtrades_users, investment_users], 
+            'users'
+        )
         
-        # Investments - primary from investment_db
-        investments_collection = investment_investments
+        # Investments - search across both databases
+        investments_collection = DualDatabaseCollection(
+            [veloxtrades_investments, investment_investments], 
+            'investments'
+        )
         
-        # Deposits - primary from investment_db
-        deposits_collection = investment_deposits
+        # Transactions - search across both databases
+        transactions_collection = DualDatabaseCollection(
+            [veloxtrades_transactions, investment_transactions], 
+            'transactions'
+        )
         
-        # Withdrawals - primary from investment_db
-        withdrawals_collection = investment_withdrawals
+        # Deposits - search across both databases
+        deposits_collection = DualDatabaseCollection(
+            [veloxtrades_deposits, investment_deposits], 
+            'deposits'
+        )
         
-        # Transactions - from veloxtrades_db
-        transactions_collection = veloxtrades_transactions
+        # Withdrawals - search across both databases
+        withdrawals_collection = DualDatabaseCollection(
+            [veloxtrades_withdrawals, investment_withdrawals], 
+            'withdrawals'
+        )
         
-        # Notifications - from veloxtrades_db
-        notifications_collection = veloxtrades_notifications
+        # Notifications - search across both databases
+        notifications_collection = DualDatabaseCollection(
+            [veloxtrades_notifications, investment_notifications], 
+            'notifications'
+        )
         
-        # KYC - from veloxtrades_db
-        kyc_collection = veloxtrades_kyc
+        # KYC - search across both databases
+        kyc_collection = DualDatabaseCollection(
+            [veloxtrades_kyc, investment_kyc], 
+            'kyc'
+        )
         
-        # Support Tickets - from veloxtrades_db
-        support_tickets_collection = veloxtrades_support_tickets
+        # Support Tickets - search across both databases
+        support_tickets_collection = DualDatabaseCollection(
+            [veloxtrades_support_tickets, investment_support_tickets], 
+            'support_tickets'
+        )
         
-        # Admin Logs - from veloxtrades_db
-        admin_logs_collection = veloxtrades_admin_logs
+        # Admin Logs - search across both databases
+        admin_logs_collection = DualDatabaseCollection(
+            [veloxtrades_admin_logs, investment_admin_logs], 
+            'admin_logs'
+        )
         
-        # Settings - from veloxtrades_db
-        settings_collection = veloxtrades_settings
+        # Settings - search across both databases
+        settings_collection = DualDatabaseCollection(
+            [veloxtrades_settings, investment_settings], 
+            'settings'
+        )
         
-        # Email Logs - from veloxtrades_db
-        email_logs_collection = veloxtrades_email_logs
+        # Email Logs - search across both databases
+        email_logs_collection = DualDatabaseCollection(
+            [veloxtrades_email_logs, investment_email_logs], 
+            'email_logs'
+        )
         
-        # Referral Stats - from investment_db
-        referral_stats_collection = investment_referral_stats
+        # Referral Stats - search across both databases
+        referral_stats_collection = DualDatabaseCollection(
+            [veloxtrades_referral_stats, investment_referral_stats], 
+            'referral_stats'
+        )
         
         logger.info("=" * 60)
-        logger.info("📊 DATABASE CONFIGURATION:")
+        logger.info("📊 DUAL DATABASE CONFIGURATION:")
         logger.info(f"   ✅ veloxtrades_db: {DB_VELOXTRADES}")
-        logger.info(f"      - users, transactions, notifications, kyc, support_tickets, admin_logs, settings, email_logs")
         logger.info(f"   ✅ investment_db: {DB_INVESTMENT}")
-        logger.info(f"      - investments, deposits, withdrawals, referral_stats")
+        logger.info("   📂 BOTH databases contain ALL collections:")
+        logger.info("      - users, transactions, notifications, kyc, support_tickets")
+        logger.info("      - admin_logs, settings, email_logs, investments")
+        logger.info("      - deposits, withdrawals, referral_stats")
+        logger.info("=" * 60)
+        logger.info("🔍 SEARCH MODE: Searching across BOTH databases for all data types")
         logger.info("=" * 60)
         
         return True
@@ -182,6 +260,157 @@ def connect_to_databases():
     except Exception as e:
         logger.error(f"❌ MongoDB connection error: {e}")
         return False
+
+
+class DualDatabaseCollection:
+    """A wrapper that searches across multiple database collections"""
+    
+    def __init__(self, collections, name):
+        self.collections = collections
+        self.name = name
+        # Remove None collections
+        self.collections = [c for c in collections if c is not None]
+    
+    def find(self, query=None, *args, **kwargs):
+        """Find documents across all databases"""
+        results = []
+        for collection in self.collections:
+            try:
+                cursor = collection.find(query or {}, *args, **kwargs)
+                results.extend(list(cursor))
+            except Exception as e:
+                logger.error(f"Error searching {self.name} in collection: {e}")
+        return results
+    
+    def find_one(self, query=None, *args, **kwargs):
+        """Find one document across all databases (returns first found)"""
+        for collection in self.collections:
+            try:
+                result = collection.find_one(query or {}, *args, **kwargs)
+                if result:
+                    return result
+            except Exception as e:
+                logger.error(f"Error finding one in {self.name}: {e}")
+        return None
+    
+    def insert_one(self, document, *args, **kwargs):
+        """Insert into primary database (veloxtrades_db first, then investment_db)"""
+        # Try to insert into veloxtrades_db first
+        if len(self.collections) > 0 and self.collections[0] is not None:
+            try:
+                return self.collections[0].insert_one(document, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error inserting into primary {self.name}: {e}")
+        
+        # If primary fails, try secondary
+        if len(self.collections) > 1 and self.collections[1] is not None:
+            try:
+                return self.collections[1].insert_one(document, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error inserting into secondary {self.name}: {e}")
+        
+        # If all fail, try any available
+        for collection in self.collections:
+            try:
+                return collection.insert_one(document, *args, **kwargs)
+            except Exception as e:
+                continue
+        
+        raise Exception(f"Failed to insert into any {self.name} collection")
+    
+    def update_one(self, filter, update, *args, **kwargs):
+        """Update across all databases"""
+        updated_count = 0
+        for collection in self.collections:
+            try:
+                result = collection.update_one(filter, update, *args, **kwargs)
+                if result.modified_count > 0:
+                    updated_count += result.modified_count
+            except Exception as e:
+                logger.error(f"Error updating {self.name}: {e}")
+        return updated_count > 0
+    
+    def update_many(self, filter, update, *args, **kwargs):
+        """Update many across all databases"""
+        total_modified = 0
+        for collection in self.collections:
+            try:
+                result = collection.update_many(filter, update, *args, **kwargs)
+                total_modified += result.modified_count
+            except Exception as e:
+                logger.error(f"Error updating many in {self.name}: {e}")
+        return total_modified
+    
+    def delete_one(self, filter, *args, **kwargs):
+        """Delete one across all databases"""
+        deleted_count = 0
+        for collection in self.collections:
+            try:
+                result = collection.delete_one(filter, *args, **kwargs)
+                if result.deleted_count > 0:
+                    deleted_count += result.deleted_count
+            except Exception as e:
+                logger.error(f"Error deleting from {self.name}: {e}")
+        return deleted_count > 0
+    
+    def delete_many(self, filter, *args, **kwargs):
+        """Delete many across all databases"""
+        total_deleted = 0
+        for collection in self.collections:
+            try:
+                result = collection.delete_many(filter, *args, **kwargs)
+                total_deleted += result.deleted_count
+            except Exception as e:
+                logger.error(f"Error deleting many from {self.name}: {e}")
+        return total_deleted
+    
+    def count_documents(self, filter=None, *args, **kwargs):
+        """Count documents across all databases"""
+        total = 0
+        for collection in self.collections:
+            try:
+                total += collection.count_documents(filter or {}, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error counting in {self.name}: {e}")
+        return total
+    
+    def distinct(self, key, filter=None, *args, **kwargs):
+        """Get distinct values across all databases"""
+        all_values = []
+        for collection in self.collections:
+            try:
+                values = collection.distinct(key, filter or {}, *args, **kwargs)
+                all_values.extend(values)
+            except Exception as e:
+                logger.error(f"Error getting distinct in {self.name}: {e}")
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_values = []
+        for v in all_values:
+            if v not in seen:
+                seen.add(v)
+                unique_values.append(v)
+        return unique_values
+    
+    def aggregate(self, pipeline, *args, **kwargs):
+        """Aggregate across all databases"""
+        all_results = []
+        for collection in self.collections:
+            try:
+                results = list(collection.aggregate(pipeline, *args, **kwargs))
+                all_results.extend(results)
+            except Exception as e:
+                logger.error(f"Error aggregating in {self.name}: {e}")
+        return all_results
+    
+    def create_index(self, keys, *args, **kwargs):
+        """Create index in all databases"""
+        for collection in self.collections:
+            try:
+                collection.create_index(keys, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error creating index in {self.name}: {e}")
+
 
 # Initialize database connection
 db_connected = connect_to_databases()
@@ -269,185 +498,6 @@ def add_cors_headers(response):
     response.headers['Access-Control-Max-Age'] = '86400'
     return response
 
-# ==================== DATABASE HELPER FUNCTIONS ====================
-
-def search_across_databases(collection_type, query, sort=None, limit=None):
-    """
-    Search across both databases for data
-    collection_type: 'users', 'investments', 'deposits', 'withdrawals', etc.
-    """
-    results = []
-    
-    if collection_type == 'investments':
-        # Search in investment_db first, then veloxtrades_db if needed
-        if investment_investments is not None:
-            cursor = investment_investments.find(query)
-            if sort:
-                cursor = cursor.sort(sort[0], sort[1])
-            if limit:
-                cursor = cursor.limit(limit)
-            results.extend(list(cursor))
-    
-    elif collection_type == 'deposits':
-        if investment_deposits is not None:
-            cursor = investment_deposits.find(query)
-            if sort:
-                cursor = cursor.sort(sort[0], sort[1])
-            if limit:
-                cursor = cursor.limit(limit)
-            results.extend(list(cursor))
-    
-    elif collection_type == 'withdrawals':
-        if investment_withdrawals is not None:
-            cursor = investment_withdrawals.find(query)
-            if sort:
-                cursor = cursor.sort(sort[0], sort[1])
-            if limit:
-                cursor = cursor.limit(limit)
-            results.extend(list(cursor))
-    
-    elif collection_type == 'users':
-        if veloxtrades_users is not None:
-            cursor = veloxtrades_users.find(query)
-            if sort:
-                cursor = cursor.sort(sort[0], sort[1])
-            if limit:
-                cursor = cursor.limit(limit)
-            results.extend(list(cursor))
-    
-    elif collection_type == 'transactions':
-        if veloxtrades_transactions is not None:
-            cursor = veloxtrades_transactions.find(query)
-            if sort:
-                cursor = cursor.sort(sort[0], sort[1])
-            if limit:
-                cursor = cursor.limit(limit)
-            results.extend(list(cursor))
-    
-    return results
-
-def get_across_databases(collection_type, doc_id):
-    """Get a single document by ID across databases"""
-    
-    try:
-        if collection_type == 'investment' and investment_investments is not None:
-            return investment_investments.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'deposit' and investment_deposits is not None:
-            return investment_deposits.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'withdrawal' and investment_withdrawals is not None:
-            return investment_withdrawals.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'user' and veloxtrades_users is not None:
-            return veloxtrades_users.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'transaction' and veloxtrades_transactions is not None:
-            return veloxtrades_transactions.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'notification' and veloxtrades_notifications is not None:
-            return veloxtrades_notifications.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'kyc' and veloxtrades_kyc is not None:
-            return veloxtrades_kyc.find_one({'_id': ObjectId(doc_id)})
-        
-        elif collection_type == 'ticket' and veloxtrades_support_tickets is not None:
-            return veloxtrades_support_tickets.find_one({'_id': ObjectId(doc_id)})
-        
-    except Exception as e:
-        logger.error(f"Error getting {collection_type} from databases: {e}")
-        return None
-    
-    return None
-
-def insert_into_database(collection_type, data):
-    """Insert data into appropriate database"""
-    
-    try:
-        if collection_type == 'investment':
-            if investment_investments is not None:
-                return investment_investments.insert_one(data)
-        
-        elif collection_type == 'deposit':
-            if investment_deposits is not None:
-                return investment_deposits.insert_one(data)
-        
-        elif collection_type == 'withdrawal':
-            if investment_withdrawals is not None:
-                return investment_withdrawals.insert_one(data)
-        
-        elif collection_type == 'user':
-            if veloxtrades_users is not None:
-                return veloxtrades_users.insert_one(data)
-        
-        elif collection_type == 'transaction':
-            if veloxtrades_transactions is not None:
-                return veloxtrades_transactions.insert_one(data)
-        
-        elif collection_type == 'notification':
-            if veloxtrades_notifications is not None:
-                return veloxtrades_notifications.insert_one(data)
-        
-        elif collection_type == 'kyc':
-            if veloxtrades_kyc is not None:
-                return veloxtrades_kyc.insert_one(data)
-        
-        elif collection_type == 'ticket':
-            if veloxtrades_support_tickets is not None:
-                return veloxtrades_support_tickets.insert_one(data)
-        
-        elif collection_type == 'referral_stats':
-            if investment_referral_stats is not None:
-                return investment_referral_stats.insert_one(data)
-        
-    except Exception as e:
-        logger.error(f"Error inserting into {collection_type}: {e}")
-        return None
-    
-    return None
-
-def update_in_database(collection_type, query, update):
-    """Update data in appropriate database"""
-    
-    try:
-        if collection_type == 'investment':
-            if investment_investments is not None:
-                return investment_investments.update_one(query, update)
-        
-        elif collection_type == 'deposit':
-            if investment_deposits is not None:
-                return investment_deposits.update_one(query, update)
-        
-        elif collection_type == 'withdrawal':
-            if investment_withdrawals is not None:
-                return investment_withdrawals.update_one(query, update)
-        
-        elif collection_type == 'user':
-            if veloxtrades_users is not None:
-                return veloxtrades_users.update_one(query, update)
-        
-        elif collection_type == 'transaction':
-            if veloxtrades_transactions is not None:
-                return veloxtrades_transactions.update_one(query, update)
-        
-        elif collection_type == 'notification':
-            if veloxtrades_notifications is not None:
-                return veloxtrades_notifications.update_one(query, update)
-        
-        elif collection_type == 'kyc':
-            if veloxtrades_kyc is not None:
-                return veloxtrades_kyc.update_one(query, update)
-        
-        elif collection_type == 'ticket':
-            if veloxtrades_support_tickets is not None:
-                return veloxtrades_support_tickets.update_one(query, update)
-        
-    except Exception as e:
-        logger.error(f"Error updating {collection_type}: {e}")
-        return None
-    
-    return None
-
 # ==================== EMAIL CONFIGURATION WITH VALIDATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
@@ -477,7 +527,7 @@ def check_email_configuration():
         return False, f"Email configuration error: {str(e)}"
 
 def send_email(to_email, subject, body, html_body=None, max_retries=3):
-    """Send email with logging and retry logic - with proper error handling"""
+    """Send email with logging and retry logic"""
     
     # Check email configuration
     if not EMAIL_CONFIGURED:
@@ -543,7 +593,6 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
         except smtplib.SMTPAuthenticationError as e:
             error_msg = f"SMTP Authentication Error: {e}"
             logger.error(f"❌ {error_msg}")
-            # Don't retry on auth errors
             if email_logs_collection is not None:
                 try:
                     email_logs_collection.insert_one({
@@ -635,9 +684,9 @@ def get_user_from_request():
         return None
     
     try:
-        if veloxtrades_users is None:
+        if users_collection is None:
             return None
-        user = veloxtrades_users.find_one({'_id': ObjectId(payload['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(payload['user_id'])})
         return user
     except Exception as e:
         logger.error(f"Error getting user: {e}")
@@ -656,9 +705,9 @@ def require_admin(f):
 
 def create_notification(user_id, title, message, type='info'):
     try:
-        if veloxtrades_notifications is None:
+        if notifications_collection is None:
             return None
-        return veloxtrades_notifications.insert_one({
+        return notifications_collection.insert_one({
             'user_id': str(user_id), 'title': title, 'message': message,
             'type': type, 'read': False, 'created_at': datetime.now(timezone.utc)
         })
@@ -668,9 +717,9 @@ def create_notification(user_id, title, message, type='info'):
 
 def log_admin_action(admin_id, action, details):
     try:
-        if veloxtrades_admin_logs is None:
+        if admin_logs_collection is None:
             return
-        veloxtrades_admin_logs.insert_one({
+        admin_logs_collection.insert_one({
             'admin_id': str(admin_id), 'action': action, 'details': details,
             'ip_address': request.remote_addr, 'created_at': datetime.now(timezone.utc)
         })
@@ -948,38 +997,42 @@ Veloxtrades Team
 
 # ==================== AUTO-PROFIT SCHEDULER ====================
 def process_investment_profits():
-    if investment_investments is None or veloxtrades_users is None:
+    if investments_collection is None or users_collection is None:
         return
     
     try:
-        logger.info("🔄 Processing investment profits...")
-        cursor = investment_investments.find({
+        logger.info("🔄 Processing investment profits across both databases...")
+        cursor = investments_collection.find({
             'status': 'active',
             'end_date': {'$lte': datetime.now(timezone.utc)}
-        }).batch_size(100)
+        })
         
         processed_count = 0
         for investment in cursor:
             try:
                 user_id = investment['user_id']
-                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                user = users_collection.find_one({'_id': ObjectId(user_id)})
+                if not user:
+                    logger.warning(f"User {user_id} not found for investment {investment.get('_id')}")
+                    continue
+                    
                 amount = investment['amount']
                 expected_profit = investment.get('expected_profit', 0)
                 plan_name = investment.get('plan_name', 'Investment')
                 
-                result = veloxtrades_users.update_one(
+                result = users_collection.update_one(
                     {'_id': ObjectId(user_id)},
                     {'$inc': {'wallet.balance': expected_profit, 'wallet.total_profit': expected_profit}}
                 )
                 
-                if result.modified_count > 0:
-                    investment_investments.update_one(
+                if result:
+                    investments_collection.update_one(
                         {'_id': investment['_id']},
                         {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}}
                     )
                     
-                    if veloxtrades_transactions is not None:
-                        veloxtrades_transactions.insert_one({
+                    if transactions_collection is not None:
+                        transactions_collection.insert_one({
                             'user_id': user_id, 'type': 'profit', 'amount': expected_profit,
                             'status': 'completed', 'description': f'Profit from {plan_name}',
                             'investment_id': str(investment['_id']), 'created_at': datetime.now(timezone.utc)
@@ -988,17 +1041,16 @@ def process_investment_profits():
                     create_notification(user_id, 'Investment Completed! 🎉',
                         f'Your investment of ${amount:,.2f} has been completed. You earned ${expected_profit:,.2f} profit!', 'success')
                     
-                    if user:
-                        try:
-                            send_investment_completed_email(user, amount, plan_name, expected_profit)
-                        except Exception as e:
-                            logger.error(f"Failed to send investment completion email: {e}")
+                    try:
+                        send_investment_completed_email(user, amount, plan_name, expected_profit)
+                    except Exception as e:
+                        logger.error(f"Failed to send investment completion email: {e}")
                     
                     processed_count += 1
             except Exception as e:
                 logger.error(f"Error processing investment: {e}")
         
-        logger.info(f"✅ Processed {processed_count} investments")
+        logger.info(f"✅ Processed {processed_count} investments across both databases")
     except Exception as e:
         logger.error(f"Error in profit processing: {e}")
 
@@ -1011,7 +1063,7 @@ atexit.register(lambda: scheduler.shutdown())
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1028,16 +1080,20 @@ def register():
         if not all([full_name, email, username, password]):
             return jsonify({'success': False, 'message': 'All fields are required'}), 400
         
-        if veloxtrades_users.find_one({'email': email}):
+        # Check across both databases for existing email/username
+        existing_email = users_collection.find_one({'email': email})
+        if existing_email:
             return jsonify({'success': False, 'message': 'Email already registered'}), 400
-        if veloxtrades_users.find_one({'username': username}):
+        
+        existing_username = users_collection.find_one({'username': username})
+        if existing_username:
             return jsonify({'success': False, 'message': 'Username already taken'}), 400
 
         # Check referral code
         referred_by = None
         referrer = None
         if referral_code_input:
-            referrer = veloxtrades_users.find_one({'referral_code': referral_code_input})
+            referrer = users_collection.find_one({'referral_code': referral_code_input})
             if referrer:
                 referred_by = referral_code_input
                 logger.info(f"✅ User {username} referred by {referrer['username']} using code {referral_code_input}")
@@ -1054,11 +1110,11 @@ def register():
             'referral_code': own_referral_code, 'referred_by': referred_by, 'referrals': [], 'kyc_status': 'pending'
         }
 
-        result = veloxtrades_users.insert_one(user_data)
+        result = users_collection.insert_one(user_data)
         
-        # Add to referrer's referrals list
+        # Add to referrer's referrals list (search across both databases)
         if referrer:
-            veloxtrades_users.update_one(
+            users_collection.update_one(
                 {'_id': referrer['_id']},
                 {'$push': {'referrals': username}}
             )
@@ -1076,7 +1132,7 @@ def register():
 
 @app.route('/api/verify-referral', methods=['POST', 'OPTIONS'])
 def verify_referral():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1086,7 +1142,7 @@ def verify_referral():
         if not referral_code:
             return jsonify({'success': False, 'message': 'Referral code required'}), 400
         
-        referrer = veloxtrades_users.find_one({'referral_code': referral_code})
+        referrer = users_collection.find_one({'referral_code': referral_code})
         
         if referrer:
             return jsonify({
@@ -1108,7 +1164,7 @@ def verify_referral():
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1122,7 +1178,8 @@ def login():
         if not username_or_email or not password:
             return jsonify({'success': False, 'message': 'Username and password required'}), 400
 
-        user = veloxtrades_users.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
+        # Search across both databases for user
+        user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
 
         if not user or not verify_password(user['password'], password):
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
@@ -1131,7 +1188,7 @@ def login():
             return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
 
         token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
-        veloxtrades_users.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
+        users_collection.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
 
         user_data = {
             'id': str(user['_id']), 'username': user['username'], 'full_name': user.get('full_name', ''),
@@ -1196,7 +1253,7 @@ def create_deposit():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if investment_deposits is None or veloxtrades_users is None or veloxtrades_transactions is None:
+    if deposits_collection is None or users_collection is None or transactions_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1207,8 +1264,8 @@ def create_deposit():
         wallet_address = data.get('wallet_address', '')
         
         settings = None
-        if veloxtrades_settings is not None:
-            settings = veloxtrades_settings.find_one({})
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
         min_deposit = settings.get('min_deposit', 10) if settings else 10
         max_deposit = settings.get('max_deposit', 100000) if settings else 100000
         
@@ -1234,10 +1291,10 @@ def create_deposit():
             'rejection_reason': None
         }
         
-        investment_deposits.insert_one(deposit_data)
+        deposits_collection.insert_one(deposit_data)
         
-        if veloxtrades_transactions is not None:
-            veloxtrades_transactions.insert_one({
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
                 'user_id': str(user['_id']),
                 'type': 'deposit',
                 'amount': amount,
@@ -1266,8 +1323,8 @@ def get_user_deposits():
     
     try:
         deposits = []
-        if investment_deposits is not None:
-            deposits = list(investment_deposits.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+        if deposits_collection is not None:
+            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         
         for deposit in deposits:
             deposit['_id'] = str(deposit['_id'])
@@ -1287,7 +1344,7 @@ def create_withdrawal():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if investment_withdrawals is None or veloxtrades_users is None or veloxtrades_transactions is None:
+    if withdrawals_collection is None or users_collection is None or transactions_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1300,8 +1357,8 @@ def create_withdrawal():
             return jsonify({'success': False, 'message': 'Wallet address is required'}), 400
         
         settings = None
-        if veloxtrades_settings is not None:
-            settings = veloxtrades_settings.find_one({})
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
         min_withdrawal = settings.get('min_withdrawal', 50) if settings else 50
         max_withdrawal = settings.get('max_withdrawal', 50000) if settings else 50000
         withdrawal_fee = settings.get('withdrawal_fee', 0) if settings else 0
@@ -1335,15 +1392,15 @@ def create_withdrawal():
             'rejection_reason': None
         }
         
-        investment_withdrawals.insert_one(withdrawal_data)
+        withdrawals_collection.insert_one(withdrawal_data)
         
-        veloxtrades_users.update_one(
+        users_collection.update_one(
             {'_id': user['_id']},
             {'$inc': {'wallet.balance': -amount}}
         )
         
-        if veloxtrades_transactions is not None:
-            veloxtrades_transactions.insert_one({
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
                 'user_id': str(user['_id']),
                 'type': 'withdrawal',
                 'amount': amount,
@@ -1372,8 +1429,8 @@ def get_user_withdrawals():
     
     try:
         withdrawals = []
-        if investment_withdrawals is not None:
-            withdrawals = list(investment_withdrawals.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+        if withdrawals_collection is not None:
+            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         
         for withdrawal in withdrawals:
             withdrawal['_id'] = str(withdrawal['_id'])
@@ -1393,7 +1450,7 @@ def create_investment():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if investment_investments is None or veloxtrades_users is None or veloxtrades_transactions is None:
+    if investments_collection is None or users_collection is None or transactions_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1416,7 +1473,7 @@ def create_investment():
         expected_profit = amount * plan['roi'] / 100
         end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
         
-        veloxtrades_users.update_one(
+        users_collection.update_one(
             {'_id': user['_id']},
             {'$inc': {'wallet.balance': -amount, 'wallet.total_invested': amount}}
         )
@@ -1435,10 +1492,10 @@ def create_investment():
             'status': 'active'
         }
         
-        result = investment_investments.insert_one(investment_data)
+        result = investments_collection.insert_one(investment_data)
         
-        if veloxtrades_transactions is not None:
-            veloxtrades_transactions.insert_one({
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
                 'user_id': str(user['_id']),
                 'type': 'investment',
                 'amount': amount,
@@ -1472,8 +1529,8 @@ def get_user_investments():
     
     try:
         investments = []
-        if investment_investments is not None:
-            investments = list(investment_investments.find({'user_id': str(user['_id'])}).sort('start_date', -1))
+        if investments_collection is not None:
+            investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
         
         for inv in investments:
             inv['_id'] = str(inv['_id'])
@@ -1497,8 +1554,8 @@ def get_transactions():
     
     try:
         transactions = []
-        if veloxtrades_transactions is not None:
-            transactions = list(veloxtrades_transactions.find(
+        if transactions_collection is not None:
+            transactions = list(transactions_collection.find(
                 {'user_id': str(user['_id'])}
             ).sort('created_at', -1))
         
@@ -1526,15 +1583,15 @@ def user_dashboard():
             wallet = {'balance': 0, 'total_deposited': 0, 'total_withdrawn': 0, 'total_invested': 0, 'total_profit': 0}
         
         active_investments = []
-        if investment_investments is not None:
-            active_investments = list(investment_investments.find({'user_id': str(user['_id']), 'status': 'active'}))
+        if investments_collection is not None:
+            active_investments = list(investments_collection.find({'user_id': str(user['_id']), 'status': 'active'}))
         
         total_active = sum(inv.get('amount', 0) for inv in active_investments)
         pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
         
         recent_transactions = []
-        if veloxtrades_transactions is not None:
-            recent_transactions = list(veloxtrades_transactions.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10))
+        if transactions_collection is not None:
+            recent_transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).limit(10))
         
         formatted_transactions = []
         for tx in recent_transactions:
@@ -1548,16 +1605,16 @@ def user_dashboard():
             })
         
         unread_count = 0
-        if veloxtrades_notifications is not None:
-            unread_count = veloxtrades_notifications.count_documents({'user_id': str(user['_id']), 'read': False})
+        if notifications_collection is not None:
+            unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
         
         pending_deposits = 0
-        if investment_deposits is not None:
-            pending_deposits = investment_deposits.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        if deposits_collection is not None:
+            pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
         
         pending_withdrawals = 0
-        if investment_withdrawals is not None:
-            pending_withdrawals = investment_withdrawals.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        if withdrawals_collection is not None:
+            pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
         
         dashboard_data = {
             'wallet': {
@@ -1607,7 +1664,7 @@ def get_notifications():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_notifications is None:
+    if notifications_collection is None:
         return jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}}), 200
     
     try:
@@ -1615,7 +1672,7 @@ def get_notifications():
         limit = int(request.args.get('limit', 20))
         skip = (page - 1) * limit
         
-        notifications = list(veloxtrades_notifications.find(
+        notifications = list(notifications_collection.find(
             {'user_id': str(user['_id'])}
         ).sort('created_at', -1).skip(skip).limit(limit))
         
@@ -1624,8 +1681,8 @@ def get_notifications():
             if 'created_at' in notif:
                 notif['created_at'] = notif['created_at'].isoformat()
         
-        total = veloxtrades_notifications.count_documents({'user_id': str(user['_id'])})
-        unread = veloxtrades_notifications.count_documents({'user_id': str(user['_id']), 'read': False})
+        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
+        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
         
         response = jsonify({
             'success': True,
@@ -1648,19 +1705,20 @@ def mark_notification_read(notification_id):
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_notifications is None:
+    if notifications_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        result = veloxtrades_notifications.update_one(
+        result = notifications_collection.update_one(
             {'_id': ObjectId(notification_id), 'user_id': str(user['_id'])},
             {'$set': {'read': True}}
         )
         
-        if result.modified_count == 0:
-            return jsonify({'success': False, 'message': 'Notification not found'}), 404
+        if result:
+            response = jsonify({'success': True, 'message': 'Notification marked as read'})
+        else:
+            response = jsonify({'success': False, 'message': 'Notification not found'}), 404
         
-        response = jsonify({'success': True, 'message': 'Notification marked as read'})
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Mark notification read error: {e}")
@@ -1673,7 +1731,7 @@ def create_ticket():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1710,7 +1768,7 @@ def create_ticket():
             ]
         }
         
-        result = veloxtrades_support_tickets.insert_one(ticket_data)
+        result = support_tickets_collection.insert_one(ticket_data)
         
         create_notification(
             user['_id'],
@@ -1739,7 +1797,7 @@ def get_tickets():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
     
     try:
@@ -1749,8 +1807,8 @@ def get_tickets():
         
         query = {'user_id': str(user['_id'])}
         
-        total = veloxtrades_support_tickets.count_documents(query)
-        tickets = list(veloxtrades_support_tickets.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         for ticket in tickets:
             ticket['_id'] = str(ticket['_id'])
@@ -1781,11 +1839,11 @@ def get_ticket(ticket_id):
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        ticket = veloxtrades_support_tickets.find_one({
+        ticket = support_tickets_collection.find_one({
             'ticket_id': ticket_id,
             'user_id': str(user['_id'])
         })
@@ -1816,7 +1874,7 @@ def reply_ticket(ticket_id):
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1826,7 +1884,7 @@ def reply_ticket(ticket_id):
         if not message:
             return jsonify({'success': False, 'message': 'Message is required'}), 400
         
-        ticket = veloxtrades_support_tickets.find_one({
+        ticket = support_tickets_collection.find_one({
             'ticket_id': ticket_id,
             'user_id': str(user['_id'])
         })
@@ -1844,7 +1902,7 @@ def reply_ticket(ticket_id):
             'created_at': datetime.now(timezone.utc)
         }
         
-        veloxtrades_support_tickets.update_one(
+        support_tickets_collection.update_one(
             {'ticket_id': ticket_id},
             {
                 '$push': {'messages': reply},
@@ -1868,11 +1926,11 @@ def close_ticket(ticket_id):
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        ticket = veloxtrades_support_tickets.find_one({
+        ticket = support_tickets_collection.find_one({
             'ticket_id': ticket_id,
             'user_id': str(user['_id'])
         })
@@ -1883,7 +1941,7 @@ def close_ticket(ticket_id):
         if ticket['status'] == 'closed':
             return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
         
-        veloxtrades_support_tickets.update_one(
+        support_tickets_collection.update_one(
             {'ticket_id': ticket_id},
             {
                 '$set': {
@@ -1908,7 +1966,7 @@ def submit_kyc():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1924,7 +1982,7 @@ def submit_kyc():
         if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
             return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
         
-        existing = veloxtrades_kyc.find_one({'user_id': str(user['_id'])})
+        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
         if existing:
             status = existing.get('status', 'pending')
             if status == 'pending':
@@ -1951,9 +2009,9 @@ def submit_kyc():
             'rejection_reason': None
         }
         
-        result = veloxtrades_kyc.insert_one(kyc_data)
+        result = kyc_collection.insert_one(kyc_data)
         
-        veloxtrades_users.update_one(
+        users_collection.update_one(
             {'_id': user['_id']},
             {'$set': {'kyc_status': 'pending'}}
         )
@@ -1985,11 +2043,11 @@ def get_kyc_status():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        kyc = veloxtrades_kyc.find_one({'user_id': str(user['_id'])})
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
         
         if not kyc:
             return jsonify({
@@ -2020,11 +2078,11 @@ def get_kyc_details():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        kyc = veloxtrades_kyc.find_one({'user_id': str(user['_id'])})
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
         
         if not kyc:
             return jsonify({'success': True, 'data': None})
@@ -2043,10 +2101,10 @@ def get_kyc_details():
 # ==================== REFERRAL FUNCTIONS ====================
 def add_referral_commission(user_id, deposit_amount):
     try:
-        if veloxtrades_users is None:
+        if users_collection is None:
             return False
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             logger.warning(f"User {user_id} not found for referral commission")
             return False
@@ -2055,14 +2113,14 @@ def add_referral_commission(user_id, deposit_amount):
         if not referred_by_code:
             return False
         
-        referrer = veloxtrades_users.find_one({'referral_code': referred_by_code})
+        referrer = users_collection.find_one({'referral_code': referred_by_code})
         if not referrer:
             logger.warning(f"Referrer with code {referred_by_code} not found")
             return False
         
         bonus_percentage = 5
-        if veloxtrades_settings is not None:
-            settings = veloxtrades_settings.find_one({})
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
             if settings:
                 bonus_percentage = settings.get('referral_bonus', 5)
         
@@ -2071,15 +2129,15 @@ def add_referral_commission(user_id, deposit_amount):
         if commission <= 0:
             return False
         
-        result = veloxtrades_users.update_one(
+        result = users_collection.update_one(
             {'_id': referrer['_id']},
             {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
         )
         
-        if result.modified_count > 0:
-            if veloxtrades_transactions is not None:
+        if result:
+            if transactions_collection is not None:
                 try:
-                    veloxtrades_transactions.insert_one({
+                    transactions_collection.insert_one({
                         'user_id': str(referrer['_id']),
                         'type': 'commission',
                         'amount': commission,
@@ -2116,13 +2174,13 @@ def get_user_referral_info():
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
         referral_code = user.get('referral_code', '')
         
-        referred_users = list(veloxtrades_users.find(
+        referred_users = list(users_collection.find(
             {'referred_by': referral_code},
             {'_id': 1, 'username': 1, 'full_name': 1, 'created_at': 1, 'wallet.total_deposited': 1}
         ))
@@ -2146,8 +2204,8 @@ def get_user_referral_info():
             })
         
         referral_bonus_percentage = 5
-        if veloxtrades_settings is not None:
-            settings = veloxtrades_settings.find_one({})
+        if settings_collection is not None:
+            settings = settings_collection.find_one({})
             if settings:
                 referral_bonus_percentage = settings.get('referral_bonus', 5)
         
@@ -2183,26 +2241,26 @@ def get_user_referral_info():
 @require_admin
 def admin_get_stats():
     try:
-        total_users = veloxtrades_users.count_documents({}) if veloxtrades_users is not None else 0
+        total_users = users_collection.count_documents({}) if users_collection is not None else 0
         total_deposit_amount = 0
         total_withdrawal_amount = 0
         active_investments = 0
         pending_deposits = 0
         pending_withdrawals = 0
-        banned_users = veloxtrades_users.count_documents({'is_banned': True}) if veloxtrades_users is not None else 0
+        banned_users = users_collection.count_documents({'is_banned': True}) if users_collection is not None else 0
         
-        if investment_deposits is not None:
-            approved_deposits = list(investment_deposits.find({'status': 'approved'}))
+        if deposits_collection is not None:
+            approved_deposits = list(deposits_collection.find({'status': 'approved'}))
             total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-            pending_deposits = investment_deposits.count_documents({'status': 'pending'})
+            pending_deposits = deposits_collection.count_documents({'status': 'pending'})
         
-        if investment_withdrawals is not None:
-            approved_withdrawals = list(investment_withdrawals.find({'status': 'approved'}))
+        if withdrawals_collection is not None:
+            approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
             total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-            pending_withdrawals = investment_withdrawals.count_documents({'status': 'pending'})
+            pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
         
-        if investment_investments is not None:
-            active_investments = investment_investments.count_documents({'status': 'active'})
+        if investments_collection is not None:
+            active_investments = investments_collection.count_documents({'status': 'active'})
         
         response = jsonify({
             'success': True, 
@@ -2227,7 +2285,7 @@ def admin_get_stats():
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error', 'data': {'users': [], 'total': 0}}), 500
     
     try:
@@ -2244,8 +2302,8 @@ def admin_get_users():
                 {'full_name': {'$regex': search, '$options': 'i'}}
             ]
         
-        total = veloxtrades_users.count_documents(query)
-        users = list(veloxtrades_users.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = users_collection.count_documents(query)
+        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         formatted_users = []
         for user in users:
@@ -2288,7 +2346,7 @@ def admin_get_users():
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -2296,20 +2354,20 @@ def admin_adjust_balance(user_id):
         amount = float(data.get('amount', 0))
         reason = data.get('reason', 'Admin adjustment')
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         current_balance = user.get('wallet', {}).get('balance', 0)
         new_balance = current_balance + amount
         
-        result = veloxtrades_users.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
+        result = users_collection.update_one({'_id': ObjectId(user_id)}, {'$inc': {'wallet.balance': amount}})
         
-        if result.modified_count == 0:
+        if not result:
             return jsonify({'success': False, 'message': 'Failed to update balance'}), 500
         
-        if veloxtrades_transactions is not None:
-            veloxtrades_transactions.insert_one({
+        if transactions_collection is not None:
+            transactions_collection.insert_one({
                 'user_id': str(user_id), 'type': 'adjustment', 'amount': abs(amount),
                 'status': 'completed', 'description': f'Balance adjustment by admin: {reason} (${amount:+,.2f})',
                 'created_at': datetime.now(timezone.utc)
@@ -2326,15 +2384,15 @@ def admin_adjust_balance(user_id):
 @app.route('/api/admin/users/<user_id>/toggle-ban', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_toggle_ban(user_id):
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         new_ban_status = not user.get('is_banned', False)
-        veloxtrades_users.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status}})
+        users_collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'is_banned': new_ban_status}})
         action = 'banned' if new_ban_status else 'unbanned'
         
         create_notification(user_id, f'Account {action.capitalize()}', f'Your account has been {action}.', 'warning' if new_ban_status else 'success')
@@ -2347,27 +2405,27 @@ def admin_toggle_ban(user_id):
 @app.route('/api/admin/users/<user_id>', methods=['DELETE', 'OPTIONS'])
 @require_admin
 def admin_delete_user(user_id):
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         username = user.get('username', 'Unknown')
         
-        if investment_investments is not None:
-            investment_investments.delete_many({'user_id': str(user_id)})
-        if veloxtrades_transactions is not None:
-            veloxtrades_transactions.delete_many({'user_id': str(user_id)})
-        if investment_deposits is not None:
-            investment_deposits.delete_many({'user_id': str(user_id)})
-        if investment_withdrawals is not None:
-            investment_withdrawals.delete_many({'user_id': str(user_id)})
-        if veloxtrades_notifications is not None:
-            veloxtrades_notifications.delete_many({'user_id': str(user_id)})
+        if investments_collection is not None:
+            investments_collection.delete_many({'user_id': str(user_id)})
+        if transactions_collection is not None:
+            transactions_collection.delete_many({'user_id': str(user_id)})
+        if deposits_collection is not None:
+            deposits_collection.delete_many({'user_id': str(user_id)})
+        if withdrawals_collection is not None:
+            withdrawals_collection.delete_many({'user_id': str(user_id)})
+        if notifications_collection is not None:
+            notifications_collection.delete_many({'user_id': str(user_id)})
         
-        veloxtrades_users.delete_one({'_id': ObjectId(user_id)})
+        users_collection.delete_one({'_id': ObjectId(user_id)})
         
         response = jsonify({'success': True, 'message': f'User {username} permanently deleted'})
         return add_cors_headers(response)
@@ -2379,7 +2437,7 @@ def admin_delete_user(user_id):
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
-    if investment_deposits is None:
+    if deposits_collection is None:
         return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
     
     try:
@@ -2392,8 +2450,8 @@ def admin_get_deposits():
         if status != 'all':
             query['status'] = status
         
-        total = investment_deposits.count_documents(query)
-        deposits = list(investment_deposits.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = deposits_collection.count_documents(query)
+        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         result_deposits = []
         for deposit in deposits:
@@ -2401,9 +2459,9 @@ def admin_get_deposits():
             if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
                 deposit['created_at'] = deposit['created_at'].isoformat()
             
-            if veloxtrades_users is not None and 'user_id' in deposit:
+            if users_collection is not None and 'user_id' in deposit:
                 try:
-                    user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+                    user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
                     deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
                 except:
                     deposit['username'] = 'Unknown'
@@ -2428,7 +2486,7 @@ def admin_get_deposits():
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
-    if investment_deposits is None or veloxtrades_users is None:
+    if deposits_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -2436,28 +2494,28 @@ def admin_process_deposit(deposit_id):
         action = data.get('action')
         reason = data.get('reason', 'Not specified')
         
-        deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
         if not deposit:
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         if deposit['status'] != 'pending':
             return jsonify({'success': False, 'message': 'Deposit already processed'}), 400
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
-            veloxtrades_users.update_one(
+            users_collection.update_one(
                 {'_id': ObjectId(deposit['user_id'])},
                 {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
             )
-            investment_deposits.update_one(
+            deposits_collection.update_one(
                 {'_id': ObjectId(deposit_id)}, 
                 {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
             )
             
-            if veloxtrades_transactions is not None:
-                veloxtrades_transactions.update_one(
+            if transactions_collection is not None:
+                transactions_collection.update_one(
                     {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'},
                     {'$set': {'status': 'completed', 'description': f'Deposit of ${deposit["amount"]} via {deposit["crypto"]} approved'}},
                     sort=[('created_at', -1)]
@@ -2480,13 +2538,13 @@ def admin_process_deposit(deposit_id):
             message = 'Deposit approved successfully and email sent to user'
             
         elif action == 'reject':
-            investment_deposits.update_one(
+            deposits_collection.update_one(
                 {'_id': ObjectId(deposit_id)}, 
                 {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
             )
             
-            if veloxtrades_transactions is not None:
-                veloxtrades_transactions.update_one(
+            if transactions_collection is not None:
+                transactions_collection.update_one(
                     {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'},
                     {'$set': {'status': 'failed', 'description': f'Deposit of ${deposit["amount"]} rejected: {reason}'}},
                     sort=[('created_at', -1)]
@@ -2517,7 +2575,7 @@ def admin_process_deposit(deposit_id):
 @require_admin
 def admin_resend_deposit_emails():
     """Resend deposit confirmation emails for approved/rejected deposits"""
-    if investment_deposits is None or veloxtrades_users is None:
+    if deposits_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -2534,7 +2592,7 @@ def admin_resend_deposit_emails():
         else:
             query = {'status': 'approved'}
         
-        deposits = list(investment_deposits.find(query))
+        deposits = list(deposits_collection.find(query))
         
         if not deposits:
             return jsonify({
@@ -2549,7 +2607,7 @@ def admin_resend_deposit_emails():
         
         for deposit in deposits:
             try:
-                user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
                 if not user:
                     failed_count += 1
                     errors.append(f"User not found for deposit {deposit.get('deposit_id', 'unknown')}")
@@ -2605,15 +2663,15 @@ def admin_resend_deposit_emails():
 @require_admin
 def admin_resend_single_deposit_email(deposit_id):
     """Resend email for a single deposit"""
-    if investment_deposits is None or veloxtrades_users is None:
+    if deposits_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
         if not deposit:
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
@@ -2651,7 +2709,7 @@ def admin_resend_single_deposit_email(deposit_id):
 @require_admin
 def admin_broadcast_email():
     """Send broadcast email to multiple users"""
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -2676,7 +2734,7 @@ def admin_broadcast_email():
             query = {'wallet.total_deposited': {'$gt': 0}}
         elif recipients_type == 'investors':
             # Users with active investments
-            active_investors = investment_investments.distinct('user_id', {'status': 'active'}) if investment_investments else []
+            active_investors = investments_collection.distinct('user_id', {'status': 'active'}) if investments_collection else []
             if active_investors:
                 query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
             else:
@@ -2687,7 +2745,7 @@ def admin_broadcast_email():
         elif recipients_type == 'verified_kyc':
             query = {'kyc_status': 'verified'}
         
-        users = list(veloxtrades_users.find(query))
+        users = list(users_collection.find(query))
         
         if not users:
             return jsonify({'success': True, 'message': 'No users found matching criteria', 'data': {'sent': 0, 'total': 0}})
@@ -2773,7 +2831,7 @@ def admin_email_config_check():
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_withdrawals():
-    if investment_withdrawals is None:
+    if withdrawals_collection is None:
         return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
     
     try:
@@ -2786,8 +2844,8 @@ def admin_get_withdrawals():
         if status != 'all':
             query['status'] = status
         
-        total = investment_withdrawals.count_documents(query)
-        withdrawals = list(investment_withdrawals.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = withdrawals_collection.count_documents(query)
+        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         result_withdrawals = []
         for withdrawal in withdrawals:
@@ -2795,9 +2853,9 @@ def admin_get_withdrawals():
             if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
                 withdrawal['created_at'] = withdrawal['created_at'].isoformat()
             
-            if veloxtrades_users is not None and 'user_id' in withdrawal:
+            if users_collection is not None and 'user_id' in withdrawal:
                 try:
-                    user = veloxtrades_users.find_one({'_id': ObjectId(withdrawal['user_id'])})
+                    user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
                     withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
                 except:
                     withdrawal['username'] = 'Unknown'
@@ -2822,7 +2880,7 @@ def admin_get_withdrawals():
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_withdrawal(withdrawal_id):
-    if investment_withdrawals is None or veloxtrades_users is None:
+    if withdrawals_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -2830,24 +2888,24 @@ def admin_process_withdrawal(withdrawal_id):
         action = data.get('action')
         reason = data.get('reason', 'Not specified')
         
-        withdrawal = investment_withdrawals.find_one({'_id': ObjectId(withdrawal_id)})
+        withdrawal = withdrawals_collection.find_one({'_id': ObjectId(withdrawal_id)})
         if not withdrawal:
             return jsonify({'success': False, 'message': 'Withdrawal not found'}), 404
         if withdrawal['status'] != 'pending':
             return jsonify({'success': False, 'message': 'Withdrawal already processed'}), 400
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(withdrawal['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
-            investment_withdrawals.update_one(
+            withdrawals_collection.update_one(
                 {'_id': ObjectId(withdrawal_id)}, 
                 {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
             )
             
-            if veloxtrades_transactions is not None:
-                veloxtrades_transactions.update_one(
+            if transactions_collection is not None:
+                transactions_collection.update_one(
                     {'withdrawal_id': withdrawal['withdrawal_id'], 'type': 'withdrawal', 'status': 'pending'},
                     {'$set': {'status': 'completed', 'description': f'Withdrawal of ${withdrawal["amount"]} approved and sent'}},
                     sort=[('created_at', -1)]
@@ -2865,18 +2923,18 @@ def admin_process_withdrawal(withdrawal_id):
             message = 'Withdrawal approved successfully and email sent to user'
             
         elif action == 'reject':
-            investment_withdrawals.update_one(
+            withdrawals_collection.update_one(
                 {'_id': ObjectId(withdrawal_id)}, 
                 {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
             )
             
-            veloxtrades_users.update_one(
+            users_collection.update_one(
                 {'_id': ObjectId(withdrawal['user_id'])},
                 {'$inc': {'wallet.balance': withdrawal['amount']}}
             )
             
-            if veloxtrades_transactions is not None:
-                veloxtrades_transactions.update_one(
+            if transactions_collection is not None:
+                transactions_collection.update_one(
                     {'withdrawal_id': withdrawal['withdrawal_id'], 'type': 'withdrawal', 'status': 'pending'},
                     {'$set': {'status': 'failed', 'description': f'Withdrawal of ${withdrawal["amount"]} rejected: {reason}'}},
                     sort=[('created_at', -1)]
@@ -2906,7 +2964,7 @@ def admin_process_withdrawal(withdrawal_id):
 @app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_investments():
-    if investment_investments is None:
+    if investments_collection is None:
         return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
     
     try:
@@ -2919,8 +2977,8 @@ def admin_get_investments():
         if status != 'all':
             query['status'] = status
         
-        total = investment_investments.count_documents(query)
-        investments = list(investment_investments.find(query).sort('start_date', -1).skip(skip).limit(limit))
+        total = investments_collection.count_documents(query)
+        investments = list(investments_collection.find(query).sort('start_date', -1).skip(skip).limit(limit))
         
         result_investments = []
         for inv in investments:
@@ -2930,9 +2988,9 @@ def admin_get_investments():
             if 'end_date' in inv and isinstance(inv['end_date'], datetime):
                 inv['end_date'] = inv['end_date'].isoformat()
             
-            if veloxtrades_users is not None and 'user_id' in inv:
+            if users_collection is not None and 'user_id' in inv:
                 try:
-                    user = veloxtrades_users.find_one({'_id': ObjectId(inv['user_id'])})
+                    user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
                     inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
                 except:
                     inv['username'] = 'Unknown'
@@ -2957,11 +3015,11 @@ def admin_get_investments():
 @app.route('/api/admin/investments/<investment_id>/complete', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_complete_investment(investment_id):
-    if investment_investments is None or veloxtrades_users is None or veloxtrades_transactions is None:
+    if investments_collection is None or users_collection is None or transactions_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        investment = investment_investments.find_one({'_id': ObjectId(investment_id)})
+        investment = investments_collection.find_one({'_id': ObjectId(investment_id)})
         if not investment:
             return jsonify({'success': False, 'message': 'Investment not found'}), 404
         
@@ -2969,7 +3027,7 @@ def admin_complete_investment(investment_id):
             return jsonify({'success': False, 'message': 'Investment already completed'}), 400
         
         user_id = investment['user_id']
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
             
@@ -2977,18 +3035,18 @@ def admin_complete_investment(investment_id):
         expected_profit = investment.get('expected_profit', 0)
         plan_name = investment.get('plan_name', 'Investment')
         
-        result = veloxtrades_users.update_one(
+        result = users_collection.update_one(
             {'_id': ObjectId(user_id)},
             {'$inc': {'wallet.balance': expected_profit, 'wallet.total_profit': expected_profit}}
         )
         
-        if result.modified_count > 0:
-            investment_investments.update_one(
+        if result:
+            investments_collection.update_one(
                 {'_id': ObjectId(investment_id)},
                 {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc), 'completed_by_admin': True}}
             )
             
-            veloxtrades_transactions.insert_one({
+            transactions_collection.insert_one({
                 'user_id': user_id,
                 'type': 'profit',
                 'amount': expected_profit,
@@ -3022,7 +3080,7 @@ def admin_complete_investment(investment_id):
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_transactions():
-    if veloxtrades_transactions is None:
+    if transactions_collection is None:
         return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
     
     try:
@@ -3035,8 +3093,8 @@ def admin_get_transactions():
         if tx_type != 'all':
             query['type'] = tx_type
         
-        total = veloxtrades_transactions.count_documents(query)
-        transactions = list(veloxtrades_transactions.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = transactions_collection.count_documents(query)
+        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         result_transactions = []
         for tx in transactions:
@@ -3044,9 +3102,9 @@ def admin_get_transactions():
             if 'created_at' in tx and isinstance(tx['created_at'], datetime):
                 tx['created_at'] = tx['created_at'].isoformat()
             
-            if veloxtrades_users is not None and 'user_id' in tx:
+            if users_collection is not None and 'user_id' in tx:
                 try:
-                    user = veloxtrades_users.find_one({'_id': ObjectId(tx['user_id'])})
+                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
                     tx['user'] = {
                         'username': user.get('username', 'Unknown') if user else 'Unknown',
                         'email': user.get('email', '') if user else ''
@@ -3075,11 +3133,11 @@ def admin_get_transactions():
 @app.route('/api/admin/referral-stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_referral_stats():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        all_users = list(veloxtrades_users.find(
+        all_users = list(users_collection.find(
             {},
             {'_id': 1, 'username': 1, 'email': 1, 'full_name': 1, 'referral_code': 1, 'referred_by': 1, 'created_at': 1, 'wallet.total_deposited': 1}
         ))
@@ -3145,7 +3203,7 @@ def admin_get_referral_stats():
 @app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_send_email():
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -3157,7 +3215,7 @@ def admin_send_email():
         if not user_id or not subject or not message:
             return jsonify({'success': False, 'message': 'User ID, subject, and message are required'}), 400
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
@@ -3193,7 +3251,7 @@ def admin_send_email():
 @app.route('/api/admin/create-transaction', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_create_transaction():
-    if veloxtrades_users is None or veloxtrades_transactions is None:
+    if users_collection is None or transactions_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -3223,7 +3281,7 @@ def admin_create_transaction():
             return jsonify({'success': False, 'message': 'Amount must be greater than 0'}), 400
         
         try:
-            user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+            user = users_collection.find_one({'_id': ObjectId(user_id)})
         except Exception:
             return jsonify({'success': False, 'message': 'Invalid user ID format'}), 400
         
@@ -3240,15 +3298,15 @@ def admin_create_transaction():
             'admin_created': True
         }
         
-        result = veloxtrades_transactions.insert_one(transaction_data)
+        result = transactions_collection.insert_one(transaction_data)
         
         if add_to_balance:
-            update_result = veloxtrades_users.update_one(
+            update_result = users_collection.update_one(
                 {'_id': ObjectId(user_id)},
                 {'$inc': {'wallet.balance': amount}}
             )
             
-            if update_result.modified_count > 0:
+            if update_result:
                 create_notification(user_id, f'{transaction_type.capitalize()} Added! 🎉', 
                     f'${amount:,.2f} has been added to your account. Reason: {description}', 'success')
                 
@@ -3280,7 +3338,7 @@ def admin_create_transaction():
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_applications():
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
     
     try:
@@ -3293,8 +3351,8 @@ def admin_get_kyc_applications():
         if status != 'all':
             query['status'] = status
         
-        total = veloxtrades_kyc.count_documents(query)
-        applications = list(veloxtrades_kyc.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
+        total = kyc_collection.count_documents(query)
+        applications = list(kyc_collection.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
         
         result_applications = []
         for app in applications:
@@ -3304,9 +3362,9 @@ def admin_get_kyc_applications():
             if app.get('reviewed_at'):
                 app['reviewed_at'] = app['reviewed_at'].isoformat()
             
-            if veloxtrades_users and app.get('user_id'):
+            if users_collection and app.get('user_id'):
                 try:
-                    user = veloxtrades_users.find_one({'_id': ObjectId(app['user_id'])})
+                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
                     if user:
                         app['user_details'] = {
                             'username': user.get('username', ''),
@@ -3337,11 +3395,11 @@ def admin_get_kyc_applications():
 @app.route('/api/admin/kyc/<kyc_id>', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_application(kyc_id):
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        kyc = veloxtrades_kyc.find_one({'_id': ObjectId(kyc_id)})
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
         
         if not kyc:
             return jsonify({'success': False, 'message': 'KYC application not found'}), 404
@@ -3352,8 +3410,8 @@ def admin_get_kyc_application(kyc_id):
         if kyc.get('reviewed_at'):
             kyc['reviewed_at'] = kyc['reviewed_at'].isoformat()
         
-        if veloxtrades_users and kyc.get('user_id'):
-            user = veloxtrades_users.find_one({'_id': ObjectId(kyc['user_id'])})
+        if users_collection and kyc.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
             if user:
                 kyc['user_details'] = {
                     '_id': str(user['_id']),
@@ -3374,11 +3432,11 @@ def admin_get_kyc_application(kyc_id):
 @app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_approve_kyc(kyc_id):
-    if veloxtrades_kyc is None or veloxtrades_users is None:
+    if kyc_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        kyc = veloxtrades_kyc.find_one({'_id': ObjectId(kyc_id)})
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
         if not kyc:
             return jsonify({'success': False, 'message': 'KYC application not found'}), 404
         
@@ -3387,7 +3445,7 @@ def admin_approve_kyc(kyc_id):
         
         admin_user = get_user_from_request()
         
-        veloxtrades_kyc.update_one(
+        kyc_collection.update_one(
             {'_id': ObjectId(kyc_id)},
             {
                 '$set': {
@@ -3399,7 +3457,7 @@ def admin_approve_kyc(kyc_id):
             }
         )
         
-        veloxtrades_users.update_one(
+        users_collection.update_one(
             {'_id': ObjectId(kyc['user_id'])},
             {'$set': {'kyc_status': 'verified', 'is_verified': True}}
         )
@@ -3411,7 +3469,7 @@ def admin_approve_kyc(kyc_id):
             'success'
         )
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(kyc['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
         if user:
             send_email(user['email'], 'KYC Verification Approved', f'Dear {user.get("username")},\n\nYour KYC has been approved.\n\nBest regards,\nVeloxtrades Team')
         
@@ -3427,7 +3485,7 @@ def admin_approve_kyc(kyc_id):
 @app.route('/api/admin/kyc/<kyc_id>/reject', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_reject_kyc(kyc_id):
-    if veloxtrades_kyc is None or veloxtrades_users is None:
+    if kyc_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -3437,7 +3495,7 @@ def admin_reject_kyc(kyc_id):
         if not reason:
             return jsonify({'success': False, 'message': 'Rejection reason is required'}), 400
         
-        kyc = veloxtrades_kyc.find_one({'_id': ObjectId(kyc_id)})
+        kyc = kyc_collection.find_one({'_id': ObjectId(kyc_id)})
         if not kyc:
             return jsonify({'success': False, 'message': 'KYC application not found'}), 404
         
@@ -3446,7 +3504,7 @@ def admin_reject_kyc(kyc_id):
         
         admin_user = get_user_from_request()
         
-        veloxtrades_kyc.update_one(
+        kyc_collection.update_one(
             {'_id': ObjectId(kyc_id)},
             {
                 '$set': {
@@ -3459,7 +3517,7 @@ def admin_reject_kyc(kyc_id):
             }
         )
         
-        veloxtrades_users.update_one(
+        users_collection.update_one(
             {'_id': ObjectId(kyc['user_id'])},
             {'$set': {'kyc_status': 'rejected'}}
         )
@@ -3471,7 +3529,7 @@ def admin_reject_kyc(kyc_id):
             'error'
         )
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(kyc['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(kyc['user_id'])})
         if user:
             send_email(user['email'], 'KYC Verification Rejected', f'Dear {user.get("username")},\n\nYour KYC was rejected.\nReason: {reason}\n\nPlease submit new documents.\n\nBest regards,\nVeloxtrades Team')
         
@@ -3487,13 +3545,13 @@ def admin_reject_kyc(kyc_id):
 @app.route('/api/admin/kyc/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_stats():
-    if veloxtrades_kyc is None:
+    if kyc_collection is None:
         return jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}), 200
     
     try:
-        pending = veloxtrades_kyc.count_documents({'status': 'pending'})
-        approved = veloxtrades_kyc.count_documents({'status': 'approved'})
-        rejected = veloxtrades_kyc.count_documents({'status': 'rejected'})
+        pending = kyc_collection.count_documents({'status': 'pending'})
+        approved = kyc_collection.count_documents({'status': 'approved'})
+        rejected = kyc_collection.count_documents({'status': 'rejected'})
         
         response = jsonify({
             'success': True,
@@ -3514,7 +3572,7 @@ def admin_get_kyc_stats():
 @app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_tickets():
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
     
     try:
@@ -3527,8 +3585,8 @@ def admin_get_tickets():
         if status != 'all':
             query['status'] = status
         
-        total = veloxtrades_support_tickets.count_documents(query)
-        tickets = list(veloxtrades_support_tickets.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
         
         result_tickets = []
         for ticket in tickets:
@@ -3561,11 +3619,11 @@ def admin_get_tickets():
 @app.route('/api/admin/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_ticket(ticket_id):
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        ticket = veloxtrades_support_tickets.find_one({'ticket_id': ticket_id})
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
         
         if not ticket:
             return jsonify({'success': False, 'message': 'Ticket not found'}), 404
@@ -3580,8 +3638,8 @@ def admin_get_ticket(ticket_id):
             if msg.get('created_at'):
                 msg['created_at'] = msg['created_at'].isoformat()
         
-        if veloxtrades_users and ticket.get('user_id'):
-            user = veloxtrades_users.find_one({'_id': ObjectId(ticket['user_id'])})
+        if users_collection and ticket.get('user_id'):
+            user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
             if user:
                 ticket['user_details'] = {
                     'username': user.get('username', ''),
@@ -3599,7 +3657,7 @@ def admin_get_ticket(ticket_id):
 @app.route('/api/admin/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_reply_ticket(ticket_id):
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -3611,7 +3669,7 @@ def admin_reply_ticket(ticket_id):
         
         admin_user = get_user_from_request()
         
-        ticket = veloxtrades_support_tickets.find_one({'ticket_id': ticket_id})
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
         if not ticket:
             return jsonify({'success': False, 'message': 'Ticket not found'}), 404
         
@@ -3623,7 +3681,7 @@ def admin_reply_ticket(ticket_id):
             'created_at': datetime.now(timezone.utc)
         }
         
-        veloxtrades_support_tickets.update_one(
+        support_tickets_collection.update_one(
             {'ticket_id': ticket_id},
             {
                 '$push': {'messages': reply},
@@ -3634,7 +3692,7 @@ def admin_reply_ticket(ticket_id):
             }
         )
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(ticket['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
         if user:
             send_email(user['email'], f'New Reply to Ticket #{ticket_id}', f'Admin replied: {message}')
             create_notification(ticket['user_id'], f'Ticket Updated: {ticket_id}', 'Admin has replied to your ticket.', 'info')
@@ -3651,17 +3709,17 @@ def admin_reply_ticket(ticket_id):
 @app.route('/api/admin/support/tickets/<ticket_id>/resolve', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resolve_ticket(ticket_id):
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        ticket = veloxtrades_support_tickets.find_one({'ticket_id': ticket_id})
+        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id})
         if not ticket:
             return jsonify({'success': False, 'message': 'Ticket not found'}), 404
         
         admin_user = get_user_from_request()
         
-        veloxtrades_support_tickets.update_one(
+        support_tickets_collection.update_one(
             {'ticket_id': ticket_id},
             {
                 '$set': {
@@ -3673,7 +3731,7 @@ def admin_resolve_ticket(ticket_id):
             }
         )
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(ticket['user_id'])})
+        user = users_collection.find_one({'_id': ObjectId(ticket['user_id'])})
         if user:
             create_notification(ticket['user_id'], f'Ticket Resolved: {ticket_id}', 'Your ticket has been resolved.', 'success')
         
@@ -3689,14 +3747,14 @@ def admin_resolve_ticket(ticket_id):
 @app.route('/api/admin/support/tickets/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_ticket_stats():
-    if veloxtrades_support_tickets is None:
+    if support_tickets_collection is None:
         return jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}), 200
     
     try:
-        open_tickets = veloxtrades_support_tickets.count_documents({'status': 'open'})
-        pending_tickets = veloxtrades_support_tickets.count_documents({'status': 'pending'})
-        resolved_tickets = veloxtrades_support_tickets.count_documents({'status': 'resolved'})
-        closed_tickets = veloxtrades_support_tickets.count_documents({'status': 'closed'})
+        open_tickets = support_tickets_collection.count_documents({'status': 'open'})
+        pending_tickets = support_tickets_collection.count_documents({'status': 'pending'})
+        resolved_tickets = support_tickets_collection.count_documents({'status': 'resolved'})
+        closed_tickets = support_tickets_collection.count_documents({'status': 'closed'})
         
         response = jsonify({
             'success': True,
@@ -3724,15 +3782,15 @@ def reset_all_admin():
     if not secret_key or secret_key != ADMIN_RESET_SECRET:
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     
-    if veloxtrades_users is None:
+    if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
-        # Delete existing admins
-        result1 = veloxtrades_users.delete_many({'is_admin': True})
-        result2 = veloxtrades_users.delete_many({'username': 'admin'})
+        # Delete existing admins from both databases
+        users_collection.delete_many({'is_admin': True})
+        users_collection.delete_many({'username': 'admin'})
         
-        logger.info(f"Deleted {result1.deleted_count} admin users, {result2.deleted_count} admin usernames")
+        logger.info(f"Deleted existing admin users")
         
         # Hash password
         hashed_password = hash_password('admin123')
@@ -3764,7 +3822,7 @@ def reset_all_admin():
             'kyc_status': 'verified'
         }
         
-        result = veloxtrades_users.insert_one(new_admin)
+        result = users_collection.insert_one(new_admin)
         
         logger.info(f"✅ Admin created with ID: {result.inserted_id}")
         
@@ -3786,7 +3844,7 @@ def reset_all_admin():
 # ==================== HEALTH CHECK ====================
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
-    mongo_status = 'connected' if veloxtrades_users is not None else 'disconnected'
+    mongo_status = 'connected' if users_collection is not None else 'disconnected'
     email_status = 'configured' if EMAIL_CONFIGURED else 'not configured'
     
     # Check email validity if configured
@@ -3832,12 +3890,24 @@ def database_status():
                     'support_tickets': veloxtrades_support_tickets is not None,
                     'admin_logs': veloxtrades_admin_logs is not None,
                     'settings': veloxtrades_settings is not None,
-                    'email_logs': veloxtrades_email_logs is not None
+                    'email_logs': veloxtrades_email_logs is not None,
+                    'investments': veloxtrades_investments is not None,
+                    'deposits': veloxtrades_deposits is not None,
+                    'withdrawals': veloxtrades_withdrawals is not None,
+                    'referral_stats': veloxtrades_referral_stats is not None
                 }
             },
             'investment_db': {
                 'connected': investment_db is not None,
                 'collections': {
+                    'users': investment_users is not None,
+                    'transactions': investment_transactions is not None,
+                    'notifications': investment_notifications is not None,
+                    'kyc': investment_kyc is not None,
+                    'support_tickets': investment_support_tickets is not None,
+                    'admin_logs': investment_admin_logs is not None,
+                    'settings': investment_settings is not None,
+                    'email_logs': investment_email_logs is not None,
                     'investments': investment_investments is not None,
                     'deposits': investment_deposits is not None,
                     'withdrawals': investment_withdrawals is not None,
@@ -3852,12 +3922,18 @@ def database_status():
 def serve_index():
     response = jsonify({
         'success': True, 
-        'message': 'Veloxtrades API Server (Dual Database Mode)',
+        'message': 'Veloxtrades API Server (Dual Database Mode - Both Databases Searchable)',
         'frontend': FRONTEND_URL,
         'databases': {
             'veloxtrades_db': 'connected' if veloxtrades_db is not None else 'disconnected',
             'investment_db': 'connected' if investment_db is not None else 'disconnected'
         },
+        'search_mode': 'BOTH DATABASES - All collections exist in both databases',
+        'collections_in_each_db': [
+            'users', 'transactions', 'notifications', 'kyc', 'support_tickets',
+            'admin_logs', 'settings', 'email_logs', 'investments',
+            'deposits', 'withdrawals', 'referral_stats'
+        ],
         'email_configured': EMAIL_CONFIGURED,
         'endpoints': ['/health', '/api/health', '/api/database-status', '/api/register', '/api/login', '/api/verify-token']
     })
@@ -3882,11 +3958,17 @@ if __name__ == '__main__':
         print(f"   ✅ veloxtrades_db: {'Connected' if veloxtrades_db is not None else 'Disconnected'}")
         print(f"   ✅ investment_db: {'Connected' if investment_db is not None else 'Disconnected'}")
         
-        print("\n📂 COLLECTIONS:")
-        print("   veloxtrades_db:")
-        print("      - users, transactions, notifications, kyc, support_tickets, admin_logs, settings, email_logs")
-        print("   investment_db:")
-        print("      - investments, deposits, withdrawals, referral_stats")
+        print("\n📂 COLLECTIONS IN BOTH DATABASES:")
+        print("   Both databases contain ALL collections:")
+        print("      - users, transactions, notifications, kyc, support_tickets")
+        print("      - admin_logs, settings, email_logs, investments")
+        print("      - deposits, withdrawals, referral_stats")
+        print("\n🔍 SEARCH MODE: Searching across BOTH databases for ALL operations")
+        print("   - When you search for users, BOTH databases are searched")
+        print("   - When you search for investments, BOTH databases are searched")
+        print("   - When you search for deposits, BOTH databases are searched")
+        print("   - When you search for withdrawals, BOTH databases are searched")
+        print("   - When you search for ANY data type, BOTH databases are searched")
     else:
         print("❌ MongoDB Connection Failed!")
     
@@ -3914,8 +3996,18 @@ if __name__ == '__main__':
     print(f"   POST /api/admin/deposits/<id>/resend-email - Resend single deposit email")
     print("=" * 70)
     print("🗄️ DATABASE ENDPOINTS:")
-    print(f"   GET  /api/database-status - Check both database connections")
+    print(f"   GET  /api/database-status - Check both database connections and collections")
     print(f"   GET  /health - Health check with database status")
+    print("=" * 70)
+    print("🔍 SEARCH BEHAVIOR:")
+    print("   ✓ Users: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Transactions: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Investments: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Deposits: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Withdrawals: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Notifications: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ KYC: Searched in BOTH veloxtrades_db AND investment_db")
+    print("   ✓ Support Tickets: Searched in BOTH veloxtrades_db AND investment_db")
     print("=" * 70)
 
     port = int(os.getenv('PORT', 5000))
