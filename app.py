@@ -88,52 +88,6 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
-# ==================== AFTER REQUEST HANDLER ====================
-@app.after_request
-def after_request(response):
-    """Add security headers and CORS headers"""
-    origin = request.headers.get('Origin', '')
-    
-    # Allow all your domains
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        response.headers['Access-Control-Max-Age'] = '86400'
-    
-    # Security headers
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
-    return response
-
-# ==================== BEFORE REQUEST HANDLER ====================
-@app.before_request
-def before_request():
-    """Check MongoDB connection and handle preflight requests"""
-    global mongo_connected
-    if not mongo_connected:
-        mongo_connected = init_mongo()
-    
-    # Handle preflight requests
-    if request.method == 'OPTIONS':
-        response = make_response()
-        origin = request.headers.get('Origin', '')
-        
-        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-            response.headers['Access-Control-Allow-Origin'] = origin
-        else:
-            response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
-        
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '86400'
-        
-        return response
-
 # ==================== MONGO DB CONNECTION ====================
 client = None
 db = None
@@ -203,24 +157,65 @@ def init_mongo():
         logger.error(traceback.format_exc())
         return False
 
-# Initialize MongoDB
-mongo_connected = init_mongo()
-
-# ==================== EMAIL CONFIGURATION ====================
+# ==================== EMAIL CONFIGURATION WITH VALIDATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
 EMAIL_USER = os.getenv('EMAIL_USER', '')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
 EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
 
+# Email configuration status
+EMAIL_CONFIGURED = bool(EMAIL_USER and EMAIL_PASSWORD and EMAIL_HOST)
+
+def check_email_configuration():
+    """Check if email is properly configured"""
+    if not EMAIL_CONFIGURED:
+        return False, "Email credentials not configured. Please set EMAIL_USER and EMAIL_PASSWORD in environment variables."
+    
+    try:
+        # Test connection
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+        return True, "Email configuration is valid"
+    except smtplib.SMTPAuthenticationError as e:
+        return False, f"SMTP Authentication failed: {str(e)}"
+    except smtplib.SMTPException as e:
+        return False, f"SMTP connection error: {str(e)}"
+    except Exception as e:
+        return False, f"Email configuration error: {str(e)}"
+
 def send_email(to_email, subject, body, html_body=None, max_retries=3):
-    """Send email with logging and retry logic"""
+    """Send email with logging and retry logic - with proper error handling"""
+    
+    # Check email configuration
+    if not EMAIL_CONFIGURED:
+        error_msg = "Email not configured. Missing EMAIL_USER or EMAIL_PASSWORD"
+        logger.error(f"❌ {error_msg}")
+        
+        # Log to database if available
+        if email_logs_collection is not None:
+            try:
+                email_logs_collection.insert_one({
+                    'to': to_email,
+                    'subject': subject,
+                    'status': 'failed',
+                    'error': error_msg,
+                    'created_at': datetime.now(timezone.utc)
+                })
+            except Exception as log_error:
+                logger.error(f"Failed to log email error: {log_error}")
+        
+        return False
+    
+    # Validate email format
+    if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
+        error_msg = f"Invalid email format: {to_email}"
+        logger.error(f"❌ {error_msg}")
+        return False
+    
     for attempt in range(max_retries):
         try:
-            if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
-                logger.error(f"❌ Invalid email format: {to_email}")
-                return False
-            
             msg = MIMEMultipart('alternative')
             msg['From'] = f"{EMAIL_FROM} <{EMAIL_USER}>"
             msg['To'] = to_email
@@ -240,6 +235,7 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
             
             logger.info(f"✅ Email sent to {to_email}: {subject}")
             
+            # Log successful email
             if email_logs_collection is not None:
                 try:
                     email_logs_collection.insert_one({
@@ -254,19 +250,58 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
             return True
             
         except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"❌ SMTP Authentication Error: {e}")
+            error_msg = f"SMTP Authentication Error: {e}"
+            logger.error(f"❌ {error_msg}")
+            # Don't retry on auth errors
+            if email_logs_collection is not None:
+                try:
+                    email_logs_collection.insert_one({
+                        'to': to_email,
+                        'subject': subject,
+                        'status': 'failed',
+                        'error': error_msg,
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                except Exception:
+                    pass
             return False
+            
         except smtplib.SMTPException as e:
-            logger.error(f"❌ SMTP Error (attempt {attempt+1}): {e}")
+            error_msg = f"SMTP Error (attempt {attempt+1}): {e}"
+            logger.error(f"❌ {error_msg}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
+                if email_logs_collection is not None:
+                    try:
+                        email_logs_collection.insert_one({
+                            'to': to_email,
+                            'subject': subject,
+                            'status': 'failed',
+                            'error': error_msg,
+                            'created_at': datetime.now(timezone.utc)
+                        })
+                    except Exception:
+                        pass
                 return False
+                
         except Exception as e:
-            logger.error(f"❌ Email error (attempt {attempt+1}): {e}")
+            error_msg = f"Email error (attempt {attempt+1}): {e}"
+            logger.error(f"❌ {error_msg}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
+                if email_logs_collection is not None:
+                    try:
+                        email_logs_collection.insert_one({
+                            'to': to_email,
+                            'subject': subject,
+                            'status': 'failed',
+                            'error': error_msg,
+                            'created_at': datetime.now(timezone.utc)
+                        })
+                    except Exception:
+                        pass
                 return False
     
     return False
@@ -354,11 +389,13 @@ def log_admin_action(admin_id, action, details):
 def add_cors_headers(response):
     """Helper to ensure CORS headers"""
     origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin:
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
     else:
         response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
     response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
     return response
 
 # ==================== INVESTMENT PLANS ====================
@@ -416,6 +453,7 @@ def get_email_template(title, content, button_text=None, button_link=None):
     </html>
     '''
 
+# ==================== EMAIL SENDING FUNCTIONS WITH PROPER HANDLING ====================
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
     try:
         subject = f"✅ Deposit Approved - ${amount:,.2f} added to your Veloxtrades account"
@@ -2195,9 +2233,99 @@ def admin_process_deposit(deposit_id):
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
+# ==================== ADMIN RESEND DEPOSIT EMAILS ====================
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_emails():
+    """Resend deposit confirmation emails for approved/rejected deposits"""
+    if deposits_collection is None or users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json() or {}
+        status_filter = data.get('status', 'approved')
+        
+        # Build query based on status filter
+        if status_filter == 'approved':
+            query = {'status': 'approved'}
+        elif status_filter == 'rejected':
+            query = {'status': 'rejected'}
+        elif status_filter == 'all':
+            query = {'status': {'$in': ['approved', 'rejected']}}
+        else:
+            query = {'status': 'approved'}
+        
+        deposits = list(deposits_collection.find(query))
+        
+        if not deposits:
+            return jsonify({
+                'success': True,
+                'message': 'No deposits found to resend emails',
+                'data': {'sent': 0, 'failed': 0, 'errors': []}
+            })
+        
+        sent_count = 0
+        failed_count = 0
+        errors = []
+        
+        for deposit in deposits:
+            try:
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                if not user:
+                    failed_count += 1
+                    errors.append(f"User not found for deposit {deposit.get('deposit_id', 'unknown')}")
+                    continue
+                
+                email_sent = False
+                if deposit['status'] == 'approved':
+                    email_sent = send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('transaction_hash', '')
+                    )
+                elif deposit['status'] == 'rejected':
+                    email_sent = send_deposit_rejected_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit['crypto'], 
+                        deposit.get('rejection_reason', 'Not specified')
+                    )
+                else:
+                    continue
+                
+                if email_sent:
+                    sent_count += 1
+                    logger.info(f"✅ Resent email for deposit {deposit.get('deposit_id', 'unknown')} to {user['email']}")
+                else:
+                    failed_count += 1
+                    errors.append(f"Failed to send email for deposit {deposit.get('deposit_id', 'unknown')}")
+                    
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"Error for deposit {deposit.get('deposit_id', 'unknown')}: {str(e)}")
+                logger.error(f"Error resending email: {e}")
+        
+        response = jsonify({
+            'success': True,
+            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
+            'data': {
+                'sent': sent_count,
+                'failed': failed_count,
+                'errors': errors[:10]  # Return first 10 errors
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Resend emails error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 @require_admin
-def admin_resend_deposit_email(deposit_id):
+def admin_resend_single_deposit_email(deposit_id):
+    """Resend email for a single deposit"""
     if deposits_collection is None or users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
@@ -2210,7 +2338,6 @@ def admin_resend_deposit_email(deposit_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
-        email_sent = False
         if deposit['status'] == 'approved':
             email_sent = send_deposit_approved_email(
                 user, 
@@ -2239,6 +2366,129 @@ def admin_resend_deposit_email(deposit_id):
         logger.error(f"Resend email error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN BROADCAST EMAIL ====================
+@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_broadcast_email():
+    """Send broadcast email to multiple users"""
+    if users_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+        
+        recipients_type = data.get('recipients', 'all')
+        subject = data.get('subject')
+        message = data.get('message')
+        html_message = data.get('html_message', None)
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        # Build query based on recipient type
+        query = {}
+        if recipients_type == 'active':
+            query = {'is_banned': False}
+        elif recipients_type == 'depositors':
+            query = {'wallet.total_deposited': {'$gt': 0}}
+        elif recipients_type == 'investors':
+            # Users with active investments
+            active_investors = investments_collection.distinct('user_id', {'status': 'active'}) if investments_collection else []
+            if active_investors:
+                query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors]}}
+            else:
+                query = {'_id': {'$in': []}}
+        elif recipients_type == 'new_users':
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            query = {'created_at': {'$gte': thirty_days_ago}}
+        elif recipients_type == 'verified_kyc':
+            query = {'kyc_status': 'verified'}
+        
+        users = list(users_collection.find(query))
+        
+        if not users:
+            return jsonify({'success': True, 'message': 'No users found matching criteria', 'data': {'sent': 0, 'total': 0}})
+        
+        # Use custom HTML if provided, otherwise create from plain text
+        if not html_message:
+            html_message = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
+                    <h1>Veloxtrades</h1>
+                </div>
+                <div style="padding: 20px; border: 1px solid #e2e8f0;">
+                    <h2>{subject}</h2>
+                    <p>{message.replace(chr(10), '<br>')}</p>
+                    <hr style="margin: 20px 0;">
+                    <p style="color: #666; font-size: 12px;">This is an automated message from Veloxtrades. If you have any questions, please contact support.</p>
+                </div>
+            </div>
+            """
+        
+        sent_count = 0
+        failed_count = 0
+        errors = []
+        
+        for user in users:
+            try:
+                if send_email(user['email'], subject, message, html_message):
+                    create_notification(user['_id'], subject, message, 'info')
+                    sent_count += 1
+                else:
+                    failed_count += 1
+                    errors.append(f"Failed to send to {user['email']}")
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"Error sending to {user['email']}: {str(e)}")
+                logger.error(f"Failed to send broadcast to {user['email']}: {e}")
+        
+        # Log admin action
+        admin_user = get_user_from_request()
+        log_admin_action(
+            admin_user['_id'], 
+            'Broadcast Email', 
+            f"Sent to {sent_count}/{len(users)} users. Type: {recipients_type}, Subject: {subject}"
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'Broadcast sent to {sent_count} out of {len(users)} users',
+            'data': {
+                'sent': sent_count,
+                'failed': failed_count,
+                'total': len(users),
+                'errors': errors[:20]  # Return first 20 errors
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== ADMIN EMAIL CONFIGURATION CHECK ====================
+@app.route('/api/admin/email-config', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_email_config_check():
+    """Check email configuration status"""
+    is_valid, message = check_email_configuration()
+    
+    return jsonify({
+        'success': True,
+        'data': {
+            'configured': EMAIL_CONFIGURED,
+            'valid': is_valid,
+            'message': message,
+            'host': EMAIL_HOST,
+            'port': EMAIL_PORT,
+            'from': EMAIL_FROM,
+            'user': EMAIL_USER if EMAIL_USER else 'Not set'
+        }
+    })
 
 # ==================== ADMIN WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
@@ -2612,146 +2862,6 @@ def admin_get_referral_stats():
         logger.error(f"Get referral stats error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN BROADCAST ====================
-@app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_broadcast_email():
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        recipients_type = data.get('recipients', 'all')
-        subject = data.get('subject')
-        message = data.get('message')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        query = {}
-        if recipients_type == 'active':
-            query = {'is_banned': False}
-        elif recipients_type == 'depositors':
-            query = {'wallet.total_deposited': {'$gt': 0}}
-        elif recipients_type == 'investors':
-            if investments_collection is not None:
-                active_investors = investments_collection.distinct('user_id', {'status': 'active'})
-                if active_investors:
-                    query = {'_id': {'$in': [ObjectId(uid) for uid in active_investors if uid]}}
-                else:
-                    query = {'_id': {'$in': []}}
-        
-        users = list(users_collection.find(query))
-        
-        html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 20px; text-align: center; color: white;">
-                <h1>Veloxtrades</h1>
-            </div>
-            <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none;">
-                <h2>{subject}</h2>
-                <p>{message.replace(chr(10), '<br>')}</p>
-                <hr style="margin: 20px 0;">
-                <p style="color: #666; font-size: 12px;">This is an automated broadcast message from Veloxtrades.</p>
-            </div>
-        </div>
-        """
-        
-        sent_count = 0
-        for user in users:
-            try:
-                if send_email(user['email'], subject, message, html_body):
-                    create_notification(user['_id'], subject, message, 'info')
-                    sent_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send to {user['email']}: {e}")
-        
-        response = jsonify({
-            'success': True, 
-            'message': f'Broadcast sent to {sent_count} out of {len(users)} users', 
-            'data': {'sent': sent_count, 'total': len(users)}
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Broadcast error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ==================== ADMIN RESEND EMAILS ====================
-@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_resend_deposit_emails():
-    if deposits_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json() or {}
-        status_filter = data.get('status', 'approved')
-        
-        if status_filter == 'approved':
-            query = {'status': 'approved'}
-        elif status_filter == 'rejected':
-            query = {'status': 'rejected'}
-        else:
-            query = {'status': {'$in': ['approved', 'rejected']}}
-        
-        deposits = list(deposits_collection.find(query))
-        
-        if not deposits:
-            response = jsonify({
-                'success': True,
-                'message': 'No deposits found to resend emails',
-                'data': {'sent': 0, 'failed': 0}
-            })
-            return add_cors_headers(response)
-        
-        sent_count = 0
-        failed_count = 0
-        
-        for deposit in deposits:
-            try:
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                if not user:
-                    failed_count += 1
-                    continue
-                
-                if deposit['status'] == 'approved':
-                    email_sent = send_deposit_approved_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('transaction_hash', '')
-                    )
-                else:
-                    email_sent = send_deposit_rejected_email(
-                        user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('rejection_reason', 'Not specified')
-                    )
-                
-                if email_sent:
-                    sent_count += 1
-                else:
-                    failed_count += 1
-                    
-            except Exception as e:
-                failed_count += 1
-                logger.error(f"Error resending email: {e}")
-        
-        response = jsonify({
-            'success': True,
-            'message': f'Emails resent: {sent_count} sent, {failed_count} failed',
-            'data': {'sent': sent_count, 'failed': failed_count}
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Resend emails error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 # ==================== ADMIN SEND EMAIL ====================
 @app.route('/api/admin/send-email', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -2809,19 +2919,35 @@ def admin_create_transaction():
     
     try:
         data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+        
         user_id = data.get('user_id')
         transaction_type = data.get('type', 'adjustment')
-        amount = float(data.get('amount', 0))
+        amount = data.get('amount')
         description = data.get('description', 'Manual transaction')
         add_to_balance = data.get('add_to_balance', True)
         
         if not user_id:
-            return jsonify({'success': False, 'message': 'User ID required'}), 400
+            return jsonify({'success': False, 'message': 'User ID is required'}), 400
+        
+        if amount is None:
+            return jsonify({'success': False, 'message': 'Amount is required'}), 400
+        
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'Amount must be a number'}), 400
         
         if amount <= 0:
             return jsonify({'success': False, 'message': 'Amount must be greater than 0'}), 400
         
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        try:
+            user = users_collection.find_one({'_id': ObjectId(user_id)})
+        except Exception:
+            return jsonify({'success': False, 'message': 'Invalid user ID format'}), 400
+        
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
@@ -2849,7 +2975,7 @@ def admin_create_transaction():
                 
                 new_balance = user.get('wallet', {}).get('balance', 0) + amount
                 
-                response = jsonify({
+                return jsonify({
                     'success': True,
                     'message': f'Transaction created and ${amount:,.2f} added to user balance',
                     'data': {
@@ -2857,22 +2983,19 @@ def admin_create_transaction():
                         'new_balance': new_balance
                     }
                 })
-                return add_cors_headers(response)
             else:
-                response = jsonify({'success': False, 'message': 'Failed to update user balance'}), 500
-                return add_cors_headers(response)
+                return jsonify({'success': False, 'message': 'Failed to update user balance'}), 500
         else:
-            response = jsonify({
+            return jsonify({
                 'success': True,
                 'message': 'Transaction created (balance not updated)',
                 'data': {'transaction_id': str(result.inserted_id)}
             })
-            return add_cors_headers(response)
             
     except Exception as e:
         logger.error(f"Create transaction error: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
 
 # ==================== ADMIN KYC ====================
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
@@ -3313,16 +3436,22 @@ def admin_get_ticket_stats():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN RESET ====================
-@app.route('/api/admin/reset-all', methods=['GET'])
+@app.route('/api/admin/reset-all', methods=['POST', 'OPTIONS'])
 def reset_all_admin():
-    secret_key = request.args.get('secret')
-    if not secret_key or secret_key != ADMIN_RESET_SECRET:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    """Create admin account - should be protected or disabled in production"""
+    # Check for secret in header (more secure)
+    auth_header = request.headers.get('X-Admin-Secret')
+    if not auth_header or auth_header != ADMIN_RESET_SECRET:
+        # Also check query param for backward compatibility
+        secret_key = request.args.get('secret')
+        if not secret_key or secret_key != ADMIN_RESET_SECRET:
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     
     if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
+        # Delete existing admins
         users_collection.delete_many({'is_admin': True})
         users_collection.delete_many({'username': 'admin'})
         
@@ -3357,10 +3486,22 @@ def reset_all_admin():
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
     mongo_status = 'connected' if users_collection is not None else 'disconnected'
+    email_status = 'configured' if EMAIL_CONFIGURED else 'not configured'
+    
+    # Check email validity if configured
+    email_valid = None
+    if EMAIL_CONFIGURED:
+        is_valid, _ = check_email_configuration()
+        email_valid = is_valid
+    
     response = jsonify({
         'success': True, 
         'status': 'healthy', 
         'mongo': mongo_status,
+        'email': {
+            'configured': EMAIL_CONFIGURED,
+            'valid': email_valid if EMAIL_CONFIGURED else None
+        },
         'timestamp': datetime.now(timezone.utc).isoformat()
     })
     return add_cors_headers(response)
@@ -3376,6 +3517,7 @@ def serve_index():
         'success': True, 
         'message': 'Veloxtrades API Server',
         'frontend': FRONTEND_URL,
+        'email_configured': EMAIL_CONFIGURED,
         'endpoints': ['/health', '/api/health', '/api/register', '/api/login', '/api/verify-token']
     })
     return add_cors_headers(response)
@@ -3394,12 +3536,29 @@ if __name__ == '__main__':
     print("🚀 VELOXTRADES API SERVER - READY")
     print("=" * 70)
     print(f"📊 MongoDB Status: {'Connected' if users_collection is not None else 'Disconnected'}")
-    print("📧 Email Service: Configured")
+    
+    # Check email configuration
+    if EMAIL_CONFIGURED:
+        is_valid, msg = check_email_configuration()
+        if is_valid:
+            print(f"📧 Email Service: Configured and VALID")
+        else:
+            print(f"⚠️ Email Service: Configured but INVALID - {msg}")
+    else:
+        print(f"⚠️ Email Service: NOT CONFIGURED - Missing EMAIL_USER or EMAIL_PASSWORD")
+    
     print("👑 Admin Dashboard Ready")
     print("=" * 70)
     print("📝 TO CREATE ADMIN:")
-    print(f"   Visit: {BACKEND_URL}/api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
+    print(f"   POST {BACKEND_URL}/api/admin/reset-all with header X-Admin-Secret: {ADMIN_RESET_SECRET}")
     print("   Then login with: admin / admin123")
+    print("=" * 70)
+    print("📧 EMAIL ENDPOINTS:")
+    print(f"   GET  /api/admin/email-config - Check email configuration status")
+    print(f"   POST /api/admin/broadcast - Send broadcast emails to users")
+    print(f"   POST /api/admin/send-email - Send single email to user")
+    print(f"   POST /api/admin/resend-deposit-emails - Resend all deposit emails")
+    print(f"   POST /api/admin/deposits/<id>/resend-email - Resend single deposit email")
     print("=" * 70)
 
     port = int(os.getenv('PORT', 5000))
