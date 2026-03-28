@@ -131,6 +131,9 @@ def add_cors_headers(response):
     response.headers['Access-Control-Max-Age'] = '86400'
     return response
 # ==================== MONGO DB CONNECTION ====================
+import certifi
+import ssl
+
 client = None
 db = None
 users_collection = None
@@ -145,33 +148,7 @@ admin_logs_collection = None
 settings_collection = None
 email_logs_collection = None
 referral_stats_collection = None
-# Add this right after your init_mongo() function
-def test_mongo_connection():
-    """Test MongoDB connection with detailed error reporting"""
-    try:
-        # Get the URI from environment
-        uri = app.config['MONGO_URI']
-        logger.info(f"Attempting to connect to MongoDB with URI: {uri.replace('Trewqasd15e', '****')}")
-        
-        # Try to connect with a timeout
-        client = MongoClient(uri, serverSelectionTimeoutMS=10000)
-        client.admin.command('ping')
-        logger.info("✅ MongoDB connection successful!")
-        
-        # List databases to verify access
-        dbs = client.list_database_names()
-        logger.info(f"Available databases: {dbs}")
-        
-        # Check if investment_db exists, create if not
-        db = client['investment_db']
-        collections = db.list_collection_names()
-        logger.info(f"Collections in investment_db: {collections}")
-        
-        return True, client
-    except Exception as e:
-        logger.error(f"❌ MongoDB connection failed: {e}")
-        logger.error(traceback.format_exc())
-        return False, None
+
 def init_mongo():
     """Initialize MongoDB connection properly"""
     global client, db, users_collection, investments_collection, transactions_collection
@@ -182,13 +159,44 @@ def init_mongo():
         logger.info("🔄 Connecting to MongoDB...")
         
         # Get MongoDB URI from config
-        mongo_uri = app.config['MONGO_URI']
+        mongo_uri = app.config.get('MONGO_URI')
+        
         if not mongo_uri:
             logger.error("❌ MONGO_URI not set in environment variables!")
-            return False
+            # Try to get from os.environ directly
+            mongo_uri = os.getenv('MONGO_URI')
+            if not mongo_uri:
+                logger.error("❌ MONGO_URI not found in environment!")
+                return False
         
-        # Create client with timeout
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
+        logger.info(f"📡 Connecting with URI: {mongo_uri[:50]}...")  # Log first 50 chars only
+        
+        # Fix password encoding issues
+        # If password contains @ or ., they need to be URL encoded
+        if '@' in mongo_uri and '%40' not in mongo_uri:
+            # Replace @ with %40 in password part
+            parts = mongo_uri.split('@')
+            if len(parts) > 1:
+                auth_part = parts[0]
+                if '://' in auth_part:
+                    scheme = auth_part.split('://')[0] + '://'
+                    credentials = auth_part.split('://')[1]
+                    if ':' in credentials:
+                        username, password = credentials.split(':', 1)
+                        password = password.replace('@', '%40').replace('.', '%2E')
+                        fixed_auth = f"{scheme}{username}:{password}"
+                        mongo_uri = f"{fixed_auth}@{parts[1]}"
+                        logger.info("🔧 Fixed password encoding in URI")
+        
+        # Create client with SSL options for Atlas
+        client = MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=30000,  # 30 second timeout
+            socketTimeoutMS=30000,
+            connectTimeoutMS=30000,
+            tls=True,
+            tlsAllowInvalidCertificates=True  # For development only
+        )
         
         # Test connection
         client.admin.command('ping')
@@ -211,6 +219,13 @@ def init_mongo():
         email_logs_collection = db['email_logs']
         referral_stats_collection = db['referral_stats']
         
+        # Test each collection by counting (this will verify access)
+        try:
+            user_count = users_collection.count_documents({})
+            logger.info(f"📊 Users collection has {user_count} documents")
+        except Exception as e:
+            logger.warning(f"Could not count users: {e}")
+        
         # Create indexes
         try:
             if users_collection is not None:
@@ -231,9 +246,67 @@ def init_mongo():
         
     except Exception as e:
         logger.error(f"❌ MongoDB Connection Error: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return False
 
+# Initialize MongoDB with retry logic
+def init_mongo_with_retry(max_retries=3, delay=5):
+    """Initialize MongoDB with retry logic"""
+    for attempt in range(max_retries):
+        logger.info(f"🔄 MongoDB connection attempt {attempt + 1}/{max_retries}")
+        if init_mongo():
+            return True
+        if attempt < max_retries - 1:
+            logger.info(f"⏳ Waiting {delay} seconds before retry...")
+            time.sleep(delay)
+    logger.error("❌ Failed to connect to MongoDB after all retries")
+    return False
+
+# Start MongoDB connection
+mongo_connected = init_mongo_with_retry()
+
+if not mongo_connected:
+    logger.error("=" * 70)
+    logger.error("⚠️  WARNING: MongoDB connection failed!")
+    logger.error("The API will still run but database operations will fail.")
+    logger.error("Please check your MONGO_URI environment variable.")
+    logger.error("=" * 70)
+@app.route('/api/debug/connection', methods=['GET', 'OPTIONS'])
+def debug_connection():
+    """Debug endpoint to check connection status"""
+    mongo_status = {
+        'connected': users_collection is not None,
+        'collections': {}
+    }
+    
+    if users_collection is not None:
+        try:
+            mongo_status['user_count'] = users_collection.count_documents({})
+        except Exception as e:
+            mongo_status['user_count_error'] = str(e)
+    
+    # Get MONGO_URI from environment (hidden for security)
+    mongo_uri = os.getenv('MONGO_URI', 'Not set')
+    if mongo_uri != 'Not set':
+        # Hide password
+        if '://' in mongo_uri:
+            parts = mongo_uri.split('@')
+            if len(parts) > 1:
+                auth_part = parts[0]
+                if ':' in auth_part:
+                    scheme = auth_part.split('://')[0]
+                    mongo_uri = f"{scheme}://****@****"
+    
+    return jsonify({
+        'success': True,
+        'data': {
+            'mongo_configured': bool(os.getenv('MONGO_URI')),
+            'mongo_uri_preview': mongo_uri,
+            'mongo_connected': mongo_status['connected'],
+            'details': mongo_status
+        }
+    })
 # ==================== EMAIL CONFIGURATION WITH VALIDATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
