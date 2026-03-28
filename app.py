@@ -50,7 +50,17 @@ app.config['JWT_EXPIRATION_DAYS'] = 30
 # Database names
 DB_VELOXTRADES = 'veloxtrades_db'
 DB_INVESTMENT = 'investment_db'
+# test_api.py
+import requests
 
+url = "https://investment-gto3.onrender.com/api/admin/email-config"
+headers = {
+    "Authorization": "Bearer YOUR_ADMIN_TOKEN"  # You need to get this from login
+}
+
+response = requests.get(url, headers=headers)
+print(response.status_code)
+print(response.json())
 # ==================== MONGO DB CONNECTION WITH DUAL DATABASES ====================
 import certifi
 import ssl
@@ -2281,7 +2291,24 @@ def admin_get_stats():
             'total_users': 0, 'total_deposit_amount': 0, 'total_withdrawal_amount': 0,
             'active_investments': 0, 'pending_deposits': 0, 'pending_withdrawals': 0, 'banned_users': 0
         }}), 200
-
+@app.route('/api/admin/email-config', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_email_config_check():
+    """Check email configuration status"""
+    is_valid, message = check_email_configuration()
+    
+    return jsonify({
+        'success': True,
+        'data': {
+            'configured': EMAIL_CONFIGURED,
+            'valid': is_valid,
+            'message': message,
+            'host': EMAIL_HOST,
+            'port': EMAIL_PORT,
+            'from': EMAIL_FROM,
+            'user': EMAIL_USER if EMAIL_USER else 'Not set'
+        }
+    })
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
