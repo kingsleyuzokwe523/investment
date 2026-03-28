@@ -249,63 +249,7 @@ def init_mongo():
         logger.error(f"Error type: {type(e).__name__}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         return False
-@app.route('/api/admin/reset-all', methods=['GET', 'POST', 'OPTIONS'])
-def reset_all_admin():
-    """Create admin account"""
-    # Check authorization
-    secret_key = request.args.get('secret') or request.headers.get('X-Admin-Secret')
-    
-    if not secret_key or secret_key != ADMIN_RESET_SECRET:
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
-    
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        # Delete existing admins
-        users_collection.delete_many({'is_admin': True})
-        users_collection.delete_many({'username': 'admin'})
-        
-        hashed_password = hash_password('admin123')
-        
-        new_admin = {
-            'full_name': 'System Administrator',
-            'email': 'admin@veloxtrades.ltd',
-            'username': 'admin',
-            'password': hashed_password,
-            'phone': '+1234567890',
-            'country': 'USA',
-            'wallet': {
-                'balance': 100000.00,
-                'total_deposited': 100000.00,
-                'total_withdrawn': 0.00,
-                'total_invested': 0.00,
-                'total_profit': 0.00
-            },
-            'is_admin': True,
-            'is_verified': True,
-            'is_active': True,
-            'is_banned': False,
-            'two_factor_enabled': False,
-            'created_at': datetime.now(timezone.utc),
-            'last_login': None,
-            'referral_code': 'ADMIN2025',
-            'referrals': [],
-            'kyc_status': 'verified'
-        }
-        
-        result = users_collection.insert_one(new_admin)
-        
-        return jsonify({
-            'success': True,
-            'message': '✅ Admin account created!',
-            'credentials': {'username': 'admin', 'password': 'admin123'},
-            'admin_id': str(result.inserted_id)
-        })
-    except Exception as e:
-        logger.error(f"Reset admin error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-# Initialize MongoDB with retry logic
+
 def init_mongo_with_retry(max_retries=3, delay=5):
     """Initialize MongoDB with retry logic"""
     for attempt in range(max_retries):
@@ -3641,27 +3585,29 @@ def admin_get_ticket_stats():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN RESET ====================
-@app.route('/api/admin/reset-all', methods=['POST', 'OPTIONS'])
+@app.route('/api/admin/reset-all', methods=['GET', 'POST', 'OPTIONS'])
 def reset_all_admin():
-    """Create admin account - should be protected or disabled in production"""
-    # Check for secret in header (more secure)
-    auth_header = request.headers.get('X-Admin-Secret')
-    if not auth_header or auth_header != ADMIN_RESET_SECRET:
-        # Also check query param for backward compatibility
-        secret_key = request.args.get('secret')
-        if not secret_key or secret_key != ADMIN_RESET_SECRET:
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+    """Create admin account - supports both GET and POST"""
+    # Check authorization
+    secret_key = request.args.get('secret') or request.headers.get('X-Admin-Secret')
+    
+    if not secret_key or secret_key != ADMIN_RESET_SECRET:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
     
     if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
         # Delete existing admins
-        users_collection.delete_many({'is_admin': True})
-        users_collection.delete_many({'username': 'admin'})
+        result1 = users_collection.delete_many({'is_admin': True})
+        result2 = users_collection.delete_many({'username': 'admin'})
         
+        logger.info(f"Deleted {result1.deleted_count} admin users, {result2.deleted_count} admin usernames")
+        
+        # Hash password
         hashed_password = hash_password('admin123')
         
+        # Create new admin
         new_admin = {
             'full_name': 'System Administrator',
             'email': 'admin@veloxtrades.ltd',
@@ -3669,22 +3615,42 @@ def reset_all_admin():
             'password': hashed_password,
             'phone': '+1234567890',
             'country': 'USA',
-            'wallet': {'balance': 100000.00, 'total_deposited': 100000.00, 'total_withdrawn': 0.00, 'total_invested': 0.00, 'total_profit': 0.00},
-            'is_admin': True, 'is_verified': True, 'is_active': True, 'is_banned': False,
-            'two_factor_enabled': False, 'created_at': datetime.now(timezone.utc), 'last_login': None,
-            'referral_code': 'ADMIN2025', 'referrals': [], 'kyc_status': 'verified'
+            'wallet': {
+                'balance': 100000.00,
+                'total_deposited': 100000.00,
+                'total_withdrawn': 0.00,
+                'total_invested': 0.00,
+                'total_profit': 0.00
+            },
+            'is_admin': True,
+            'is_verified': True,
+            'is_active': True,
+            'is_banned': False,
+            'two_factor_enabled': False,
+            'created_at': datetime.now(timezone.utc),
+            'last_login': None,
+            'referral_code': 'ADMIN2025',
+            'referrals': [],
+            'kyc_status': 'verified'
         }
         
         result = users_collection.insert_one(new_admin)
         
+        logger.info(f"✅ Admin created with ID: {result.inserted_id}")
+        
         return jsonify({
             'success': True,
             'message': '✅ Admin account created!',
-            'credentials': {'username': 'admin', 'password': 'admin123'},
+            'credentials': {
+                'username': 'admin',
+                'password': 'admin123'
+            },
             'admin_id': str(result.inserted_id)
         })
+        
     except Exception as e:
         logger.error(f"Reset admin error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== HEALTH CHECK ====================
