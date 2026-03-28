@@ -87,7 +87,49 @@ CORS(app,
      expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
+# Add this before any routes in your app.py
 
+@app.before_request
+def handle_preflight():
+    """Handle CORS preflight requests"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", request.headers.get('Origin', FRONTEND_URL))
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Max-Age', '86400')
+        return response
+
+# Also update your existing add_cors_headers function to handle preflight properly
+def add_cors_headers(response):
+    """Helper to ensure CORS headers"""
+    origin = request.headers.get('Origin', '')
+    allowed_origins = [
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://localhost:3000",
+        "http://localhost:5500",
+        "https://frontend-ugb2.onrender.com",
+        "https://elite-eky6.onrender.com",
+        "https://veloxtrades.com.ng",
+        "https://www.veloxtrades.com.ng",
+        "https://velox-wnn4.onrender.com",
+        "https://investment-gto3.onrender.com"
+    ]
+    
+    # Check if origin is allowed
+    if origin in allowed_origins or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
+    
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization, X-Total-Count'
+    response.headers['Access-Control-Max-Age'] = '86400'
+    return response
 # ==================== MONGO DB CONNECTION ====================
 client = None
 db = None
