@@ -229,40 +229,44 @@ def init_mongo():
         return False
 
 
+@app.route('/api/debug/connection', methods=['GET', 'OPTIONS'])
 def debug_connection():
     """Debug endpoint to check connection status"""
-    mongo_status = {
-        'connected': users_collection is not None,
-        'collections': {}
-    }
-    
-    if users_collection is not None:
-        try:
-            mongo_status['user_count'] = users_collection.count_documents({})
-        except Exception as e:
-            mongo_status['user_count_error'] = str(e)
-    
-    # Get MONGO_URI from environment (hidden for security)
-    mongo_uri = os.getenv('MONGO_URI', 'Not set')
-    if mongo_uri != 'Not set':
-        # Hide password
-        if '://' in mongo_uri:
-            parts = mongo_uri.split('@')
-            if len(parts) > 1:
-                auth_part = parts[0]
-                if ':' in auth_part:
-                    scheme = auth_part.split('://')[0]
-                    mongo_uri = f"{scheme}://****@****"
-    
-    return jsonify({
-        'success': True,
-        'data': {
-            'mongo_configured': bool(os.getenv('MONGO_URI')),
-            'mongo_uri_preview': mongo_uri,
-            'mongo_connected': mongo_status['connected'],
-            'details': mongo_status
+    try:
+        mongo_status = {
+            'connected': users_collection is not None,
+            'collections': {}
         }
-    })
+        
+        if users_collection is not None:
+            try:
+                mongo_status['user_count'] = users_collection.count_documents({})
+            except Exception as e:
+                mongo_status['user_count_error'] = str(e)
+        
+        # Get MONGO_URI from environment (hidden for security)
+        mongo_uri = os.getenv('MONGO_URI', 'Not set')
+        if mongo_uri != 'Not set':
+            # Hide password
+            if '://' in mongo_uri:
+                parts = mongo_uri.split('@')
+                if len(parts) > 1:
+                    auth_part = parts[0]
+                    if ':' in auth_part:
+                        scheme = auth_part.split('://')[0]
+                        mongo_uri = f"{scheme}://****@****"
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'mongo_configured': bool(os.getenv('MONGO_URI')),
+                'mongo_uri_preview': mongo_uri,
+                'mongo_connected': mongo_status['connected'],
+                'details': mongo_status
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 # ==================== EMAIL CONFIGURATION WITH VALIDATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
