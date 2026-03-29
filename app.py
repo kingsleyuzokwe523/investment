@@ -486,8 +486,6 @@ def handle_preflight():
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         response.headers.add('Access-Control-Max-Age', '86400')
         return response
-
-# Add this after_request handler to ensure CORS headers are always present
 @app.after_request
 def add_cors_headers(response):
     """Add CORS headers to every response"""
@@ -3978,6 +3976,8 @@ def serve_static_files(filename):
     except Exception as e:
         return jsonify({'success': False, 'message': 'File not found'}), 404
 # ==================== MAIN ====================
+# At the very end of your file, replace the entire if __name__ == '__main__': block with:
+
 if __name__ == '__main__':
     print("\n" + "=" * 70)
     print("🚀 VELOXTRADES API SERVER - DUAL DATABASE MODE")
@@ -3996,6 +3996,7 @@ if __name__ == '__main__':
         print("\n🔍 SEARCH MODE: Searching across BOTH databases for ALL operations")
     else:
         print("❌ MongoDB Connection Failed!")
+        print("⚠️ Server will still start but database operations will fail!")
     
     # Check email configuration
     if EMAIL_CONFIGURED:
@@ -4010,7 +4011,7 @@ if __name__ == '__main__':
     print("\n👑 Admin Dashboard Ready")
     print("=" * 70)
     print("📝 TO CREATE ADMIN:")
-    print(f"   POST {BACKEND_URL}/api/admin/reset-all with header X-Admin-Secret: {ADMIN_RESET_SECRET}")
+    print(f"   GET or POST {BACKEND_URL}/api/admin/reset-all?secret={ADMIN_RESET_SECRET}")
     print("   Then login with: admin / admin123")
     print("=" * 70)
     print("📧 EMAIL ENDPOINTS:")
@@ -4047,8 +4048,12 @@ if __name__ == '__main__':
     print(f"✅ Server will bind to {host}:{port}")
     print("=" * 70)
     
-
     # Run the app
-    app.run(host=host, port=port, debug=False, threaded=True)
+    try:
+        app.run(host=host, port=port, debug=False, threaded=True)
+    except Exception as e:
+        print(f"\n❌ SERVER FAILED TO START: {e}")
+        import traceback
+        traceback.print_exc()
     
    
