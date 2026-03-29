@@ -14,6 +14,9 @@ import atexit
 import html
 import time
 import re
+    # Force flush print statements
+import sys
+sys.stdout.flush()
 import json
 import csv
 import base64
@@ -51,16 +54,7 @@ app.config['JWT_EXPIRATION_DAYS'] = 30
 DB_VELOXTRADES = 'veloxtrades_db'
 DB_INVESTMENT = 'investment_db'
 # test_api.py
-import requests
 
-url = "https://investment-gto3.onrender.com/api/admin/email-config"
-headers = {
-    "Authorization": "Bearer YOUR_ADMIN_TOKEN"  # You need to get this from login
-}
-
-response = requests.get(url, headers=headers)
-print(response.status_code)
-print(response.json())
 # ==================== MONGO DB CONNECTION WITH DUAL DATABASES ====================
 import certifi
 import ssl
@@ -3983,7 +3977,6 @@ def serve_static_files(filename):
         return add_cors_headers(response)
     except Exception as e:
         return jsonify({'success': False, 'message': 'File not found'}), 404
-
 # ==================== MAIN ====================
 if __name__ == '__main__':
     print("\n" + "=" * 70)
@@ -4001,11 +3994,6 @@ if __name__ == '__main__':
         print("      - admin_logs, settings, email_logs, investments")
         print("      - deposits, withdrawals, referral_stats")
         print("\n🔍 SEARCH MODE: Searching across BOTH databases for ALL operations")
-        print("   - When you search for users, BOTH databases are searched")
-        print("   - When you search for investments, BOTH databases are searched")
-        print("   - When you search for deposits, BOTH databases are searched")
-        print("   - When you search for withdrawals, BOTH databases are searched")
-        print("   - When you search for ANY data type, BOTH databases are searched")
     else:
         print("❌ MongoDB Connection Failed!")
     
@@ -4046,6 +4034,21 @@ if __name__ == '__main__':
     print("   ✓ KYC: Searched in BOTH veloxtrades_db AND investment_db")
     print("   ✓ Support Tickets: Searched in BOTH veloxtrades_db AND investment_db")
     print("=" * 70)
+    print("🌐 SERVER CONFIGURATION:")
+    
+    # Get port from environment variable (Render sets this)
+    port = int(os.getenv('PORT', '10000'))  # Changed default to 10000 for Render
+    host = os.getenv('HOST', '0.0.0.0')
+    
+    print(f"   Host: {host}")
+    print(f"   Port: {port}")
+    print(f"   Environment: {os.getenv('FLASK_ENV', 'production')}")
+    print("=" * 70)
+    print(f"✅ Server will bind to {host}:{port}")
+    print("=" * 70)
+    
 
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Run the app
+    app.run(host=host, port=port, debug=False, threaded=True)
+    
+   
