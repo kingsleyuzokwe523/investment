@@ -2309,50 +2309,159 @@ def admin_get_stats():
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
+    """Get users with pagination - supports up to 100 per page"""
     if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error', 'data': {'users': [], 'total': 0}}), 500
+        logger.error("Database connection error - users_collection is None")
+        return jsonify({
+            'success': False, 
+            'message': 'Database connection error', 
+            'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': 60}
+        }), 500
     
     try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        search = request.args.get('search', '')
+        # Get pagination parameters with safe defaults
+        try:
+            page = int(request.args.get('page', 1))
+            if page < 1:
+                page = 1
+        except (ValueError, TypeError):
+            page = 1
+            
+        try:
+            limit = int(request.args.get('limit', 60))
+            # Allow up to 100 per page, default to 60
+            if limit < 1:
+                limit = 60
+            elif limit > 100:
+                limit = 100
+        except (ValueError, TypeError):
+            limit = 60
+            
+        search = request.args.get('search', '').strip()
         skip = (page - 1) * limit
         
+        logger.info(f"Admin fetching users - page: {page}, limit: {limit}, search: '{search}'")
+        
+        # Build query
         query = {}
         if search:
-            query['$or'] = [
-                {'username': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'full_name': {'$regex': search, '$options': 'i'}}
-            ]
+            # Use simple string search instead of regex to avoid errors
+            # MongoDB text search or simple contains
+            try:
+                escaped_search = re.escape(search)
+                query['$or'] = [
+                    {'username': {'$regex': escaped_search, '$options': 'i'}},
+                    {'email': {'$regex': escaped_search, '$options': 'i'}},
+                    {'full_name': {'$regex': escaped_search, '$options': 'i'}}
+                ]
+            except Exception as regex_error:
+                logger.error(f"Regex error in search: {regex_error}")
+                # Fallback to simple equality check
+                query = {
+                    '$or': [
+                        {'username': {'$eq': search}},
+                        {'email': {'$eq': search}}
+                    ]
+                }
         
-        total = users_collection.count_documents(query)
-        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        # Get total count safely
+        try:
+            total = users_collection.count_documents(query)
+            logger.info(f"Total users found: {total}")
+        except Exception as count_error:
+            logger.error(f"Error counting users: {count_error}")
+            total = 0
         
+        # Fetch users with error handling
+        users = []
+        try:
+            # Use list() to convert cursor and handle any errors
+            cursor = users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)
+            users = list(cursor)
+            logger.info(f"Fetched {len(users)} users for page {page}")
+        except Exception as fetch_error:
+            logger.error(f"Error fetching users: {fetch_error}")
+            users = []
+        
+        # Format users safely
         formatted_users = []
-        for user in users:
-            user_data = {
-                '_id': str(user['_id']),
-                'username': user.get('username', ''),
-                'email': user.get('email', ''),
-                'full_name': user.get('full_name', ''),
-                'phone': user.get('phone', ''),
-                'country': user.get('country', ''),
-                'wallet': user.get('wallet', {'balance': 0, 'total_deposited': 0, 'total_profit': 0}),
-                'is_admin': user.get('is_admin', False),
-                'is_banned': user.get('is_banned', False),
-                'is_verified': user.get('is_verified', False),
-                'kyc_status': user.get('kyc_status', 'pending'),
-                'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
-                'last_login': user.get('last_login').isoformat() if user.get('last_login') else None,
-                'referral_code': user.get('referral_code', ''),
-                'referrals': user.get('referrals', [])
-            }
-            formatted_users.append(user_data)
+        for idx, user in enumerate(users):
+            try:
+                # Ensure user is a dictionary
+                if not isinstance(user, dict):
+                    logger.warning(f"User at index {idx} is not a dict: {type(user)}")
+                    continue
+                
+                # Safely get wallet data with defaults
+                wallet = user.get('wallet', {}) or {}
+                if not isinstance(wallet, dict):
+                    wallet = {}
+                
+                wallet_data = {
+                    'balance': float(wallet.get('balance', 0) or 0),
+                    'total_deposited': float(wallet.get('total_deposited', 0) or 0),
+                    'total_profit': float(wallet.get('total_profit', 0) or 0),
+                    'total_withdrawn': float(wallet.get('total_withdrawn', 0) or 0),
+                    'total_invested': float(wallet.get('total_invested', 0) or 0)
+                }
+                
+                # Safely format dates
+                def format_date(date_field):
+                    if not date_field:
+                        return None
+                    try:
+                        if isinstance(date_field, datetime):
+                            return date_field.isoformat()
+                        elif isinstance(date_field, str):
+                            return date_field
+                        else:
+                            return str(date_field)
+                    except:
+                        return None
+                
+                created_at = format_date(user.get('created_at'))
+                last_login = format_date(user.get('last_login'))
+                
+                # Safely get string fields
+                def safe_str(value, default=''):
+                    if value is None:
+                        return default
+                    try:
+                        return str(value)
+                    except:
+                        return default
+                
+                user_data = {
+                    '_id': str(user.get('_id')) if user.get('_id') else f'unknown_{idx}',
+                    'username': safe_str(user.get('username')),
+                    'email': safe_str(user.get('email')),
+                    'full_name': safe_str(user.get('full_name')),
+                    'phone': safe_str(user.get('phone')),
+                    'country': safe_str(user.get('country')),
+                    'wallet': wallet_data,
+                    'is_admin': bool(user.get('is_admin', False)),
+                    'is_banned': bool(user.get('is_banned', False)),
+                    'is_verified': bool(user.get('is_verified', False)),
+                    'kyc_status': safe_str(user.get('kyc_status'), 'pending'),
+                    'created_at': created_at,
+                    'last_login': last_login,
+                    'referral_code': safe_str(user.get('referral_code')),
+                    'referrals': user.get('referrals', []) or []
+                }
+                formatted_users.append(user_data)
+                
+            except Exception as format_error:
+                logger.error(f"Error formatting user at index {idx}: {format_error}")
+                logger.error(f"User data: {user}")
+                # Continue with next user
+                continue
         
-        total_pages = (total + limit - 1) // limit if total > 0 else 1
+        # Calculate total pages
+        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
         
-        response = jsonify({
+        logger.info(f"Returning {len(formatted_users)} formatted users, page {page} of {total_pages}")
+        
+        response_data = {
             'success': True,
             'data': {
                 'users': formatted_users,
@@ -2361,12 +2470,24 @@ def admin_get_users():
                 'pages': total_pages,
                 'limit': limit
             }
-        })
+        }
+        
+        response = jsonify(response_data)
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Get users error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': str(e), 'data': {'users': [], 'total': 0}}), 500
-
+        return jsonify({
+            'success': False, 
+            'message': f'Server error: {str(e)}', 
+            'data': {
+                'users': [], 
+                'total': 0, 
+                'page': 1, 
+                'pages': 1,
+                'limit': 60
+            }
+        }), 500
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
@@ -2600,11 +2721,16 @@ def admin_process_deposit(deposit_id):
 def admin_resend_deposit_emails():
     """Resend deposit confirmation emails for approved/rejected deposits"""
     if deposits_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+        return jsonify({
+            'success': False, 
+            'message': 'Database connection error'
+        }), 500
     
     try:
         data = request.get_json() or {}
         status_filter = data.get('status', 'approved')
+        
+        logger.info(f"Resending emails for status: {status_filter}")
         
         # Build query based on status filter
         if status_filter == 'approved':
@@ -2616,13 +2742,16 @@ def admin_resend_deposit_emails():
         else:
             query = {'status': 'approved'}
         
-        deposits = list(deposits_collection.find(query))
+        # Limit to prevent timeout - process max 100 at a time
+        deposits = list(deposits_collection.find(query).limit(100))
+        
+        logger.info(f"Found {len(deposits)} deposits to process")
         
         if not deposits:
             return jsonify({
                 'success': True,
                 'message': 'No deposits found to resend emails',
-                'data': {'sent': 0, 'failed': 0, 'errors': []}
+                'data': {'sent': 0, 'failed': 0, 'total': 0, 'errors': []}
             })
         
         sent_count = 0
@@ -2631,103 +2760,208 @@ def admin_resend_deposit_emails():
         
         for deposit in deposits:
             try:
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                # Validate deposit data
+                if not isinstance(deposit, dict):
+                    failed_count += 1
+                    errors.append("Invalid deposit data format")
+                    continue
+                
+                user_id = deposit.get('user_id')
+                if not user_id:
+                    failed_count += 1
+                    errors.append(f"Missing user_id for deposit {deposit.get('_id', 'unknown')}")
+                    continue
+                
+                # Get user
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(user_id)})
+                except Exception as user_error:
+                    logger.error(f"Error finding user {user_id}: {user_error}")
+                    user = None
+                
                 if not user:
                     failed_count += 1
                     errors.append(f"User not found for deposit {deposit.get('deposit_id', 'unknown')}")
                     continue
                 
+                # Validate required fields
+                amount = deposit.get('amount')
+                if amount is None:
+                    failed_count += 1
+                    errors.append(f"Missing amount for deposit {deposit.get('deposit_id', 'unknown')}")
+                    continue
+                
+                crypto = deposit.get('crypto', 'USDT')
+                status = deposit.get('status')
+                
                 email_sent = False
-                if deposit['status'] == 'approved':
+                
+                if status == 'approved':
                     email_sent = send_deposit_approved_email(
                         user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
+                        float(amount), 
+                        crypto, 
                         deposit.get('transaction_hash', '')
                     )
-                elif deposit['status'] == 'rejected':
+                elif status == 'rejected':
+                    rejection_reason = deposit.get('rejection_reason', 'Not specified')
                     email_sent = send_deposit_rejected_email(
                         user, 
-                        deposit['amount'], 
-                        deposit['crypto'], 
-                        deposit.get('rejection_reason', 'Not specified')
+                        float(amount), 
+                        crypto, 
+                        rejection_reason
                     )
                 else:
+                    failed_count += 1
+                    errors.append(f"Invalid status '{status}' for deposit {deposit.get('deposit_id', 'unknown')}")
                     continue
                 
                 if email_sent:
                     sent_count += 1
-                    logger.info(f"✅ Resent email for deposit {deposit.get('deposit_id', 'unknown')} to {user['email']}")
+                    logger.info(f"✅ Resent email for deposit {deposit.get('deposit_id', 'unknown')} to {user.get('email', 'unknown')}")
                 else:
                     failed_count += 1
-                    errors.append(f"Failed to send email for deposit {deposit.get('deposit_id', 'unknown')}")
+                    errors.append(f"Failed to send email for deposit {deposit.get('deposit_id', 'unknown')} - email service error")
                     
             except Exception as e:
                 failed_count += 1
-                errors.append(f"Error for deposit {deposit.get('deposit_id', 'unknown')}: {str(e)}")
-                logger.error(f"Error resending email: {e}")
+                error_msg = f"Error for deposit {deposit.get('deposit_id', deposit.get('_id', 'unknown'))}: {str(e)}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
-        response = jsonify({
+        # Limit errors to first 20
+        errors = errors[:20]
+        
+        response_data = {
             'success': True,
-            'message': f'✅ Emails resent: {sent_count} sent, {failed_count} failed',
+            'message': f'Emails resent: {sent_count} sent, {failed_count} failed out of {len(deposits)} total',
             'data': {
                 'sent': sent_count,
                 'failed': failed_count,
-                'errors': errors[:10]  # Return first 10 errors
+                'total': len(deposits),
+                'errors': errors
             }
-        })
+        }
+        
+        response = jsonify(response_data)
         return add_cors_headers(response)
         
     except Exception as e:
-        logger.error(f"Resend emails error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Resend emails error: {e}", exc_info=True)
+        return jsonify({
+            'success': False, 
+            'message': f'Server error: {str(e)}',
+            'data': {
+                'sent': 0,
+                'failed': 0,
+                'total': 0,
+                'errors': [str(e)]
+            }
+        }), 500
+
 
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_single_deposit_email(deposit_id):
-    """Resend email for a single deposit"""
+    """Resend email for a single deposit by ID"""
     if deposits_collection is None or users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+        return jsonify({
+            'success': False, 
+            'message': 'Database connection error'
+        }), 500
     
     try:
-        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+        logger.info(f"Resending email for deposit: {deposit_id}")
+        
+        # Try to find by _id first, then by deposit_id
+        deposit = None
+        
+        try:
+            # Try ObjectId first
+            deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+        except:
+            pass
+        
         if not deposit:
-            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+            # Try deposit_id field
+            deposit = deposits_collection.find_one({'deposit_id': deposit_id})
         
-        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not deposit:
+            return jsonify({
+                'success': False, 
+                'message': f'Deposit not found: {deposit_id}'
+            }), 404
+        
+        logger.info(f"Found deposit: {deposit.get('deposit_id', 'unknown')}")
+        
+        user_id = deposit.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Deposit has no associated user'
+            }), 400
+        
+        # Get user
+        try:
+            user = users_collection.find_one({'_id': ObjectId(user_id)})
+        except Exception as e:
+            logger.error(f"Error finding user: {e}")
+            user = None
+        
         if not user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
+            return jsonify({
+                'success': False, 
+                'message': 'User not found for this deposit'
+            }), 404
         
-        if deposit['status'] == 'approved':
+        status = deposit.get('status')
+        if status not in ['approved', 'rejected']:
+            return jsonify({
+                'success': False, 
+                'message': f'Cannot resend email for deposit with status: {status}. Only approved or rejected deposits can resend emails.'
+            }), 400
+        
+        amount = deposit.get('amount', 0)
+        crypto = deposit.get('crypto', 'USDT')
+        
+        email_sent = False
+        
+        if status == 'approved':
             email_sent = send_deposit_approved_email(
                 user, 
-                deposit['amount'], 
-                deposit['crypto'], 
+                float(amount), 
+                crypto, 
                 deposit.get('transaction_hash', '')
             )
-        elif deposit['status'] == 'rejected':
+        else:  # rejected
             email_sent = send_deposit_rejected_email(
                 user, 
-                deposit['amount'], 
-                deposit['crypto'], 
+                float(amount), 
+                crypto, 
                 deposit.get('rejection_reason', 'Not specified')
             )
-        else:
-            return jsonify({'success': False, 'message': 'Deposit not processed yet (status: ' + deposit['status'] + ')'}), 400
         
         if email_sent:
-            response = jsonify({'success': True, 'message': 'Email resent successfully'})
+            logger.info(f"✅ Email resent successfully to {user.get('email', 'unknown')}")
+            response = jsonify({
+                'success': True, 
+                'message': f'Email resent successfully to {user.get("email", "user")}'
+            })
         else:
-            response = jsonify({'success': False, 'message': 'Failed to send email'}), 500
+            logger.error(f"❌ Failed to send email to {user.get('email', 'unknown')}")
+            response = jsonify({
+                'success': False, 
+                'message': 'Failed to send email - check email configuration'
+            }), 500
         
         return add_cors_headers(response)
             
     except Exception as e:
-        logger.error(f"Resend email error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+        logger.error(f"Resend email error: {e}", exc_info=True)
+        return jsonify({
+            'success': False, 
+            'message': f'Server error: {str(e)}'
+        }), 500
 # ==================== ADMIN BROADCAST EMAIL ====================
 @app.route('/api/admin/broadcast', methods=['POST', 'OPTIONS'])
 @require_admin
