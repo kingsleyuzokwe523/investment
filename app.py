@@ -437,12 +437,6 @@ PLATFORM_SETTINGS = {
     'maintenance_mode': False,
     'maintenance_message': 'Site under maintenance. Please check back later.'
 }
-from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-import os
-
-app = Flask(__name__)
-
 # ==================== CORS CONFIGURATION ====================
 # Add all your domains here
 ALLOWED_ORIGINS = [
@@ -458,7 +452,7 @@ ALLOWED_ORIGINS = [
     "https://investment-gto3.onrender.com"
 ]
 
-# Configure CORS properly
+# Configure CORS properly - USE THE EXISTING 'app' (NO NEW Flask app!)
 CORS(app, 
      origins=ALLOWED_ORIGINS,
      supports_credentials=True,
@@ -486,6 +480,7 @@ def handle_preflight():
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         response.headers.add('Access-Control-Max-Age', '86400')
         return response
+
 @app.after_request
 def add_cors_headers(response):
     """Add CORS headers to every response"""
