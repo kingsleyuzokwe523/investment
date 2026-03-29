@@ -443,8 +443,14 @@ PLATFORM_SETTINGS = {
     'maintenance_mode': False,
     'maintenance_message': 'Site under maintenance. Please check back later.'
 }
+from flask import Flask, request, jsonify, make_response
+from flask_cors import CORS
+import os
+
+app = Flask(__name__)
 
 # ==================== CORS CONFIGURATION ====================
+# Add all your domains here
 ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
@@ -458,7 +464,7 @@ ALLOWED_ORIGINS = [
     "https://investment-gto3.onrender.com"
 ]
 
-# Configure CORS
+# Configure CORS properly
 CORS(app, 
      origins=ALLOWED_ORIGINS,
      supports_credentials=True,
@@ -467,47 +473,45 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
      max_age=86400)
 
+# Add this before any routes
 @app.before_request
 def handle_preflight():
     """Handle CORS preflight requests"""
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", request.headers.get('Origin', FRONTEND_URL))
+        origin = request.headers.get('Origin', '')
+        
+        # Check if origin is allowed
+        if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+            response.headers.add("Access-Control-Allow-Origin", origin)
+        else:
+            response.headers.add("Access-Control-Allow-Origin", "https://www.veloxtrades.com.ng")
+            
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin')
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         response.headers.add('Access-Control-Max-Age', '86400')
         return response
 
+# Add this after_request handler to ensure CORS headers are always present
+@app.after_request
 def add_cors_headers(response):
-    """Helper to ensure CORS headers"""
+    """Add CORS headers to every response"""
     origin = request.headers.get('Origin', '')
-    allowed_origins = [
-        "http://localhost:5000",
-        "http://127.0.0.1:5000",
-        "http://localhost:3000",
-        "http://localhost:5500",
-        "https://frontend-ugb2.onrender.com",
-        "https://elite-eky6.onrender.com",
-        "https://veloxtrades.com.ng",
-        "https://www.veloxtrades.com.ng",
-        "https://velox-wnn4.onrender.com",
-        "https://investment-gto3.onrender.com"
-    ]
     
     # Check if origin is allowed
-    if origin in allowed_origins or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
     else:
-        response.headers['Access-Control-Allow-Origin'] = FRONTEND_URL
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
     
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization, X-Total-Count'
     response.headers['Access-Control-Max-Age'] = '86400'
+    
     return response
-
 # ==================== EMAIL CONFIGURATION WITH VALIDATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
@@ -1174,6 +1178,11 @@ def verify_referral():
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
     if users_collection is None:
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
@@ -1188,7 +1197,6 @@ def login():
         if not username_or_email or not password:
             return jsonify({'success': False, 'message': 'Username and password required'}), 400
 
-        # Search across both databases for user
         user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
 
         if not user or not verify_password(user['password'], password):
@@ -1201,19 +1209,38 @@ def login():
         users_collection.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
 
         user_data = {
-            'id': str(user['_id']), 'username': user['username'], 'full_name': user.get('full_name', ''),
-            'email': user['email'], 'balance': user.get('wallet', {}).get('balance', 0.00),
-            'is_admin': user.get('is_admin', False), 'kyc_status': user.get('kyc_status', 'pending')
+            'id': str(user['_id']), 
+            'username': user['username'], 
+            'full_name': user.get('full_name', ''),
+            'email': user['email'], 
+            'balance': user.get('wallet', {}).get('balance', 0.00),
+            'is_admin': user.get('is_admin', False), 
+            'kyc_status': user.get('kyc_status', 'pending')
         }
 
-        response = make_response(jsonify({'success': True, 'message': 'Login successful!', 'data': {'token': token, 'user': user_data}}))
-        response.set_cookie('veloxtrades_token', value=token, httponly=True, secure=True, samesite='Lax', 
-                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
+        response = make_response(jsonify({
+            'success': True, 
+            'message': 'Login successful!', 
+            'data': {'token': token, 'user': user_data}
+        }))
         
-        return add_cors_headers(response), 200
+        # Set cookie
+        response.set_cookie('veloxtrades_token', 
+                           value=token, 
+                           httponly=True, 
+                           secure=True, 
+                           samesite='None',  # Important for cross-origin
+                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
+                           path='/',
+                           domain='.veloxtrades.com.ng')  # Allow subdomains
+        
+        # Add CORS headers
+        return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Login error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Login failed'}), 500
+        response = jsonify({'success': False, 'message': 'Login failed'}), 500
+        return add_cors_headers(response)
 
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
