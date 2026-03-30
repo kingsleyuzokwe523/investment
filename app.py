@@ -1997,46 +1997,7 @@ def user_dashboard():
         }), 200
 
 # ==================== USER NOTIFICATIONS ====================
-@app.route('/api/notifications', methods=['GET', 'OPTIONS'])
-def get_notifications():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if notifications_collection is None:
-        return jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        skip = (page - 1) * limit
-        
-        notifications = list(notifications_collection.find(
-            {'user_id': str(user['_id'])}
-        ).sort('created_at', -1).skip(skip).limit(limit))
-        
-        for notif in notifications:
-            notif['_id'] = str(notif['_id'])
-            if 'created_at' in notif:
-                notif['created_at'] = notif['created_at'].isoformat()
-        
-        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
-        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'notifications': notifications,
-                'total': total,
-                'unread': unread,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Get notifications error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
 def mark_notification_read(notification_id):
