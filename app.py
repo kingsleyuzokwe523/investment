@@ -322,17 +322,17 @@ class DualDatabaseCollection:
         
         raise Exception(f"Failed to insert into any {self.name} collection")
     
-    def update_one(self, filter, update, *args, **kwargs):
-        """Update across all databases"""
-        updated_count = 0
-        for collection in self.collections:
-            try:
-                result = collection.update_one(filter, update, *args, **kwargs)
-                if result.modified_count > 0:
-                    updated_count += result.modified_count
-            except Exception as e:
-                logger.error(f"Error updating {self.name}: {e}")
-        return updated_count > 0
+    # IN DualDatabaseCollection class, change update_one to:
+def update_one(self, filter, update, *args, **kwargs):
+    """Update across all databases - returns total modified count"""
+    total_modified = 0
+    for collection in self.collections:
+        try:
+            result = collection.update_one(filter, update, *args, **kwargs)
+            total_modified += result.modified_count
+        except Exception as e:
+            logger.error(f"Error updating {self.name}: {e}")
+    return total_modified  # Return count, not boolean
     
     def update_many(self, filter, update, *args, **kwargs):
         """Update many across all databases"""
@@ -1150,6 +1150,9 @@ def get_notifications():
         logger.error(f"Get notifications error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
+
+# FIX - Change to:
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
 def mark_notification_read(notification_id):
     user = get_user_from_request()
@@ -1165,17 +1168,16 @@ def mark_notification_read(notification_id):
             {'$set': {'read': True}}
         )
         
-        if result.modified_count > 0:
+        # FIX: Check modified_count instead of truthiness
+        if result and result > 0:  # DualDatabaseCollection returns count (int)
             response = jsonify({'success': True, 'message': 'Notification marked as read'})
         else:
-            response = jsonify({'success': False, 'message': 'Notification not found'}), 404
+            response = jsonify({'success': False, 'message': 'Notification not found or already read'}), 404
         
         return add_cors_headers(response)
     except Exception as e:
         logger.error(f"Mark notification read error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
    @app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
 def get_tickets():
     user = get_user_from_request()
@@ -1981,11 +1983,32 @@ def user_dashboard():
         unread_count = 0
         if notifications_collection is not None:
             unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
-        
-        pending_deposits = 0
-        if deposits_collection is not None:
-            pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
-        
+         
+        # IN user_dashboard function, REPLACE:
+pending_deposits = 0
+if deposits_collection is not None:
+    pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+
+pending_withdrawals = 0
+if withdrawals_collection is not None:
+    pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+
+# WITH (safer version):
+pending_deposits = 0
+try:
+    if deposits_collection is not None:
+        pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+except Exception as e:
+    logger.error(f"Error counting pending deposits: {e}")
+    pending_deposits = 0
+
+pending_withdrawals = 0
+try:
+    if withdrawals_collection is not None:
+        pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+except Exception as e:
+    logger.error(f"Error counting pending withdrawals: {e}")
+    pending_withdrawals = 0
         pending_withdrawals = 0
         if withdrawals_collection is not None:
             pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
@@ -2293,7 +2316,68 @@ def reply_ticket(ticket_id):
     except Exception as e:
         logger.error(f"Reply ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+# GET /api/kyc/status
+@app.route('/api/kyc/status', methods=['GET', 'OPTIONS'])
+def get_kyc_status():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
+        
+        if not kyc:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'status': 'not_submitted',
+                    'message': 'No KYC application found'
+                }
+            })
+        
+        result = {
+            'status': kyc.get('status'),
+            'full_name': kyc.get('full_name'),
+            'submitted_at': kyc.get('submitted_at').isoformat() if kyc.get('submitted_at') else None,
+            'rejection_reason': kyc.get('rejection_reason')
+        }
+        
+        response = jsonify({'success': True, 'data': result})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get KYC status error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
+# POST /api/kyc/submit
+@app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
+def submit_kyc():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if kyc_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        full_name = data.get('full_name', '').strip()
+        date_of_birth = data.get('date_of_birth', '')
+        country = data.get('country', '')
+        id_type = data.get('id_type', '')
+        id_number = data.get('id_number', '')
+        id_front_url = data.get('id_front_url', '')
+        
+        if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
+            return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
+        
+        # Check if already submitted
+        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
+       
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
 def close_ticket(ticket_id):
     user = get_user_from_request()
