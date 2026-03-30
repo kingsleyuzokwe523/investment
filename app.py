@@ -649,8 +649,37 @@ def send_email(to_email, subject, body, html_body=None, max_retries=3):
 
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    """Hash password with bcrypt"""
+    try:
+        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Password hashing error: {e}")
+        raise
 
+def create_notification(user_id, title, message, type='info'):
+    """Create notification in both databases"""
+    notification_data = {
+        'user_id': str(user_id),
+        'title': title,
+        'message': message,
+        'type': type,
+        'read': False,
+        'created_at': datetime.now(timezone.utc)
+    }
+    
+    # Insert into veloxtrades notifications
+    if veloxtrades_notifications is not None:
+        try:
+            veloxtrades_notifications.insert_one(notification_data)
+        except Exception as e:
+            logger.error(f"Failed to create notification in veloxtrades_db: {e}")
+    
+    # Insert into investment notifications
+    if investment_notifications is not None:
+        try:
+            investment_notifications.insert_one(notification_data)
+        except Exception as e:
+            logger.error(f"Failed to create notification in investment_db: {e}")
 def verify_password(hashed_password, password):
     return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
@@ -1277,7 +1306,14 @@ def close_ticket(ticket_id):
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
-    if users_collection is None:
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    # Check database connections
+    if users_collection is None and veloxtrades_users is None and investment_users is None:
+        logger.error("❌ No database connection available")
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
@@ -1294,154 +1330,284 @@ def register():
         if not all([full_name, email, username, password]):
             return jsonify({'success': False, 'message': 'All fields are required'}), 400
         
-        # Check across both databases for existing email/username
-        existing_email = users_collection.find_one({'email': email})
-        if existing_email:
-            return jsonify({'success': False, 'message': 'Email already registered'}), 400
+        logger.info(f"📝 Registration attempt: {username} ({email})")
         
-        existing_username = users_collection.find_one({'username': username})
-        if existing_username:
-            return jsonify({'success': False, 'message': 'Username already taken'}), 400
+        # Check across BOTH databases for existing email/username
+        existing_user = None
+        
+        # Check combined collection
+        if users_collection is not None:
+            existing_user = users_collection.find_one({'$or': [{'email': email}, {'username': username}]})
+        
+        # Check veloxtrades_db directly
+        if not existing_user and veloxtrades_users is not None:
+            existing_user = veloxtrades_users.find_one({'$or': [{'email': email}, {'username': username}]})
+        
+        # Check investment_db directly
+        if not existing_user and investment_users is not None:
+            existing_user = investment_users.find_one({'$or': [{'email': email}, {'username': username}]})
+        
+        if existing_user:
+            if existing_user.get('email') == email:
+                logger.warning(f"❌ Email already registered: {email}")
+                return jsonify({'success': False, 'message': 'Email already registered'}), 400
+            else:
+                logger.warning(f"❌ Username already taken: {username}")
+                return jsonify({'success': False, 'message': 'Username already taken'}), 400
 
-        # Check referral code
+        # Check referral code across BOTH databases
         referred_by = None
         referrer = None
+        
         if referral_code_input:
-            referrer = users_collection.find_one({'referral_code': referral_code_input})
+            logger.info(f"🔍 Checking referral code: {referral_code_input}")
+            
+            # Search in combined collection
+            if users_collection is not None:
+                referrer = users_collection.find_one({'referral_code': referral_code_input})
+            
+            # Search in veloxtrades_db
+            if not referrer and veloxtrades_users is not None:
+                referrer = veloxtrades_users.find_one({'referral_code': referral_code_input})
+            
+            # Search in investment_db
+            if not referrer and investment_users is not None:
+                referrer = investment_users.find_one({'referral_code': referral_code_input})
+            
             if referrer:
                 referred_by = referral_code_input
-                logger.info(f"✅ User {username} referred by {referrer['username']} using code {referral_code_input}")
+                logger.info(f"✅ User {username} referred by {referrer.get('username', 'Unknown')} using code {referral_code_input}")
+            else:
+                logger.warning(f"⚠️ Invalid referral code: {referral_code_input}")
 
         # Generate user's referral code
         own_referral_code = username.upper() + ''.join(random.choices(string.digits, k=4))
-        wallet = {'balance': 0.00, 'total_deposited': 0.00, 'total_withdrawn': 0.00, 'total_invested': 0.00, 'total_profit': 0.00}
-
-        user_data = {
-            'full_name': full_name, 'email': email, 'username': username, 'password': hash_password(password),
-            'phone': data.get('phone', ''), 'country': data.get('country', ''), 'wallet': wallet,
-            'is_admin': False, 'is_verified': False, 'is_active': True, 'is_banned': False,
-            'two_factor_enabled': False, 'created_at': datetime.now(timezone.utc), 'last_login': None,
-            'referral_code': own_referral_code, 'referred_by': referred_by, 'referrals': [], 'kyc_status': 'pending'
+        wallet = {
+            'balance': 0.00, 
+            'total_deposited': 0.00, 
+            'total_withdrawn': 0.00, 
+            'total_invested': 0.00, 
+            'total_profit': 0.00
         }
 
-        result = users_collection.insert_one(user_data)
-        
-        # Add to referrer's referrals list (search across both databases)
-        if referrer:
-            users_collection.update_one(
-                {'_id': referrer['_id']},
-                {'$push': {'referrals': username}}
-            )
-            create_notification(referrer['_id'], 'New Referral! 🎉', 
-                f'{username} just joined using your referral link!', 'success')
-        
-        create_notification(result.inserted_id, 'Welcome to Veloxtrades!', 
-            'Thank you for joining. Start your investment journey today.', 'success')
-        
-        response = jsonify({'success': True, 'message': 'Registration successful! You can now login.'})
-        return add_cors_headers(response), 201
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        return jsonify({'success': False, 'message': 'Registration failed'}), 500
+        # Hash password
+        hashed_password = hash_password(password)
 
+        user_data = {
+            'full_name': full_name, 
+            'email': email, 
+            'username': username, 
+            'password': hashed_password,
+            'phone': data.get('phone', ''), 
+            'country': data.get('country', ''), 
+            'wallet': wallet,
+            'is_admin': False, 
+            'is_verified': False, 
+            'is_active': True, 
+            'is_banned': False,
+            'two_factor_enabled': False, 
+            'created_at': datetime.now(timezone.utc), 
+            'last_login': None,
+            'referral_code': own_referral_code, 
+            'referred_by': referred_by, 
+            'referrals': [], 
+            'kyc_status': 'pending'
+        }
+
+        # Insert into BOTH databases for redundancy
+        result = None
+        inserted_ids = []
+        
+        # Insert into veloxtrades_db
+        if veloxtrades_users is not None:
+            try:
+                result = veloxtrades_users.insert_one(user_data)
+                inserted_ids.append(('veloxtrades_db', result.inserted_id))
+                logger.info(f"✅ User created in veloxtrades_db: {username} (ID: {result.inserted_id})")
+            except Exception as e:
+                logger.error(f"❌ Failed to insert into veloxtrades_db: {e}")
+        
+        # Insert into investment_db
+        if investment_users is not None:
+            try:
+                inv_result = investment_users.insert_one(user_data)
+                inserted_ids.append(('investment_db', inv_result.inserted_id))
+                logger.info(f"✅ User created in investment_db: {username} (ID: {inv_result.inserted_id})")
+            except Exception as e:
+                logger.error(f"❌ Failed to insert into investment_db: {e}")
+        
+        # If both inserts failed, return error
+        if not inserted_ids:
+            logger.error(f"❌ Failed to create user in any database: {username}")
+            return jsonify({'success': False, 'message': 'Failed to create user account. Please try again.'}), 500
+        
+        # Get the primary user ID (from veloxtrades_db if available)
+        primary_user_id = None
+        for db_name, user_id in inserted_ids:
+            if db_name == 'veloxtrades_db':
+                primary_user_id = user_id
+                break
+        if not primary_user_id:
+            primary_user_id = inserted_ids[0][1]
+        
+        # Add to referrer's referrals list in BOTH databases
+        if referrer:
+            referrer_id = referrer.get('_id')
+            referrer_username = referrer.get('username', 'Unknown')
+            
+            # Update in veloxtrades_db
+            if veloxtrades_users is not None and referrer_id:
+                try:
+                    veloxtrades_users.update_one(
+                        {'_id': referrer_id},
+                        {'$push': {'referrals': username}}
+                    )
+                    logger.info(f"✅ Updated referrer in veloxtrades_db: {referrer_username}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to update referrer in veloxtrades_db: {e}")
+            
+            # Update in investment_db
+            if investment_users is not None and referrer_id:
+                try:
+                    investment_users.update_one(
+                        {'_id': referrer_id},
+                        {'$push': {'referrals': username}}
+                    )
+                    logger.info(f"✅ Updated referrer in investment_db: {referrer_username}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to update referrer in investment_db: {e}")
+            
+            # Create notification for referrer in BOTH notification collections
+            notification_data = {
+                'user_id': str(referrer_id), 
+                'title': 'New Referral! 🎉', 
+                'message': f'{username} just joined using your referral link!', 
+                'type': 'success',
+                'read': False,
+                'created_at': datetime.now(timezone.utc)
+            }
+            
+            # Insert notification in veloxtrades notifications
+            if veloxtrades_notifications is not None:
+                try:
+                    veloxtrades_notifications.insert_one(notification_data)
+                except Exception as e:
+                    logger.error(f"Failed to create notification in veloxtrades_db: {e}")
+            
+            # Insert notification in investment notifications
+            if investment_notifications is not None:
+                try:
+                    investment_notifications.insert_one(notification_data)
+                except Exception as e:
+                    logger.error(f"Failed to create notification in investment_db: {e}")
+        
+        # Create welcome notification for new user in BOTH databases
+        welcome_notification = {
+            'user_id': str(primary_user_id), 
+            'title': 'Welcome to Veloxtrades!', 
+            'message': 'Thank you for joining. Start your investment journey today.', 
+            'type': 'success',
+            'read': False,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        if veloxtrades_notifications is not None:
+            try:
+                veloxtrades_notifications.insert_one(welcome_notification)
+            except Exception as e:
+                logger.error(f"Failed to create welcome notification in veloxtrades_db: {e}")
+        
+        if investment_notifications is not None:
+            try:
+                investment_notifications.insert_one(welcome_notification)
+            except Exception as e:
+                logger.error(f"Failed to create welcome notification in investment_db: {e}")
+        
+        logger.info(f"🎉 Registration successful: {username} ({email})")
+        
+        response = jsonify({
+            'success': True, 
+            'message': 'Registration successful! You can now login.',
+            'data': {
+                'username': username,
+                'email': email,
+                'referral_code': own_referral_code
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"❌ Registration error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
 @app.route('/api/verify-referral', methods=['POST', 'OPTIONS'])
 def verify_referral():
-    if users_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        referral_code = data.get('referral_code', '').strip().upper()
-        
-        if not referral_code:
-            return jsonify({'success': False, 'message': 'Referral code required'}), 400
-        
-        referrer = users_collection.find_one({'referral_code': referral_code})
-        
-        if referrer:
-            return jsonify({
-                'success': True,
-                'valid': True,
-                'message': 'Valid referral code!',
-                'referrer': referrer.get('username', 'User')
-            })
-        else:
-            return jsonify({
-                'success': True,
-                'valid': False,
-                'message': 'Invalid referral code'
-            })
-            
-    except Exception as e:
-        logger.error(f"Verify referral error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/login', methods=['POST', 'OPTIONS'])
-def login():
     # Handle OPTIONS preflight request
     if request.method == "OPTIONS":
         response = make_response()
         return add_cors_headers(response)
     
-    if users_collection is None:
+    # Check database connection
+    if users_collection is None and veloxtrades_users is None and investment_users is None:
+        logger.error("❌ No database connection available")
         return jsonify({'success': False, 'message': 'Database connection error'}), 500
     
     try:
         data = request.get_json()
         if not data:
-            return jsonify({'success': False, 'message': 'No credentials provided'}), 400
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
             
-        username_or_email = data.get('username', '').strip().lower()
-        password = data.get('password', '')
-
-        if not username_or_email or not password:
-            return jsonify({'success': False, 'message': 'Username and password required'}), 400
-
-        user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
-
-        if not user or not verify_password(user['password'], password):
-            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-
-        if user.get('is_banned', False):
-            return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
-
-        token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
-        users_collection.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
-
-        user_data = {
-            'id': str(user['_id']), 
-            'username': user['username'], 
-            'full_name': user.get('full_name', ''),
-            'email': user['email'], 
-            'balance': user.get('wallet', {}).get('balance', 0.00),
-            'is_admin': user.get('is_admin', False), 
-            'kyc_status': user.get('kyc_status', 'pending')
-        }
-
-        response = make_response(jsonify({
-            'success': True, 
-            'message': 'Login successful!', 
-            'data': {'token': token, 'user': user_data}
-        }))
+        referral_code = data.get('referral_code', '').strip().upper()
         
-        # Set cookie
-        response.set_cookie('veloxtrades_token', 
-                           value=token, 
-                           httponly=True, 
-                           secure=True, 
-                           samesite='None',  # Important for cross-origin
-                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
-                           path='/',
-                           domain='.veloxtrades.com.ng')  # Allow subdomains
+        if not referral_code:
+            return jsonify({'success': False, 'message': 'Referral code required'}), 400
         
-        # Add CORS headers
-        return add_cors_headers(response)
+        logger.info(f"🔍 Verifying referral code: {referral_code}")
         
+        # Search for referrer in both databases
+        referrer = None
+        
+        # Try combined collection first
+        if users_collection is not None:
+            referrer = users_collection.find_one({'referral_code': referral_code})
+            if referrer:
+                logger.info(f"✅ Referral code found in combined collection for user: {referrer.get('username')}")
+        
+        # If not found in combined, try veloxtrades_db directly
+        if not referrer and veloxtrades_users is not None:
+            referrer = veloxtrades_users.find_one({'referral_code': referral_code})
+            if referrer:
+                logger.info(f"✅ Referral code found in veloxtrades_db for user: {referrer.get('username')}")
+        
+        # If still not found, try investment_db
+        if not referrer and investment_users is not None:
+            referrer = investment_users.find_one({'referral_code': referral_code})
+            if referrer:
+                logger.info(f"✅ Referral code found in investment_db for user: {referrer.get('username')}")
+        
+        if referrer:
+            # Get referrer info
+            referrer_username = referrer.get('username', 'User')
+            referrer_full_name = referrer.get('full_name', '')
+            
+            return jsonify({
+                'success': True,
+                'valid': True,
+                'message': 'Valid referral code!',
+                'referrer': referrer_username,
+                'referrer_name': referrer_full_name,
+                'referral_code': referral_code
+            })
+        else:
+            logger.warning(f"❌ Invalid referral code: {referral_code}")
+            return jsonify({
+                'success': True,
+                'valid': False,
+                'message': 'Invalid referral code. Please check and try again.'
+            })
+            
     except Exception as e:
-        logger.error(f"Login error: {e}", exc_info=True)
-        response = jsonify({'success': False, 'message': 'Login failed'}), 500
-        return add_cors_headers(response)
-
+        logger.error(f"❌ Verify referral error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Error verifying referral code: {str(e)}'}), 500
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
     response = make_response(jsonify({'success': True, 'message': 'Logged out successfully'}))
@@ -1464,24 +1630,157 @@ def get_profile():
     }
     response = jsonify({'success': True, 'data': {'user': user_data}})
     return add_cors_headers(response)
+@app.route('/api/login', methods=['POST', 'OPTIONS'])
+def login():
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    # Check database connection
+    if users_collection is None:
+        logger.error("❌ Database connection error - users_collection is None")
+        return jsonify({'success': False, 'message': 'Database connection error. Please try again later.'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            logger.error("❌ No JSON data received in login request")
+            return jsonify({'success': False, 'message': 'No credentials provided'}), 400
+            
+        username_or_email = data.get('username', '').strip().lower()
+        password = data.get('password', '')
 
-@app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
-def verify_token():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
-    response = jsonify({
-        'success': True, 
-        'message': 'Token is valid', 
-        'user': {
+        if not username_or_email or not password:
+            return jsonify({'success': False, 'message': 'Username and password required'}), 400
+
+        logger.info(f"🔐 Login attempt for: {username_or_email}")
+
+        # Search for user in both databases
+        user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
+        
+        # If not found in combined collection, try individual databases
+        if not user:
+            if veloxtrades_users is not None:
+                user = veloxtrades_users.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
+            if not user and investment_users is not None:
+                user = investment_users.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
+
+        if not user:
+            logger.warning(f"❌ User not found: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+
+        # Verify password with error handling
+        try:
+            if not verify_password(user.get('password', ''), password):
+                logger.warning(f"❌ Invalid password for user: {username_or_email}")
+                return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+        except Exception as e:
+            logger.error(f"❌ Password verification error: {e}")
+            return jsonify({'success': False, 'message': 'Authentication error'}), 500
+
+        # Check if user is banned
+        if user.get('is_banned', False):
+            logger.warning(f"❌ Banned user attempted login: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
+
+        # Generate token
+        try:
+            token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
+        except Exception as e:
+            logger.error(f"❌ Token creation error: {e}")
+            return jsonify({'success': False, 'message': 'Error creating session'}), 500
+
+        # Update last login
+        try:
+            users_collection.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
+        except Exception as e:
+            logger.error(f"⚠️ Failed to update last login: {e}")
+
+        # Prepare user data
+        wallet = user.get('wallet', {})
+        if not isinstance(wallet, dict):
+            wallet = {'balance': 0.00}
+        
+        user_data = {
             'id': str(user['_id']), 
-            'username': user['username'], 
-            'email': user['email'], 
-            'is_admin': user.get('is_admin', False),
+            'username': user.get('username', ''), 
+            'full_name': user.get('full_name', ''),
+            'email': user.get('email', ''), 
+            'balance': wallet.get('balance', 0.00),
+            'is_admin': user.get('is_admin', False), 
             'kyc_status': user.get('kyc_status', 'pending')
         }
-    })
-    return add_cors_headers(response)
+
+        logger.info(f"✅ Login successful for: {username_or_email} (Admin: {user_data['is_admin']})")
+
+        # Create response
+        response = make_response(jsonify({
+            'success': True, 
+            'message': 'Login successful!', 
+            'data': {'token': token, 'user': user_data}
+        }))
+        
+        # Set cookie - FIXED: Remove domain for Render deployment
+        # The domain parameter was causing issues on Render
+        response.set_cookie('veloxtrades_token', 
+                           value=token, 
+                           httponly=True, 
+                           secure=True, 
+                           samesite='None',
+                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
+                           path='/')
+        
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Login error: {e}", exc_info=True)
+        response = jsonify({'success': False, 'message': 'Login failed. Please try again.'}), 500
+        return add_cors_headers(response)
+@app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
+def verify_token():
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    try:
+        user = get_user_from_request()
+        
+        if not user:
+            logger.warning("❌ Token verification failed - No user found")
+            return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
+        
+        # Get wallet data safely
+        wallet = user.get('wallet', {})
+        if not isinstance(wallet, dict):
+            wallet = {'balance': 0.00}
+        
+        # Prepare user data
+        user_data = {
+            'id': str(user['_id']),
+            'username': user.get('username', ''),
+            'email': user.get('email', ''),
+            'full_name': user.get('full_name', ''),
+            'is_admin': user.get('is_admin', False),
+            'kyc_status': user.get('kyc_status', 'pending'),
+            'is_verified': user.get('is_verified', False),
+            'is_banned': user.get('is_banned', False),
+            'balance': wallet.get('balance', 0.00)
+        }
+        
+        logger.info(f"✅ Token verified for user: {user_data['username']} (Admin: {user_data['is_admin']})")
+        
+        response = jsonify({
+            'success': True, 
+            'message': 'Token is valid',
+            'user': user_data
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Token verification error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Token verification failed: {str(e)}'}), 500
 
 # ==================== USER DEPOSITS ====================
 @app.route('/api/deposits', methods=['POST', 'OPTIONS'])
