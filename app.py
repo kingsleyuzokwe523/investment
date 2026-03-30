@@ -521,39 +521,76 @@ def log_admin_action(admin_id, action, details):
 
 def add_referral_commission(user_id, deposit_amount):
     try:
+        logger.info(f"Adding referral commission for user {user_id}, amount ${deposit_amount}")
+        
         if users_collection is None:
+            logger.warning("users_collection is None, skipping referral commission")
             return False
+        
         user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
+            logger.warning(f"User {user_id} not found")
             return False
+        
         referred_by_code = user.get('referred_by')
         if not referred_by_code:
+            logger.info(f"User {user_id} has no referrer")
             return False
+        
         referrer = users_collection.find_one({'referral_code': referred_by_code})
         if not referrer:
+            logger.warning(f"Referrer with code {referred_by_code} not found")
             return False
+        
         if settings_collection is not None:
             settings = settings_collection.find_one({})
             bonus_percentage = settings.get('referral_bonus', 5) if settings else 5
         else:
             bonus_percentage = 5
+        
         commission = deposit_amount * (bonus_percentage / 100)
         if commission <= 0:
+            logger.info(f"Commission ${commission} is zero or negative")
             return False
+        
+        logger.info(f"Adding commission ${commission} to referrer {referrer.get('username')}")
+        
+        # Update referrer balance
         if veloxtrades_users is not None:
-            veloxtrades_users.update_one({'_id': referrer['_id']}, {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}})
+            veloxtrades_users.update_one(
+                {'_id': referrer['_id']}, 
+                {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
+            )
         if investment_users is not None:
-            investment_users.update_one({'_id': referrer['_id']}, {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}})
+            investment_users.update_one(
+                {'_id': referrer['_id']}, 
+                {'$inc': {'wallet.balance': commission, 'wallet.total_profit': commission}}
+            )
+        
+        # Create transaction record
         if transactions_collection is not None:
             transactions_collection.insert_one({
-                'user_id': str(referrer['_id']), 'type': 'commission', 'amount': commission, 'status': 'completed',
+                'user_id': str(referrer['_id']), 
+                'type': 'commission', 
+                'amount': commission, 
+                'status': 'completed',
                 'description': f'Commission from {user["username"]}\'s deposit of ${deposit_amount:,.2f}',
                 'created_at': datetime.now(timezone.utc)
             })
-        create_notification(referrer['_id'], 'Referral Commission! 🎉', f'Earned ${commission:,.2f} from {user["username"]}\'s deposit!', 'success')
+        
+        # Create notification
+        create_notification(
+            referrer['_id'], 
+            'Referral Commission! 🎉', 
+            f'Earned ${commission:,.2f} from {user["username"]}\'s deposit!', 
+            'success'
+        )
+        
+        logger.info(f"Successfully added referral commission")
         return True
+        
     except Exception as e:
-        logger.error(f"Error adding referral commission: {e}")
+        logger.error(f"Error adding referral commission: {e}", exc_info=True)
         return False
 
 
