@@ -711,49 +711,6 @@ def verify_referral():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/login', methods=['POST', 'OPTIONS'])
-def login():
-    if request.method == "OPTIONS":
-        return add_cors_headers(make_response())
-    if not users_collection and not veloxtrades_users and not investment_users:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'success': False, 'message': 'No credentials provided'}), 400
-        username_or_email = data.get('username', '').strip().lower()
-        password = data.get('password', '')
-        if not username_or_email or not password:
-            return jsonify({'success': False, 'message': 'Username and password required'}), 400
-        user = None
-        if users_collection:
-            user = users_collection.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
-        if not user and veloxtrades_users:
-            user = veloxtrades_users.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
-        if not user and investment_users:
-            user = investment_users.find_one({'$or': [{'email': username_or_email}, {'username': username_or_email}]})
-        if not user or not verify_password(user.get('password', ''), password):
-            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-        if user.get('is_banned', False):
-            return jsonify({'success': False, 'message': 'Account suspended'}), 403
-        token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
-        if veloxtrades_users:
-            veloxtrades_users.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
-        if investment_users:
-            investment_users.update_one({'_id': user['_id']}, {'$set': {'last_login': datetime.now(timezone.utc)}})
-        wallet = user.get('wallet', {})
-        user_data = {
-            'id': str(user['_id']), 'username': user.get('username', ''), 'full_name': user.get('full_name', ''),
-            'email': user.get('email', ''), 'balance': wallet.get('balance', 0.00),
-            'is_admin': user.get('is_admin', False), 'kyc_status': user.get('kyc_status', 'pending')
-        }
-        response = make_response(jsonify({'success': True, 'message': 'Login successful!', 'data': {'token': token, 'user': user_data}}))
-        response.set_cookie('veloxtrades_token', value=token, httponly=True, secure=True, samesite='None', max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, path='/')
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Login error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Login failed'}), 500
-
 
 @app.route('/api/logout', methods=['POST', 'OPTIONS'])
 def logout():
@@ -776,7 +733,193 @@ def get_profile():
         'referrals': user.get('referrals', []), 'created_at': user.get('created_at').isoformat() if user.get('created_at') else None
     }
     return add_cors_headers(jsonify({'success': True, 'data': {'user': user_data}}))
+@app.route('/api/login', methods=['POST', 'OPTIONS'])
+def login():
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    # Check database connection
+    if not veloxtrades_users and not investment_users:
+        logger.error("❌ No database connection available")
+        return jsonify({'success': False, 'message': 'Database connection error. Please try again later.'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            logger.error("❌ No JSON data received")
+            return jsonify({'success': False, 'message': 'No credentials provided'}), 400
+            
+        username_or_email = data.get('username', '').strip().lower()
+        password = data.get('password', '')
+        
+        logger.info(f"🔐 Login attempt for: {username_or_email}")
 
+        if not username_or_email or not password:
+            return jsonify({'success': False, 'message': 'Username and password required'}), 400
+
+        # Search for user in ALL databases
+        user = None
+        
+        # Try veloxtrades_db first
+        if veloxtrades_users:
+            user = veloxtrades_users.find_one({
+                '$or': [
+                    {'email': username_or_email}, 
+                    {'username': username_or_email}
+                ]
+            })
+            if user:
+                logger.info(f"✅ User found in veloxtrades_db: {username_or_email}")
+        
+        # Try investment_db if not found
+        if not user and investment_users:
+            user = investment_users.find_one({
+                '$or': [
+                    {'email': username_or_email}, 
+                    {'username': username_or_email}
+                ]
+            })
+            if user:
+                logger.info(f"✅ User found in investment_db: {username_or_email}")
+        
+        # Try combined collection if not found
+        if not user and users_collection:
+            user = users_collection.find_one({
+                '$or': [
+                    {'email': username_or_email}, 
+                    {'username': username_or_email}
+                ]
+            })
+            if user:
+                logger.info(f"✅ User found in combined collection: {username_or_email}")
+        
+        if not user:
+            logger.warning(f"❌ User not found: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+
+        # Debug: Log user info (without password)
+        logger.info(f"📝 User found: {user.get('username')}, Admin: {user.get('is_admin', False)}")
+        logger.info(f"📝 Password hash exists: {bool(user.get('password'))}")
+        logger.info(f"📝 Password hash length: {len(user.get('password', '')) if user.get('password') else 0}")
+
+        # Verify password with detailed error handling
+        try:
+            stored_password = user.get('password', '')
+            if not stored_password:
+                logger.error("❌ No password hash stored for user")
+                return jsonify({'success': False, 'message': 'Account error. Please contact support.'}), 500
+            
+            password_valid = verify_password(stored_password, password)
+            
+            if not password_valid:
+                logger.warning(f"❌ Invalid password for user: {username_or_email}")
+                return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+                
+            logger.info(f"✅ Password verified for: {username_or_email}")
+            
+        except Exception as e:
+            logger.error(f"❌ Password verification error: {e}", exc_info=True)
+            return jsonify({'success': False, 'message': 'Authentication error. Please try again.'}), 500
+
+        # Check if user is banned
+        if user.get('is_banned', False):
+            logger.warning(f"❌ Banned user attempted login: {username_or_email}")
+            return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
+
+        # Generate token
+        try:
+            token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
+            logger.info(f"✅ Token created for: {username_or_email}")
+        except Exception as e:
+            logger.error(f"❌ Token creation error: {e}")
+            return jsonify({'success': False, 'message': 'Error creating session'}), 500
+
+        # Update last login in ALL databases where user exists
+        try:
+            if veloxtrades_users:
+                veloxtrades_users.update_one(
+                    {'_id': user['_id']}, 
+                    {'$set': {'last_login': datetime.now(timezone.utc)}}
+                )
+            if investment_users:
+                investment_users.update_one(
+                    {'_id': user['_id']}, 
+                    {'$set': {'last_login': datetime.now(timezone.utc)}}
+                )
+        except Exception as e:
+            logger.error(f"⚠️ Failed to update last login: {e}")
+
+        # Prepare user data
+        wallet = user.get('wallet', {})
+        if not isinstance(wallet, dict):
+            wallet = {'balance': 0.00}
+        
+        user_data = {
+            'id': str(user['_id']), 
+            'username': user.get('username', ''), 
+            'full_name': user.get('full_name', ''),
+            'email': user.get('email', ''), 
+            'balance': wallet.get('balance', 0.00),
+            'is_admin': user.get('is_admin', False), 
+            'kyc_status': user.get('kyc_status', 'pending')
+        }
+
+        logger.info(f"🎉 Login successful for: {username_or_email} (Admin: {user_data['is_admin']})")
+
+        # Create response
+        response = make_response(jsonify({
+            'success': True, 
+            'message': 'Login successful!', 
+            'data': {'token': token, 'user': user_data}
+        }))
+        
+        # Set cookie (removed domain for Render compatibility)
+        response.set_cookie('veloxtrades_token', 
+                           value=token, 
+                           httponly=True, 
+                           secure=True, 
+                           samesite='None',
+                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
+                           path='/')
+        
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Login error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Login failed: {str(e)}'}), 500
+
+def verify_password(hashed_password, password):
+    """Verify password with enhanced error handling"""
+    try:
+        # Check if we have a password hash
+        if not hashed_password:
+            logger.error("Empty password hash provided")
+            return False
+        
+        if not password:
+            logger.error("Empty password provided")
+            return False
+        
+        # Ensure password is string
+        if isinstance(password, str):
+            password = password.encode('utf-8')
+        
+        # Ensure hash is bytes
+        if isinstance(hashed_password, str):
+            hashed_password = hashed_password.encode('utf-8')
+        
+        # Verify
+        result = bcrypt.checkpw(password, hashed_password)
+        return result
+        
+    except ValueError as e:
+        logger.error(f"Password verification ValueError: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Password verification error: {e}")
+        return False
 
 @app.route('/api/verify-token', methods=['GET', 'OPTIONS'])
 def verify_token():
