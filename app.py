@@ -1061,6 +1061,356 @@ scheduler.add_job(func=process_investment_profits, trigger="interval", hours=1, 
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 
+  @app.route('/api/transactions', methods=['GET', 'OPTIONS'])
+def get_transactions():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        transactions = []
+        if transactions_collection is not None:
+            transactions = list(transactions_collection.find(
+                {'user_id': str(user['_id'])}
+            ).sort('created_at', -1))
+        
+        for tx in transactions:
+            tx['_id'] = str(tx['_id'])
+            if 'created_at' in tx:
+                tx['created_at'] = tx['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'transactions': transactions}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get transactions error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/investments', methods=['GET', 'OPTIONS'])
+def get_user_investments():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        investments = []
+        if investments_collection is not None:
+            investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
+        
+        for inv in investments:
+            inv['_id'] = str(inv['_id'])
+            if 'start_date' in inv and inv['start_date']:
+                inv['start_date'] = inv['start_date'].isoformat()
+            if 'end_date' in inv and inv['end_date']:
+                inv['end_date'] = inv['end_date'].isoformat()
+        
+        response = jsonify({'success': True, 'data': {'investments': investments}})
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get investments error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/notifications', methods=['GET', 'OPTIONS'])
+def get_notifications():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if notifications_collection is None:
+        return jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        notifications = list(notifications_collection.find(
+            {'user_id': str(user['_id'])}
+        ).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for notif in notifications:
+            notif['_id'] = str(notif['_id'])
+            if 'created_at' in notif:
+                notif['created_at'] = notif['created_at'].isoformat()
+        
+        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
+        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'notifications': notifications,
+                'total': total,
+                'unread': unread,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get notifications error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
+def mark_notification_read(notification_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if notifications_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        result = notifications_collection.update_one(
+            {'_id': ObjectId(notification_id), 'user_id': str(user['_id'])},
+            {'$set': {'read': True}}
+        )
+        
+        if result.modified_count > 0:
+            response = jsonify({'success': True, 'message': 'Notification marked as read'})
+        else:
+            response = jsonify({'success': False, 'message': 'Notification not found'}), 404
+        
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Mark notification read error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+   @app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
+def get_tickets():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        query = {'user_id': str(user['_id'])}
+        
+        total = support_tickets_collection.count_documents(query)
+        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            ticket.pop('messages', None)
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Get tickets error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
+def create_ticket():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        subject = data.get('subject', '').strip()
+        message = data.get('message', '').strip()
+        category = data.get('category', 'general')
+        
+        if not subject or not message:
+            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
+        
+        ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
+        
+        ticket_data = {
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id']),
+            'username': user['username'],
+            'email': user['email'],
+            'subject': subject,
+            'message': message,
+            'category': category,
+            'priority': data.get('priority', 'medium'),
+            'status': 'open',
+            'created_at': datetime.now(timezone.utc),
+            'updated_at': datetime.now(timezone.utc),
+            'messages': [
+                {
+                    'sender': 'user',
+                    'sender_name': user['username'],
+                    'message': message,
+                    'created_at': datetime.now(timezone.utc)
+                }
+            ]
+        }
+        
+        result = support_tickets_collection.insert_one(ticket_data)
+        
+        create_notification(
+            user['_id'],
+            f'Ticket Created: {ticket_id}',
+            f'Your support ticket has been created. We will respond within 24 hours.',
+            'info'
+        )
+        
+        response = jsonify({
+            'success': True,
+            'message': 'Support ticket created successfully',
+            'data': {
+                'ticket_id': ticket_id,
+                'status': 'open'
+            }
+        })
+        return add_cors_headers(response), 201
+        
+    except Exception as e:
+        logger.error(f"Create ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
+def get_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        ticket['_id'] = str(ticket['_id'])
+        if ticket.get('created_at'):
+            ticket['created_at'] = ticket['created_at'].isoformat()
+        if ticket.get('updated_at'):
+            ticket['updated_at'] = ticket['updated_at'].isoformat()
+        
+        for msg in ticket.get('messages', []):
+            if msg.get('created_at'):
+                msg['created_at'] = msg['created_at'].isoformat()
+        
+        response = jsonify({'success': True, 'data': ticket})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Get ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
+def reply_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        
+        if not message:
+            return jsonify({'success': False, 'message': 'Message is required'}), 400
+        
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Cannot reply to a closed ticket'}), 400
+        
+        reply = {
+            'sender': 'user',
+            'sender_name': user['username'],
+            'message': message,
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$push': {'messages': reply},
+                '$set': {
+                    'updated_at': datetime.now(timezone.utc),
+                    'status': 'open'
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Reply ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
+def close_ticket(ticket_id):
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    if support_tickets_collection is None:
+        return jsonify({'success': False, 'message': 'Database connection error'}), 500
+    
+    try:
+        ticket = support_tickets_collection.find_one({
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id'])
+        })
+        
+        if not ticket:
+            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
+        
+        if ticket['status'] == 'closed':
+            return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
+        
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'closed',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        response = jsonify({'success': True, 'message': 'Ticket closed successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"Close ticket error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+
 # ==================== AUTHENTICATION API ====================
 @app.route('/api/register', methods=['POST', 'OPTIONS'])
 def register():
