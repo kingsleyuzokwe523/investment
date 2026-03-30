@@ -331,13 +331,29 @@ def handle_preflight():
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+    allowed_origins = [
+        "http://localhost:5000", 
+        "http://127.0.0.1:5000", 
+        "http://localhost:3000", 
+        "http://localhost:5500",
+        "https://frontend-ugb2.onrender.com", 
+        "https://elite-eky6.onrender.com",
+        "https://veloxtrades.com.ng", 
+        "https://www.veloxtrades.com.ng",
+        "https://velox-wnn4.onrender.com", 
+        "https://investment-gto3.onrender.com"
+    ]
+    
+    if origin in allowed_origins or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
     else:
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+    
     response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+    
     return response
-
 
 # ==================== EMAIL CONFIGURATION ====================
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
@@ -2172,15 +2188,29 @@ def admin_get_deposits():
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
+    # Handle OPTIONS preflight request
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+        
         action = data.get('action')
         reason = data.get('reason', '')
         
-        # Find deposit in primary database first
+        if action not in ['approve', 'reject']:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
+        
+        logger.info(f"Processing deposit {deposit_id} with action: {action}")
+        
+        # Try to find deposit by ObjectId
         deposit = None
         deposit_collection_used = None
         
+        # Try veloxtrades_deposits first
         if veloxtrades_deposits is not None:
             try:
                 deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
@@ -2190,6 +2220,7 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 logger.error(f"Error finding in veloxtrades_deposits: {e}")
         
+        # Try investment_deposits
         if deposit is None and investment_deposits is not None:
             try:
                 deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
@@ -2199,6 +2230,7 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 logger.error(f"Error finding in investment_deposits: {e}")
         
+        # Try combined collection
         if deposit is None and deposits_collection is not None:
             try:
                 deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
@@ -2212,134 +2244,177 @@ def admin_process_deposit(deposit_id):
         
         # Find user
         user = None
+        user_id = deposit.get('user_id')
+        
+        # Try to find user in various collections
         if users_collection is not None:
             try:
-                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                user = users_collection.find_one({'_id': ObjectId(user_id)})
             except Exception as e:
-                logger.error(f"Error finding user: {e}")
+                logger.error(f"Error finding user in combined: {e}")
         
         if not user and veloxtrades_users is not None:
             try:
-                user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
             except Exception as e:
                 logger.error(f"Error finding user in veloxtrades: {e}")
+        
+        if not user and investment_users is not None:
+            try:
+                user = investment_users.find_one({'_id': ObjectId(user_id)})
+            except Exception as e:
+                logger.error(f"Error finding user in investment: {e}")
         
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        logger.info(f"Found user: {user.get('username')} - {user.get('email')}")
+        
         if action == 'approve':
-            # Update user balance in both databases
-            if veloxtrades_users is not None:
-                veloxtrades_users.update_one(
-                    {'_id': ObjectId(deposit['user_id'])}, 
-                    {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
-                )
-                logger.info(f"Updated balance for user {deposit['user_id']} in veloxtrades_users")
-            
-            if investment_users is not None:
-                investment_users.update_one(
-                    {'_id': ObjectId(deposit['user_id'])}, 
-                    {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
-                )
-                logger.info(f"Updated balance for user {deposit['user_id']} in investment_users")
+            # Update user balance
+            try:
+                if veloxtrades_users is not None:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)}, 
+                        {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                    )
+                    logger.info(f"Updated balance for user in veloxtrades_users")
+                
+                if investment_users is not None:
+                    investment_users.update_one(
+                        {'_id': ObjectId(user_id)}, 
+                        {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                    )
+                    logger.info(f"Updated balance for user in investment_users")
+            except Exception as e:
+                logger.error(f"Error updating balance: {e}")
+                return jsonify({'success': False, 'message': f'Balance update failed: {str(e)}'}), 500
             
             # Update deposit status
-            if deposit_collection_used is not None:
-                deposit_collection_used.update_one(
-                    {'_id': ObjectId(deposit_id)}, 
-                    {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
-                )
-                logger.info(f"Updated deposit status to approved")
+            try:
+                if deposit_collection_used is not None:
+                    deposit_collection_used.update_one(
+                        {'_id': ObjectId(deposit_id)}, 
+                        {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
+                    )
+                    logger.info(f"Updated deposit status to approved")
+            except Exception as e:
+                logger.error(f"Error updating deposit: {e}")
             
-            # Update transaction if exists
-            if transactions_collection is not None:
-                transactions_collection.update_one(
-                    {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, 
-                    {'$set': {'status': 'completed'}}
-                )
+            # Update transaction
+            try:
+                if transactions_collection is not None:
+                    transactions_collection.update_one(
+                        {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'}, 
+                        {'$set': {'status': 'completed'}}
+                    )
+            except Exception as e:
+                logger.error(f"Error updating transaction: {e}")
             
             # Create notification
-            create_notification(
-                deposit['user_id'], 
-                'Deposit Approved! ✅', 
-                f'Deposit of ${deposit["amount"]:,.2f} approved!', 
-                'success'
-            )
+            try:
+                create_notification(
+                    user_id, 
+                    'Deposit Approved! ✅', 
+                    f'Deposit of ${deposit["amount"]:,.2f} approved!', 
+                    'success'
+                )
+            except Exception as e:
+                logger.error(f"Error creating notification: {e}")
             
-            # ✅ SEND APPROVAL EMAIL
-            email_sent = send_deposit_approved_email(
-                user, 
-                deposit['amount'], 
-                deposit['crypto'], 
-                deposit.get('transaction_hash')
-            )
-            
-            if email_sent:
-                logger.info(f"Approval email sent to {user['email']}")
-            else:
-                logger.warning(f"Failed to send approval email to {user['email']}")
+            # Send email
+            email_sent = False
+            try:
+                email_sent = send_deposit_approved_email(
+                    user, 
+                    deposit['amount'], 
+                    deposit.get('crypto', 'USDT'), 
+                    deposit.get('transaction_hash')
+                )
+                if email_sent:
+                    logger.info(f"Approval email sent to {user['email']}")
+                else:
+                    logger.warning(f"Failed to send approval email to {user['email']}")
+            except Exception as e:
+                logger.error(f"Error sending email: {e}")
             
             # Add referral commission
-            add_referral_commission(deposit['user_id'], deposit['amount'])
+            try:
+                add_referral_commission(user_id, deposit['amount'])
+            except Exception as e:
+                logger.error(f"Error adding referral commission: {e}")
             
             return add_cors_headers(jsonify({
                 'success': True, 
-                'message': f'Deposit approved successfully! Email sent to {user["email"]}',
-                'data': {'email_sent': email_sent}
+                'message': f'Deposit approved successfully!',
+                'data': {'email_sent': email_sent, 'amount': deposit['amount']}
             }))
             
         elif action == 'reject':
             # Update deposit status
-            if deposit_collection_used is not None:
-                deposit_collection_used.update_one(
-                    {'_id': ObjectId(deposit_id)}, 
-                    {'$set': {
-                        'status': 'rejected', 
-                        'rejection_reason': reason, 
-                        'rejected_at': datetime.now(timezone.utc)
-                    }}
-                )
-                logger.info(f"Updated deposit status to rejected")
+            try:
+                if deposit_collection_used is not None:
+                    deposit_collection_used.update_one(
+                        {'_id': ObjectId(deposit_id)}, 
+                        {'$set': {
+                            'status': 'rejected', 
+                            'rejection_reason': reason, 
+                            'rejected_at': datetime.now(timezone.utc)
+                        }}
+                    )
+                    logger.info(f"Updated deposit status to rejected")
+            except Exception as e:
+                logger.error(f"Error updating deposit: {e}")
             
-            # Update transaction if exists
-            if transactions_collection is not None:
-                transactions_collection.update_one(
-                    {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, 
-                    {'$set': {'status': 'failed'}}
-                )
+            # Update transaction
+            try:
+                if transactions_collection is not None:
+                    transactions_collection.update_one(
+                        {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'}, 
+                        {'$set': {'status': 'failed'}}
+                    )
+            except Exception as e:
+                logger.error(f"Error updating transaction: {e}")
             
             # Create notification
-            create_notification(
-                deposit['user_id'], 
-                'Deposit Rejected ❌', 
-                f'Deposit of ${deposit["amount"]:,.2f} rejected. Reason: {reason}', 
-                'error'
-            )
+            try:
+                create_notification(
+                    user_id, 
+                    'Deposit Rejected ❌', 
+                    f'Deposit of ${deposit["amount"]:,.2f} rejected. Reason: {reason}', 
+                    'error'
+                )
+            except Exception as e:
+                logger.error(f"Error creating notification: {e}")
             
-            # ✅ SEND REJECTION EMAIL
-            email_sent = send_deposit_rejected_email(
-                user, 
-                deposit['amount'], 
-                deposit['crypto'], 
-                reason
-            )
-            
-            if email_sent:
-                logger.info(f"Rejection email sent to {user['email']}")
-            else:
-                logger.warning(f"Failed to send rejection email to {user['email']}")
+            # Send rejection email
+            email_sent = False
+            try:
+                email_sent = send_deposit_rejected_email(
+                    user, 
+                    deposit['amount'], 
+                    deposit.get('crypto', 'USDT'), 
+                    reason
+                )
+                if email_sent:
+                    logger.info(f"Rejection email sent to {user['email']}")
+                else:
+                    logger.warning(f"Failed to send rejection email to {user['email']}")
+            except Exception as e:
+                logger.error(f"Error sending email: {e}")
             
             return add_cors_headers(jsonify({
                 'success': True, 
-                'message': f'Deposit rejected! Email sent to {user["email"]}',
+                'message': f'Deposit rejected!',
                 'data': {'email_sent': email_sent}
             }))
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-        
+            
     except Exception as e:
         logger.error(f"Process deposit error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return add_cors_headers(jsonify({
+            'success': False, 
+            'message': f'Server error: {str(e)}'
+        })), 500
 
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
