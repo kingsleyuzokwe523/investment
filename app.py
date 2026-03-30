@@ -2091,45 +2091,7 @@ def submit_kyc():
         logger.error(f"KYC submission error: {e}")
         response = jsonify({'success': False, 'message': str(e)})
         return add_cors_headers(response), 500
-@app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
-def close_ticket(ticket_id):
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        if ticket['status'] == 'closed':
-            return jsonify({'success': False, 'message': 'Ticket is already closed'}), 400
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$set': {
-                    'status': 'closed',
-                    'closed_at': datetime.now(timezone.utc),
-                    'updated_at': datetime.now(timezone.utc)
-                }
-            }
-        )
-        
-        response = jsonify({'success': True, 'message': 'Ticket closed successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Close ticket error: {e}")
-        response = jsonify({'success': False, 'message': str(e)})
-        return add_cors_headers(response), 500
+@response), 500
 #==================== KYC VERIFICATION ENDPOINTS ====================
 @app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
 def submit_kyc():
