@@ -1982,35 +1982,23 @@ def user_dashboard():
         unread_count = 0
         if notifications_collection is not None:
             unread_count = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
-         
-        # IN user_dashboard function, REPLACE:
-pending_deposits = 0
-if deposits_collection is not None:
-    pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
-
-pending_withdrawals = 0
-if withdrawals_collection is not None:
-    pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
-
-# WITH (safer version):
-pending_deposits = 0
-try:
-    if deposits_collection is not None:
-        pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
-except Exception as e:
-    logger.error(f"Error counting pending deposits: {e}")
-    pending_deposits = 0
-
-pending_withdrawals = 0
-try:
-    if withdrawals_collection is not None:
-        pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
-except Exception as e:
-    logger.error(f"Error counting pending withdrawals: {e}")
-    pending_withdrawals = 0
+        
+        # Safer version with try-except
+        pending_deposits = 0
+        try:
+            if deposits_collection is not None:
+                pending_deposits = deposits_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        except Exception as e:
+            logger.error(f"Error counting pending deposits: {e}")
+            pending_deposits = 0
+        
         pending_withdrawals = 0
-        if withdrawals_collection is not None:
-            pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        try:
+            if withdrawals_collection is not None:
+                pending_withdrawals = withdrawals_collection.count_documents({'user_id': str(user['_id']), 'status': 'pending'})
+        except Exception as e:
+            logger.error(f"Error counting pending withdrawals: {e}")
+            pending_withdrawals = 0
         
         dashboard_data = {
             'wallet': {
