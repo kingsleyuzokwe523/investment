@@ -1633,40 +1633,175 @@ def admin_get_stats():
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
+    """Get users with pagination - supports up to 100 per page"""
+    if users_collection is None:
+        logger.error("Database connection error - users_collection is None")
+        return jsonify({
+            'success': False, 
+            'message': 'Database connection error', 
+            'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': 60}
+        }), 500
+    
     try:
-        if users_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': 20}}))
-        
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        search = request.args.get('search', '')
+        # Get pagination parameters with safe defaults
+        try:
+            page = int(request.args.get('page', 1))
+            if page < 1:
+                page = 1
+        except (ValueError, TypeError):
+            page = 1
+            
+        try:
+            limit = int(request.args.get('limit', 60))
+            if limit < 1:
+                limit = 60
+            elif limit > 100:
+                limit = 100
+        except (ValueError, TypeError):
+            limit = 60
+            
+        search = request.args.get('search', '').strip()
         skip = (page - 1) * limit
         
+        logger.info(f"Admin fetching users - page: {page}, limit: {limit}, search: '{search}'")
+        
+        # Build query
         query = {}
         if search:
-            query['$or'] = [{'username': {'$regex': search, '$options': 'i'}}, {'email': {'$regex': search, '$options': 'i'}}, {'full_name': {'$regex': search, '$options': 'i'}}]
+            try:
+                escaped_search = re.escape(search)
+                query['$or'] = [
+                    {'username': {'$regex': escaped_search, '$options': 'i'}},
+                    {'email': {'$regex': escaped_search, '$options': 'i'}},
+                    {'full_name': {'$regex': escaped_search, '$options': 'i'}}
+                ]
+            except Exception as regex_error:
+                logger.error(f"Regex error in search: {regex_error}")
+                query = {
+                    '$or': [
+                        {'username': {'$eq': search}},
+                        {'email': {'$eq': search}}
+                    ]
+                }
         
-        total = users_collection.count_documents(query)
-        users = list(users_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        # Get total count safely
+        try:
+            total = users_collection.count_documents(query)
+            logger.info(f"Total users found: {total}")
+        except Exception as count_error:
+            logger.error(f"Error counting users: {count_error}")
+            total = 0
         
+        # FIXED: Use list of tuples for sort (PyMongo 3.x+ compatible)
+        users = []
+        try:
+            # CORRECT SORT SYNTAX - use list of (field, direction) tuples
+            cursor = users_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+            users = list(cursor)
+            logger.info(f"Fetched {len(users)} users for page {page}")
+        except Exception as fetch_error:
+            logger.error(f"Error fetching users: {fetch_error}")
+            logger.error(traceback.format_exc())
+            users = []
+        
+        # Format users safely
         formatted_users = []
-        for user in users:
-            wallet = user.get('wallet', {})
-            formatted_users.append({
-                '_id': str(user['_id']), 'username': user.get('username', ''), 'email': user.get('email', ''),
-                'full_name': user.get('full_name', ''), 'phone': user.get('phone', ''), 'country': user.get('country', ''),
-                'wallet': wallet, 'is_admin': user.get('is_admin', False), 'is_banned': user.get('is_banned', False),
-                'is_verified': user.get('is_verified', False), 'kyc_status': user.get('kyc_status', 'pending'),
-                'created_at': user.get('created_at').isoformat() if user.get('created_at') else None,
-                'last_login': user.get('last_login').isoformat() if user.get('last_login') else None,
-                'referral_code': user.get('referral_code', ''), 'referrals': user.get('referrals', [])
-            })
+        for idx, user in enumerate(users):
+            try:
+                if not isinstance(user, dict):
+                    logger.warning(f"User at index {idx} is not a dict: {type(user)}")
+                    continue
+                
+                wallet = user.get('wallet', {}) or {}
+                if not isinstance(wallet, dict):
+                    wallet = {}
+                
+                wallet_data = {
+                    'balance': float(wallet.get('balance', 0) or 0),
+                    'total_deposited': float(wallet.get('total_deposited', 0) or 0),
+                    'total_profit': float(wallet.get('total_profit', 0) or 0),
+                    'total_withdrawn': float(wallet.get('total_withdrawn', 0) or 0),
+                    'total_invested': float(wallet.get('total_invested', 0) or 0)
+                }
+                
+                def format_date(date_field):
+                    if not date_field:
+                        return None
+                    try:
+                        if isinstance(date_field, datetime):
+                            return date_field.isoformat()
+                        elif isinstance(date_field, str):
+                            return date_field
+                        else:
+                            return str(date_field)
+                    except:
+                        return None
+                
+                created_at = format_date(user.get('created_at'))
+                last_login = format_date(user.get('last_login'))
+                
+                def safe_str(value, default=''):
+                    if value is None:
+                        return default
+                    try:
+                        return str(value)
+                    except:
+                        return default
+                
+                user_data = {
+                    '_id': str(user.get('_id')) if user.get('_id') else f'unknown_{idx}',
+                    'username': safe_str(user.get('username')),
+                    'email': safe_str(user.get('email')),
+                    'full_name': safe_str(user.get('full_name')),
+                    'phone': safe_str(user.get('phone')),
+                    'country': safe_str(user.get('country')),
+                    'wallet': wallet_data,
+                    'is_admin': bool(user.get('is_admin', False)),
+                    'is_banned': bool(user.get('is_banned', False)),
+                    'is_verified': bool(user.get('is_verified', False)),
+                    'kyc_status': safe_str(user.get('kyc_status'), 'pending'),
+                    'created_at': created_at,
+                    'last_login': last_login,
+                    'referral_code': safe_str(user.get('referral_code')),
+                    'referrals': user.get('referrals', []) or []
+                }
+                formatted_users.append(user_data)
+                
+            except Exception as format_error:
+                logger.error(f"Error formatting user at index {idx}: {format_error}")
+                continue
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'users': formatted_users, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1, 'limit': limit}}))
+        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+        
+        logger.info(f"Returning {len(formatted_users)} formatted users, page {page} of {total_pages}")
+        
+        response_data = {
+            'success': True,
+            'data': {
+                'users': formatted_users,
+                'total': total,
+                'page': page,
+                'pages': total_pages,
+                'limit': limit
+            }
+        }
+        
+        response = jsonify(response_data)
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get users error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+        logger.error(f"Get users error: {e}", exc_info=True)
+        return jsonify({
+            'success': False, 
+            'message': f'Server error: {str(e)}', 
+            'data': {
+                'users': [], 
+                'total': 0, 
+                'page': 1, 
+                'pages': 1,
+                'limit': 60
+            }
+        }), 500
 
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -1761,10 +1896,10 @@ def admin_delete_user(user_id):
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
+    if deposits_collection is None:
+        return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
+    
     try:
-        if deposits_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
@@ -1775,23 +1910,39 @@ def admin_get_deposits():
             query['status'] = status
         
         total = deposits_collection.count_documents(query)
-        deposits = list(deposits_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        deposits = list(deposits_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
         
         result_deposits = []
-        for d in deposits:
-            d['_id'] = str(d['_id'])
-            if d.get('created_at'):
-                d['created_at'] = d['created_at'].isoformat()
-            if users_collection is not None:
-                user = users_collection.find_one({'_id': ObjectId(d['user_id'])})
-                d['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            result_deposits.append(d)
+        for deposit in deposits:
+            deposit['_id'] = str(deposit['_id'])
+            if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
+                deposit['created_at'] = deposit['created_at'].isoformat()
+            
+            if users_collection is not None and 'user_id' in deposit:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+                    deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
+                    deposit['username'] = 'Unknown'
+            else:
+                deposit['username'] = 'Unknown'
+            result_deposits.append(deposit)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'deposits': result_deposits, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'deposits': result_deposits,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get deposits error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'deposits': [], 'total': 0}})), 200
-
+        logger.error(f"Get deposits error: {e}", exc_info=True)
+        return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
 
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -1916,10 +2067,10 @@ def admin_resend_single_deposit_email(deposit_id):
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_withdrawals():
+    if withdrawals_collection is None:
+        return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
+    
     try:
-        if withdrawals_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
@@ -1930,22 +2081,39 @@ def admin_get_withdrawals():
             query['status'] = status
         
         total = withdrawals_collection.count_documents(query)
-        withdrawals = list(withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        withdrawals = list(withdrawals_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
         
         result_withdrawals = []
-        for w in withdrawals:
-            w['_id'] = str(w['_id'])
-            if w.get('created_at'):
-                w['created_at'] = w['created_at'].isoformat()
-            if users_collection is not None:
-                user = users_collection.find_one({'_id': ObjectId(w['user_id'])})
-                w['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-            result_withdrawals.append(w)
+        for withdrawal in withdrawals:
+            withdrawal['_id'] = str(withdrawal['_id'])
+            if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
+                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
+            
+            if users_collection is not None and 'user_id' in withdrawal:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
+                    withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
+                    withdrawal['username'] = 'Unknown'
+            else:
+                withdrawal['username'] = 'Unknown'
+            result_withdrawals.append(withdrawal)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'withdrawals': result_withdrawals, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'withdrawals': result_withdrawals,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get withdrawals error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}})), 200
+        logger.error(f"Get withdrawals error: {e}", exc_info=True)
+        return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
 
 
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
@@ -1999,10 +2167,10 @@ def admin_process_withdrawal(withdrawal_id):
 @app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_investments():
+    if investments_collection is None:
+        return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
+    
     try:
-        if investments_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
@@ -2013,24 +2181,41 @@ def admin_get_investments():
             query['status'] = status
         
         total = investments_collection.count_documents(query)
-        investments = list(investments_collection.find(query).sort('start_date', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        investments = list(investments_collection.find(query).sort([('start_date', -1)]).skip(skip).limit(limit))
         
         result_investments = []
         for inv in investments:
             inv['_id'] = str(inv['_id'])
-            if inv.get('start_date'):
+            if 'start_date' in inv and isinstance(inv['start_date'], datetime):
                 inv['start_date'] = inv['start_date'].isoformat()
-            if inv.get('end_date'):
+            if 'end_date' in inv and isinstance(inv['end_date'], datetime):
                 inv['end_date'] = inv['end_date'].isoformat()
-            if users_collection is not None:
-                user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-                inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+            
+            if users_collection is not None and 'user_id' in inv:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
+                    inv['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                except:
+                    inv['username'] = 'Unknown'
+            else:
+                inv['username'] = 'Unknown'
             result_investments.append(inv)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': result_investments, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True, 
+            'data': {
+                'investments': result_investments,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}})), 200
+        logger.error(f"Get investments error: {e}", exc_info=True)
+        return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
 
 
 @app.route('/api/admin/investments/<investment_id>/complete', methods=['POST', 'OPTIONS'])
@@ -2082,10 +2267,10 @@ def admin_complete_investment(investment_id):
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_transactions():
+    if transactions_collection is None:
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+    
     try:
-        if transactions_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 50))
         tx_type = request.args.get('type', 'all')
@@ -2096,22 +2281,42 @@ def admin_get_transactions():
             query['type'] = tx_type
         
         total = transactions_collection.count_documents(query)
-        transactions = list(transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        transactions = list(transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
         
         result_transactions = []
         for tx in transactions:
             tx['_id'] = str(tx['_id'])
-            if tx.get('created_at'):
+            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
                 tx['created_at'] = tx['created_at'].isoformat()
-            if users_collection is not None:
-                user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
-                tx['user'] = {'username': user.get('username', 'Unknown') if user else 'Unknown', 'email': user.get('email', '') if user else ''}
+            
+            if users_collection is not None and 'user_id' in tx:
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                    tx['user'] = {
+                        'username': user.get('username', 'Unknown') if user else 'Unknown',
+                        'email': user.get('email', '') if user else ''
+                    }
+                except:
+                    tx['user'] = {'username': 'Unknown', 'email': ''}
+            else:
+                tx['user'] = {'username': 'Unknown', 'email': ''}
             result_transactions.append(tx)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': result_transactions, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True,
+            'data': {
+                'transactions': result_transactions,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
     except Exception as e:
-        logger.error(f"Get admin transactions error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': [], 'total': 0}})), 200
+        logger.error(f"Get admin transactions error: {e}", exc_info=True)
+        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
 
 
 # ==================== ADMIN - CREATE TRANSACTION ====================
@@ -2161,14 +2366,13 @@ def admin_create_transaction():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-# ==================== ADMIN - KYC ====================
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_applications():
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
+    
     try:
-        if kyc_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'applications': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'pending')
@@ -2179,22 +2383,46 @@ def admin_get_kyc_applications():
             query['status'] = status
         
         total = kyc_collection.count_documents(query)
-        applications = list(kyc_collection.find(query).sort('submitted_at', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        applications = list(kyc_collection.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit))
         
         result_applications = []
         for app in applications:
             app['_id'] = str(app['_id'])
             if app.get('submitted_at'):
                 app['submitted_at'] = app['submitted_at'].isoformat()
-            if users_collection is not None:
-                user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
-                if user:
-                    app['user_details'] = {'username': user.get('username', ''), 'email': user.get('email', ''), 'wallet_balance': user.get('wallet', {}).get('balance', 0)}
+            if app.get('reviewed_at'):
+                app['reviewed_at'] = app['reviewed_at'].isoformat()
+            
+            if users_collection and app.get('user_id'):
+                try:
+                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
+                    if user:
+                        app['user_details'] = {
+                            'username': user.get('username', ''),
+                            'email': user.get('email', ''),
+                            'phone': user.get('phone', ''),
+                            'wallet_balance': user.get('wallet', {}).get('balance', 0)
+                        }
+                except:
+                    app['user_details'] = {'username': 'Unknown', 'email': ''}
+            
             result_applications.append(app)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'applications': result_applications, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True,
+            'data': {
+                'applications': result_applications,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get KYC applications error: {e}")
+        logger.error(f"Admin get KYC applications error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -2293,28 +2521,37 @@ def admin_reject_kyc(kyc_id):
 @app.route('/api/admin/kyc/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_stats():
+    if kyc_collection is None:
+        return jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}), 200
+    
     try:
-        if kyc_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'pending': 0, 'approved': 0, 'rejected': 0, 'total': 0}}))
-        
         pending = kyc_collection.count_documents({'status': 'pending'})
         approved = kyc_collection.count_documents({'status': 'approved'})
         rejected = kyc_collection.count_documents({'status': 'rejected'})
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'pending': pending, 'approved': approved, 'rejected': rejected, 'total': pending + approved + rejected}}))
+        response = jsonify({
+            'success': True,
+            'data': {
+                'pending': pending,
+                'approved': approved,
+                'rejected': rejected,
+                'total': pending + approved + rejected
+            }
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get KYC stats error: {e}")
+        logger.error(f"Admin get KYC stats error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
 
 # ==================== ADMIN - SUPPORT TICKETS ====================
 @app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_tickets():
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    
     try:
-        if support_tickets_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
-        
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         status = request.args.get('status', 'all')
@@ -2325,18 +2562,34 @@ def admin_get_tickets():
             query['status'] = status
         
         total = support_tickets_collection.count_documents(query)
-        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
+        
+        # FIXED: Use list of tuples for sort
+        tickets = list(support_tickets_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
         
         result_tickets = []
-        for t in tickets:
-            t['_id'] = str(t['_id'])
-            if t.get('created_at'):
-                t['created_at'] = t['created_at'].isoformat()
-            t['message_count'] = len(t.get('messages', []))
-            t.pop('messages', None)
-            result_tickets.append(t)
+        for ticket in tickets:
+            ticket['_id'] = str(ticket['_id'])
+            if ticket.get('created_at'):
+                ticket['created_at'] = ticket['created_at'].isoformat()
+            if ticket.get('updated_at'):
+                ticket['updated_at'] = ticket['updated_at'].isoformat()
+            
+            ticket['message_count'] = len(ticket.get('messages', []))
+            ticket.pop('messages', None)
+            
+            result_tickets.append(ticket)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'tickets': result_tickets, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        response = jsonify({
+            'success': True,
+            'data': {
+                'tickets': result_tickets,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Admin get tickets error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -2429,18 +2682,29 @@ def admin_resolve_ticket(ticket_id):
 @app.route('/api/admin/support/tickets/stats', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_ticket_stats():
+    if support_tickets_collection is None:
+        return jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}), 200
+    
     try:
-        if support_tickets_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'open': 0, 'pending': 0, 'resolved': 0, 'closed': 0, 'total': 0}}))
-        
         open_tickets = support_tickets_collection.count_documents({'status': 'open'})
         pending_tickets = support_tickets_collection.count_documents({'status': 'pending'})
         resolved_tickets = support_tickets_collection.count_documents({'status': 'resolved'})
         closed_tickets = support_tickets_collection.count_documents({'status': 'closed'})
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'open': open_tickets, 'pending': pending_tickets, 'resolved': resolved_tickets, 'closed': closed_tickets, 'total': open_tickets + pending_tickets + resolved_tickets + closed_tickets}}))
+        response = jsonify({
+            'success': True,
+            'data': {
+                'open': open_tickets,
+                'pending': pending_tickets,
+                'resolved': resolved_tickets,
+                'closed': closed_tickets,
+                'total': open_tickets + pending_tickets + resolved_tickets + closed_tickets
+            }
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get ticket stats error: {e}")
+        logger.error(f"Admin get ticket stats error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
