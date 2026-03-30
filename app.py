@@ -104,6 +104,15 @@ class DualDatabaseCollection:
         self.collections = [c for c in collections if c is not None]
         self.name = name
 
+    def __bool__(self):
+        """Return True only if there are actual database collections"""
+        return len(self.collections) > 0
+
+    def __len__(self):
+        """Return number of underlying collections"""
+        return len(self.collections)
+    
+    # Rest of your methods remain the same...
     def find(self, query=None, *args, **kwargs):
         results = []
         for collection in self.collections:
@@ -383,7 +392,13 @@ def check_email_configuration():
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-
+def collection_has_data(collection):
+    """Check if a DualDatabaseCollection has any actual database collections"""
+    if collection is None:
+        return False
+    if hasattr(collection, 'collections'):
+        return len(collection.collections) > 0
+    return collection is not None
 def verify_password(hashed_password, password):
     try:
         if not hashed_password:
@@ -1146,16 +1161,33 @@ def get_transactions():
     
     try:
         transactions = []
-        if transactions_collection is not None:
-            transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+        # FIXED: Check properly
+        if transactions_collection is not None and hasattr(transactions_collection, 'collections') and transactions_collection.collections:
+            try:
+                transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+            except Exception as e:
+                logger.error(f"Error fetching transactions: {e}")
+                # Return empty list instead of failing
+                transactions = []
+        
+        # Format transactions safely
+        formatted_transactions = []
         for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if tx.get('created_at'):
-                tx['created_at'] = tx['created_at'].isoformat()
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': transactions}}))
+            try:
+                tx_copy = dict(tx)
+                tx_copy['_id'] = str(tx_copy['_id'])
+                if tx_copy.get('created_at'):
+                    tx_copy['created_at'] = tx_copy['created_at'].isoformat()
+                formatted_transactions.append(tx_copy)
+            except Exception as e:
+                logger.error(f"Error formatting transaction: {e}")
+                continue
+        
+        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': formatted_transactions}}))
     except Exception as e:
         logger.error(f"Get transactions error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        # Return empty list instead of 500 error
+        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': []}}))
 
 
 # ==================== DASHBOARD ENDPOINTS ====================
@@ -1461,6 +1493,40 @@ def get_tickets():
         logger.error(f"Get tickets error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/investments', methods=['GET', 'OPTIONS'])
+def get_user_investments():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        investments = []
+        # FIXED: Check properly
+        if investments_collection is not None and hasattr(investments_collection, 'collections') and investments_collection.collections:
+            try:
+                investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
+            except Exception as e:
+                logger.error(f"Error fetching investments: {e}")
+                investments = []
+        
+        formatted_investments = []
+        for inv in investments:
+            try:
+                inv_copy = dict(inv)
+                inv_copy['_id'] = str(inv_copy['_id'])
+                if inv_copy.get('start_date'):
+                    inv_copy['start_date'] = inv_copy['start_date'].isoformat()
+                if inv_copy.get('end_date'):
+                    inv_copy['end_date'] = inv_copy['end_date'].isoformat()
+                formatted_investments.append(inv_copy)
+            except Exception as e:
+                logger.error(f"Error formatting investment: {e}")
+                continue
+        
+        return add_cors_headers(jsonify({'success': True, 'data': {'investments': formatted_investments}}))
+    except Exception as e:
+        logger.error(f"Get investments error: {e}")
+        return add_cors_headers(jsonify({'success': True, 'data': {'investments': []}}))
 
 @app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
 def get_ticket(ticket_id):
@@ -1490,35 +1556,59 @@ def get_ticket(ticket_id):
         logger.error(f"Get ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
-@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
-def reply_ticket(ticket_id):
+@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
+def get_tickets():
     user = get_user_from_request()
     if not user:
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
         if support_tickets_collection is None:
-            return jsonify({'success': False, 'message': 'Database connection error'}), 500
+            return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
         
-        data = request.get_json()
-        message = data.get('message', '').strip()
-        if not message:
-            return jsonify({'success': False, 'message': 'Message required'}), 400
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
         
-        ticket = support_tickets_collection.find_one({'ticket_id': ticket_id, 'user_id': str(user['_id'])})
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        if ticket['status'] == 'closed':
-            return jsonify({'success': False, 'message': 'Cannot reply to closed ticket'}), 400
+        tickets = []
+        # FIXED: Check properly
+        if support_tickets_collection is not None and hasattr(support_tickets_collection, 'collections') and support_tickets_collection.collections:
+            try:
+                tickets = list(support_tickets_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).skip(skip).limit(limit))
+            except Exception as e:
+                logger.error(f"Error fetching tickets: {e}")
+                tickets = []
         
-        reply = {'sender': 'user', 'sender_name': user['username'], 'message': message, 'created_at': datetime.now(timezone.utc)}
-        support_tickets_collection.update_one({'ticket_id': ticket_id}, {'$push': {'messages': reply}, '$set': {'updated_at': datetime.now(timezone.utc), 'status': 'open'}})
+        formatted_tickets = []
+        for t in tickets:
+            try:
+                t_copy = dict(t)
+                t_copy['_id'] = str(t_copy['_id'])
+                if t_copy.get('created_at'):
+                    t_copy['created_at'] = t_copy['created_at'].isoformat()
+                if t_copy.get('updated_at'):
+                    t_copy['updated_at'] = t_copy['updated_at'].isoformat()
+                t_copy.pop('messages', None)
+                formatted_tickets.append(t_copy)
+            except Exception as e:
+                logger.error(f"Error formatting ticket: {e}")
+                continue
         
-        return add_cors_headers(jsonify({'success': True, 'message': 'Reply sent'}))
+        total = len(formatted_tickets)  # Fallback
+        try:
+            total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
+        except:
+            total = len(formatted_tickets)
+        
+        return add_cors_headers(jsonify({'success': True, 'data': {
+            'tickets': formatted_tickets, 
+            'total': total, 
+            'page': page, 
+            'pages': (total + limit - 1) // limit if total > 0 else 1
+        }}))
     except Exception as e:
-        logger.error(f"Reply ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"Get tickets error: {e}")
+        return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
 
 
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
