@@ -1130,27 +1130,6 @@ def create_investment():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/investments', methods=['GET', 'OPTIONS'])
-def get_user_investments():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        investments = []
-        if investments_collection is not None:
-            investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
-        for inv in investments:
-            inv['_id'] = str(inv['_id'])
-            if inv.get('start_date'):
-                inv['start_date'] = inv['start_date'].isoformat()
-            if inv.get('end_date'):
-                inv['end_date'] = inv['end_date'].isoformat()
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': investments}}))
-    except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 
 # ==================== TRANSACTION ENDPOINTS ====================
 @app.route('/api/transactions', methods=['GET', 'OPTIONS'])
