@@ -1155,7 +1155,7 @@ def mark_notification_read(notification_id):
     except Exception as e:
         logger.error(f"Mark notification read error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-   @app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
+@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
 def get_tickets():
     user = get_user_from_request()
     if not user:
