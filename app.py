@@ -1443,34 +1443,6 @@ def create_ticket():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
-def get_tickets():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        if support_tickets_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
-        
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        skip = (page - 1) * limit
-        
-        tickets = list(support_tickets_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).skip(skip).limit(limit))
-        for t in tickets:
-            t['_id'] = str(t['_id'])
-            if t.get('created_at'):
-                t['created_at'] = t['created_at'].isoformat()
-            if t.get('updated_at'):
-                t['updated_at'] = t['updated_at'].isoformat()
-            t.pop('messages', None)
-        
-        total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
-        return add_cors_headers(jsonify({'success': True, 'data': {'tickets': tickets, 'total': total, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
-    except Exception as e:
-        logger.error(f"Get tickets error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/investments', methods=['GET', 'OPTIONS'])
 def get_user_investments():
@@ -1550,44 +1522,45 @@ def get_tickets():
         skip = (page - 1) * limit
         
         tickets = []
-        # FIXED: Check properly
-        if support_tickets_collection is not None and hasattr(support_tickets_collection, 'collections') and support_tickets_collection.collections:
+        if support_tickets_collection:
             try:
-                tickets = list(support_tickets_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).skip(skip).limit(limit))
+                tickets = list(support_tickets_collection.find(
+                    {'user_id': str(user['_id'])}
+                ).sort('created_at', -1).skip(skip).limit(limit))
             except Exception as e:
                 logger.error(f"Error fetching tickets: {e}")
                 tickets = []
         
-        formatted_tickets = []
         for t in tickets:
-            try:
-                t_copy = dict(t)
-                t_copy['_id'] = str(t_copy['_id'])
-                if t_copy.get('created_at'):
-                    t_copy['created_at'] = t_copy['created_at'].isoformat()
-                if t_copy.get('updated_at'):
-                    t_copy['updated_at'] = t_copy['updated_at'].isoformat()
-                t_copy.pop('messages', None)
-                formatted_tickets.append(t_copy)
-            except Exception as e:
-                logger.error(f"Error formatting ticket: {e}")
-                continue
+            t['_id'] = str(t['_id'])
+            if t.get('created_at'):
+                t['created_at'] = t['created_at'].isoformat()
+            if t.get('updated_at'):
+                t['updated_at'] = t['updated_at'].isoformat()
+            t.pop('messages', None)
         
-        total = len(formatted_tickets)  # Fallback
+        total = 0
         try:
-            total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
-        except:
-            total = len(formatted_tickets)
+            if support_tickets_collection:
+                total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
+        except Exception as e:
+            logger.error(f"Error counting tickets: {e}")
+            total = len(tickets)
         
-        return add_cors_headers(jsonify({'success': True, 'data': {
-            'tickets': formatted_tickets, 
-            'total': total, 
-            'page': page, 
-            'pages': (total + limit - 1) // limit if total > 0 else 1
-        }}))
+        return add_cors_headers(jsonify({
+            'success': True, 
+            'data': {
+                'tickets': tickets, 
+                'total': total, 
+                'page': page, 
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        }))
     except Exception as e:
         logger.error(f"Get tickets error: {e}")
         return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
+
+
 
 
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
