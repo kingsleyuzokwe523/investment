@@ -2081,12 +2081,10 @@ def admin_delete_user(user_id):
 
 
 # ==================== ADMIN - DEPOSITS ====================
+# ==================== ADMIN - DEPOSITS ====================
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
-    if deposits_collection is None:
-        return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
-    
     try:
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
@@ -2097,29 +2095,69 @@ def admin_get_deposits():
         if status != 'all':
             query['status'] = status
         
-        total = deposits_collection.count_documents(query)
+        deposits = []
+        total = 0
         
-        # FIXED: Use list of tuples for sort
-        deposits = list(deposits_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
+        # Try veloxtrades_deposits first (primary)
+        if veloxtrades_deposits is not None:
+            try:
+                total = veloxtrades_deposits.count_documents(query)
+                cursor = veloxtrades_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                deposits = list(cursor)
+                logger.info(f"Fetched {len(deposits)} deposits from veloxtrades_deposits, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from veloxtrades_deposits: {e}", exc_info=True)
         
+        # If no deposits found, try investment_deposits
+        if len(deposits) == 0 and investment_deposits is not None:
+            try:
+                total = investment_deposits.count_documents(query)
+                cursor = investment_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                deposits = list(cursor)
+                logger.info(f"Fetched {len(deposits)} deposits from investment_deposits, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from investment_deposits: {e}", exc_info=True)
+        
+        # If still no deposits, try combined collection as last resort
+        if len(deposits) == 0 and deposits_collection is not None:
+            try:
+                total = deposits_collection.count_documents(query)
+                cursor = deposits_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                deposits = list(cursor)
+                logger.info(f"Fetched {len(deposits)} deposits from combined collection, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from combined collection: {e}", exc_info=True)
+        
+        # Format deposits
         result_deposits = []
         for deposit in deposits:
-            deposit['_id'] = str(deposit['_id'])
-            if 'created_at' in deposit and isinstance(deposit['created_at'], datetime):
-                deposit['created_at'] = deposit['created_at'].isoformat()
-            
-            if users_collection is not None and 'user_id' in deposit:
-                try:
-                    user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
-                    deposit['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-                except:
-                    deposit['username'] = 'Unknown'
-            else:
-                deposit['username'] = 'Unknown'
-            result_deposits.append(deposit)
+            try:
+                deposit_copy = dict(deposit)
+                deposit_copy['_id'] = str(deposit_copy['_id'])
+                if 'created_at' in deposit_copy and isinstance(deposit_copy['created_at'], datetime):
+                    deposit_copy['created_at'] = deposit_copy['created_at'].isoformat()
+                if 'approved_at' in deposit_copy and isinstance(deposit_copy['approved_at'], datetime):
+                    deposit_copy['approved_at'] = deposit_copy['approved_at'].isoformat()
+                if 'rejected_at' in deposit_copy and isinstance(deposit_copy['rejected_at'], datetime):
+                    deposit_copy['rejected_at'] = deposit_copy['rejected_at'].isoformat()
+                
+                # Get username from users collection
+                if 'user_id' in deposit_copy and users_collection is not None:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(deposit_copy['user_id'])})
+                        deposit_copy['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                    except:
+                        deposit_copy['username'] = 'Unknown'
+                else:
+                    deposit_copy['username'] = deposit.get('username', 'Unknown')
+                
+                result_deposits.append(deposit_copy)
+            except Exception as e:
+                logger.error(f"Error formatting deposit: {e}")
+                continue
         
         response = jsonify({
-            'success': True, 
+            'success': True,
             'data': {
                 'deposits': result_deposits,
                 'total': total,
@@ -2128,57 +2166,181 @@ def admin_get_deposits():
             }
         })
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Get deposits error: {e}", exc_info=True)
         return jsonify({'success': True, 'data': {'deposits': [], 'total': 0}}), 200
-
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
     try:
-        if deposits_collection is None:
-            return jsonify({'success': False, 'message': 'Database connection error'}), 500
-        
         data = request.get_json()
         action = data.get('action')
         reason = data.get('reason', '')
         
-        deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+        # Find deposit in primary database first
+        deposit = None
+        deposit_collection_used = None
+        
+        if veloxtrades_deposits is not None:
+            try:
+                deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    deposit_collection_used = veloxtrades_deposits
+                    logger.info(f"Found deposit in veloxtrades_deposits")
+            except Exception as e:
+                logger.error(f"Error finding in veloxtrades_deposits: {e}")
+        
+        if deposit is None and investment_deposits is not None:
+            try:
+                deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    deposit_collection_used = investment_deposits
+                    logger.info(f"Found deposit in investment_deposits")
+            except Exception as e:
+                logger.error(f"Error finding in investment_deposits: {e}")
+        
+        if deposit is None and deposits_collection is not None:
+            try:
+                deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+                deposit_collection_used = deposits_collection
+                logger.info(f"Found deposit in combined collection")
+            except Exception as e:
+                logger.error(f"Error finding in combined collection: {e}")
+        
         if not deposit:
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
-        if users_collection is None:
-            return jsonify({'success': False, 'message': 'Database connection error'}), 500
+        # Find user
+        user = None
+        if users_collection is not None:
+            try:
+                user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+            except Exception as e:
+                logger.error(f"Error finding user: {e}")
         
-        user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user and veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+            except Exception as e:
+                logger.error(f"Error finding user in veloxtrades: {e}")
+        
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
+            # Update user balance in both databases
             if veloxtrades_users is not None:
-                veloxtrades_users.update_one({'_id': ObjectId(deposit['user_id'])}, {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}})
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(deposit['user_id'])}, 
+                    {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                )
+                logger.info(f"Updated balance for user {deposit['user_id']} in veloxtrades_users")
+            
             if investment_users is not None:
-                investment_users.update_one({'_id': ObjectId(deposit['user_id'])}, {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}})
-            deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}})
+                investment_users.update_one(
+                    {'_id': ObjectId(deposit['user_id'])}, 
+                    {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                )
+                logger.info(f"Updated balance for user {deposit['user_id']} in investment_users")
+            
+            # Update deposit status
+            if deposit_collection_used is not None:
+                deposit_collection_used.update_one(
+                    {'_id': ObjectId(deposit_id)}, 
+                    {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
+                )
+                logger.info(f"Updated deposit status to approved")
+            
+            # Update transaction if exists
             if transactions_collection is not None:
-                transactions_collection.update_one({'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, {'$set': {'status': 'completed'}})
-            create_notification(deposit['user_id'], 'Deposit Approved! ✅', f'Deposit of ${deposit["amount"]:,.2f} approved!', 'success')
-            send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash'))
+                transactions_collection.update_one(
+                    {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, 
+                    {'$set': {'status': 'completed'}}
+                )
+            
+            # Create notification
+            create_notification(
+                deposit['user_id'], 
+                'Deposit Approved! ✅', 
+                f'Deposit of ${deposit["amount"]:,.2f} approved!', 
+                'success'
+            )
+            
+            # ✅ SEND APPROVAL EMAIL
+            email_sent = send_deposit_approved_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                deposit.get('transaction_hash')
+            )
+            
+            if email_sent:
+                logger.info(f"Approval email sent to {user['email']}")
+            else:
+                logger.warning(f"Failed to send approval email to {user['email']}")
+            
+            # Add referral commission
             add_referral_commission(deposit['user_id'], deposit['amount'])
+            
+            return add_cors_headers(jsonify({
+                'success': True, 
+                'message': f'Deposit approved successfully! Email sent to {user["email"]}',
+                'data': {'email_sent': email_sent}
+            }))
+            
         elif action == 'reject':
-            deposits_collection.update_one({'_id': ObjectId(deposit_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}})
+            # Update deposit status
+            if deposit_collection_used is not None:
+                deposit_collection_used.update_one(
+                    {'_id': ObjectId(deposit_id)}, 
+                    {'$set': {
+                        'status': 'rejected', 
+                        'rejection_reason': reason, 
+                        'rejected_at': datetime.now(timezone.utc)
+                    }}
+                )
+                logger.info(f"Updated deposit status to rejected")
+            
+            # Update transaction if exists
             if transactions_collection is not None:
-                transactions_collection.update_one({'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, {'$set': {'status': 'failed'}})
-            create_notification(deposit['user_id'], 'Deposit Rejected ❌', f'Deposit of ${deposit["amount"]:,.2f} rejected. Reason: {reason}', 'error')
-            send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], reason)
+                transactions_collection.update_one(
+                    {'deposit_id': deposit['deposit_id'], 'type': 'deposit', 'status': 'pending'}, 
+                    {'$set': {'status': 'failed'}}
+                )
+            
+            # Create notification
+            create_notification(
+                deposit['user_id'], 
+                'Deposit Rejected ❌', 
+                f'Deposit of ${deposit["amount"]:,.2f} rejected. Reason: {reason}', 
+                'error'
+            )
+            
+            # ✅ SEND REJECTION EMAIL
+            email_sent = send_deposit_rejected_email(
+                user, 
+                deposit['amount'], 
+                deposit['crypto'], 
+                reason
+            )
+            
+            if email_sent:
+                logger.info(f"Rejection email sent to {user['email']}")
+            else:
+                logger.warning(f"Failed to send rejection email to {user['email']}")
+            
+            return add_cors_headers(jsonify({
+                'success': True, 
+                'message': f'Deposit rejected! Email sent to {user["email"]}',
+                'data': {'email_sent': email_sent}
+            }))
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
-        return add_cors_headers(jsonify({'success': True, 'message': f'Deposit {action}d successfully'}))
     except Exception as e:
-        logger.error(f"Process deposit error: {e}")
+        logger.error(f"Process deposit error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
-
 
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -2251,13 +2413,11 @@ def admin_resend_single_deposit_email(deposit_id):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+
 # ==================== ADMIN - WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_withdrawals():
-    if withdrawals_collection is None:
-        return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
-    
     try:
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
@@ -2268,29 +2428,67 @@ def admin_get_withdrawals():
         if status != 'all':
             query['status'] = status
         
-        total = withdrawals_collection.count_documents(query)
+        withdrawals = []
+        total = 0
         
-        # FIXED: Use list of tuples for sort
-        withdrawals = list(withdrawals_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
+        # Try veloxtrades_withdrawals first (primary)
+        if veloxtrades_withdrawals is not None:
+            try:
+                total = veloxtrades_withdrawals.count_documents(query)
+                cursor = veloxtrades_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                withdrawals = list(cursor)
+                logger.info(f"Fetched {len(withdrawals)} withdrawals from veloxtrades_withdrawals, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from veloxtrades_withdrawals: {e}", exc_info=True)
         
+        # If no withdrawals found, try investment_withdrawals
+        if len(withdrawals) == 0 and investment_withdrawals is not None:
+            try:
+                total = investment_withdrawals.count_documents(query)
+                cursor = investment_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                withdrawals = list(cursor)
+                logger.info(f"Fetched {len(withdrawals)} withdrawals from investment_withdrawals, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from investment_withdrawals: {e}", exc_info=True)
+        
+        # If still no withdrawals, try combined collection
+        if len(withdrawals) == 0 and withdrawals_collection is not None:
+            try:
+                total = withdrawals_collection.count_documents(query)
+                cursor = withdrawals_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                withdrawals = list(cursor)
+                logger.info(f"Fetched {len(withdrawals)} withdrawals from combined collection, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from combined collection: {e}", exc_info=True)
+        
+        # Format withdrawals
         result_withdrawals = []
         for withdrawal in withdrawals:
-            withdrawal['_id'] = str(withdrawal['_id'])
-            if 'created_at' in withdrawal and isinstance(withdrawal['created_at'], datetime):
-                withdrawal['created_at'] = withdrawal['created_at'].isoformat()
-            
-            if users_collection is not None and 'user_id' in withdrawal:
-                try:
-                    user = users_collection.find_one({'_id': ObjectId(withdrawal['user_id'])})
-                    withdrawal['username'] = user.get('username', 'Unknown') if user else 'Unknown'
-                except:
-                    withdrawal['username'] = 'Unknown'
-            else:
-                withdrawal['username'] = 'Unknown'
-            result_withdrawals.append(withdrawal)
+            try:
+                withdrawal_copy = dict(withdrawal)
+                withdrawal_copy['_id'] = str(withdrawal_copy['_id'])
+                if 'created_at' in withdrawal_copy and isinstance(withdrawal_copy['created_at'], datetime):
+                    withdrawal_copy['created_at'] = withdrawal_copy['created_at'].isoformat()
+                if 'approved_at' in withdrawal_copy and isinstance(withdrawal_copy['approved_at'], datetime):
+                    withdrawal_copy['approved_at'] = withdrawal_copy['approved_at'].isoformat()
+                
+                # Get username
+                if 'user_id' in withdrawal_copy and users_collection is not None:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(withdrawal_copy['user_id'])})
+                        withdrawal_copy['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+                    except:
+                        withdrawal_copy['username'] = 'Unknown'
+                else:
+                    withdrawal_copy['username'] = withdrawal.get('username', 'Unknown')
+                
+                result_withdrawals.append(withdrawal_copy)
+            except Exception as e:
+                logger.error(f"Error formatting withdrawal: {e}")
+                continue
         
         response = jsonify({
-            'success': True, 
+            'success': True,
             'data': {
                 'withdrawals': result_withdrawals,
                 'total': total,
@@ -2299,6 +2497,7 @@ def admin_get_withdrawals():
             }
         })
         return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}", exc_info=True)
         return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
