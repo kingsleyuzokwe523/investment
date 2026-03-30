@@ -975,7 +975,7 @@ def get_user_deposits():
     try:
         deposits = []
         if deposits_collection is not None:
-            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
         for d in deposits:
             d['_id'] = str(d['_id'])
             if d.get('created_at'):
@@ -1061,7 +1061,7 @@ def get_user_withdrawals():
     try:
         withdrawals = []
         if withdrawals_collection is not None:
-            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+           withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
         for w in withdrawals:
             w['_id'] = str(w['_id'])
             if w.get('created_at'):
@@ -1143,7 +1143,7 @@ def get_transactions():
         # FIXED: Check properly
         if transactions_collection is not None and hasattr(transactions_collection, 'collections') and transactions_collection.collections:
             try:
-                transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+               investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort([('start_date', -1)]))
             except Exception as e:
                 logger.error(f"Error fetching transactions: {e}")
                 # Return empty list instead of failing
