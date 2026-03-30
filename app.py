@@ -563,7 +563,6 @@ def send_deposit_approved_email(user, amount, crypto, transaction_hash):
         logger.error(f"Error in send_deposit_approved_email: {e}")
         return False
 
-
 def send_deposit_rejected_email(user, amount, crypto, reason):
     subject = f"❌ Deposit Rejected - ${amount:,.2f}"
     user_name = user.get('full_name', user.get('username', 'User'))
