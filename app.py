@@ -1999,31 +1999,6 @@ def user_dashboard():
 # ==================== USER NOTIFICATIONS ====================
 
 
-@app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
-def mark_notification_read(notification_id):
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if notifications_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        result = notifications_collection.update_one(
-            {'_id': ObjectId(notification_id), 'user_id': str(user['_id'])},
-            {'$set': {'read': True}}
-        )
-        
-        if result:
-            response = jsonify({'success': True, 'message': 'Notification marked as read'})
-        else:
-            response = jsonify({'success': False, 'message': 'Notification not found'}), 404
-        
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Mark notification read error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 # ==================== SUPPORT TICKET ENDPOINTS ====================
 @app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
 def create_ticket():
@@ -2091,82 +2066,7 @@ def create_ticket():
         logger.error(f"Create ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/support/tickets', methods=['GET', 'OPTIONS'])
-def get_tickets():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        skip = (page - 1) * limit
-        
-        query = {'user_id': str(user['_id'])}
-        
-        total = support_tickets_collection.count_documents(query)
-        tickets = list(support_tickets_collection.find(query).sort('created_at', -1).skip(skip).limit(limit))
-        
-        for ticket in tickets:
-            ticket['_id'] = str(ticket['_id'])
-            if ticket.get('created_at'):
-                ticket['created_at'] = ticket['created_at'].isoformat()
-            if ticket.get('updated_at'):
-                ticket['updated_at'] = ticket['updated_at'].isoformat()
-            ticket.pop('messages', None)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'tickets': tickets,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get tickets error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
-def get_ticket(ticket_id):
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        ticket['_id'] = str(ticket['_id'])
-        if ticket.get('created_at'):
-            ticket['created_at'] = ticket['created_at'].isoformat()
-        if ticket.get('updated_at'):
-            ticket['updated_at'] = ticket['updated_at'].isoformat()
-        
-        for msg in ticket.get('messages', []):
-            if msg.get('created_at'):
-                msg['created_at'] = msg['created_at'].isoformat()
-        
-        response = jsonify({'success': True, 'data': ticket})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
 def reply_ticket(ticket_id):
