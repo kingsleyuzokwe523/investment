@@ -2364,8 +2364,33 @@ def submit_kyc():
         
         # Check if already submitted
         existing = kyc_collection.find_one({'user_id': str(user['_id'])})
-       
-
+        
+        if existing:
+            return jsonify({'success': False, 'message': 'KYC already submitted'}), 400
+        
+        # Create KYC record
+        kyc_data = {
+            'user_id': str(user['_id']),
+            'full_name': full_name,
+            'date_of_birth': date_of_birth,
+            'country': country,
+            'id_type': id_type,
+            'id_number': id_number,
+            'id_front_url': id_front_url,
+            'status': 'pending',
+            'submitted_at': datetime.now(timezone.utc),
+            'updated_at': datetime.now(timezone.utc)
+        }
+        
+        kyc_collection.insert_one(kyc_data)
+        
+        response = jsonify({'success': True, 'message': 'KYC submitted successfully'})
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        logger.error(f"KYC submission error: {e}")
+        response = jsonify({'success': False, 'message': str(e)})
+        return add_cors_headers(response), 500
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
 def close_ticket(ticket_id):
     user = get_user_from_request()
@@ -2403,8 +2428,9 @@ def close_ticket(ticket_id):
         
     except Exception as e:
         logger.error(f"Close ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-# ==================== KYC VERIFICATION ENDPOINTS ====================
+        response = jsonify({'success': False, 'message': str(e)})
+        return add_cors_headers(response), 500
+#==================== KYC VERIFICATION ENDPOINTS ====================
 @app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
 def submit_kyc():
     user = get_user_from_request()
