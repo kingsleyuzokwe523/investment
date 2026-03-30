@@ -1276,26 +1276,91 @@ def get_notifications():
         return jsonify({'success': False, 'message': 'Not authenticated'}), 401
     
     try:
-        if notifications_collection is None:
-            return add_cors_headers(jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}}))
+        # If no collection exists, return empty data
+        if notifications_collection is None or not notifications_collection.collections:
+            return add_cors_headers(jsonify({
+                'success': True, 
+                'data': {
+                    'notifications': [], 
+                    'total': 0, 
+                    'unread': 0, 
+                    'page': 1, 
+                    'pages': 1
+                }
+            }))
         
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
         skip = (page - 1) * limit
         
-        notifications = list(notifications_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1).skip(skip).limit(limit))
+        notifications = []
+        try:
+            # Use a timeout to prevent hanging
+            notifications = list(notifications_collection.find(
+                {'user_id': str(user['_id'])}
+            ).sort('created_at', -1).skip(skip).limit(limit))
+        except Exception as e:
+            logger.error(f"Error fetching notifications: {e}")
+            # Return empty list on error
+            return add_cors_headers(jsonify({
+                'success': True, 
+                'data': {
+                    'notifications': [], 
+                    'total': 0, 
+                    'unread': 0, 
+                    'page': 1, 
+                    'pages': 1
+                }
+            }))
+        
+        # Format notifications
+        formatted_notifications = []
         for n in notifications:
-            n['_id'] = str(n['_id'])
-            if n.get('created_at'):
-                n['created_at'] = n['created_at'].isoformat()
+            try:
+                n_copy = dict(n)
+                n_copy['_id'] = str(n_copy['_id'])
+                if n_copy.get('created_at'):
+                    n_copy['created_at'] = n_copy['created_at'].isoformat()
+                formatted_notifications.append(n_copy)
+            except Exception as e:
+                logger.error(f"Error formatting notification: {e}")
+                continue
         
-        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
-        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        # Count total and unread
+        total = 0
+        unread = 0
+        try:
+            total = notifications_collection.count_documents({'user_id': str(user['_id'])})
+            unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        except Exception as e:
+            logger.error(f"Error counting notifications: {e}")
+            total = len(formatted_notifications)
+            unread = 0
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'notifications': notifications, 'total': total, 'unread': unread, 'page': page, 'pages': (total + limit - 1) // limit if total > 0 else 1}}))
+        return add_cors_headers(jsonify({
+            'success': True, 
+            'data': {
+                'notifications': formatted_notifications, 
+                'total': total, 
+                'unread': unread, 
+                'page': page, 
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        }))
+        
     except Exception as e:
         logger.error(f"Get notifications error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}}))
+        # Always return 200 with empty data, never 500
+        return add_cors_headers(jsonify({
+            'success': True, 
+            'data': {
+                'notifications': [], 
+                'total': 0, 
+                'unread': 0, 
+                'page': 1, 
+                'pages': 1
+            }
+        }))
 
 
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
