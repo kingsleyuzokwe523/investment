@@ -1140,13 +1140,13 @@ def get_transactions():
     
     try:
         transactions = []
-        # FIXED: Check properly
+        # Check if transactions_collection exists and has data
         if transactions_collection is not None and hasattr(transactions_collection, 'collections') and transactions_collection.collections:
             try:
-               investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort([('start_date', -1)]))
+                # FIXED: Correct sort syntax
+                transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
             except Exception as e:
                 logger.error(f"Error fetching transactions: {e}")
-                # Return empty list instead of failing
                 transactions = []
         
         # Format transactions safely
@@ -1295,10 +1295,10 @@ def get_notifications():
         
         notifications = []
         try:
-            # Use a timeout to prevent hanging
+            # FIXED: Correct sort syntax - use list of tuples
             notifications = list(notifications_collection.find(
                 {'user_id': str(user['_id'])}
-            ).sort('created_at', -1).skip(skip).limit(limit))
+            ).sort([('created_at', -1)]).skip(skip).limit(limit))
         except Exception as e:
             logger.error(f"Error fetching notifications: {e}")
             # Return empty list on error
@@ -1361,8 +1361,6 @@ def get_notifications():
                 'pages': 1
             }
         }))
-
-
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
 def mark_notification_read(notification_id):
     user = get_user_from_request()
@@ -1487,28 +1485,51 @@ def create_ticket():
         subject = data.get('subject', '').strip()
         message = data.get('message', '').strip()
         category = data.get('category', 'general')
+        priority = data.get('priority', 'medium')
         
         if not subject or not message:
             return jsonify({'success': False, 'message': 'Subject and message required'}), 400
         
         ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
         ticket_data = {
-            'ticket_id': ticket_id, 'user_id': str(user['_id']), 'username': user['username'],
-            'email': user['email'], 'subject': subject, 'message': message, 'category': category,
-            'priority': data.get('priority', 'medium'), 'status': 'open',
-            'created_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc),
-            'messages': [{'sender': 'user', 'sender_name': user['username'], 'message': message, 'created_at': datetime.now(timezone.utc)}]
+            'ticket_id': ticket_id,
+            'user_id': str(user['_id']),
+            'username': user.get('username', ''),
+            'email': user.get('email', ''),
+            'subject': subject,
+            'message': message,
+            'category': category,
+            'priority': priority,
+            'status': 'open',
+            'created_at': datetime.now(timezone.utc),
+            'updated_at': datetime.now(timezone.utc),
+            'messages': [{
+                'sender': 'user',
+                'sender_name': user.get('username', 'User'),
+                'message': message,
+                'created_at': datetime.now(timezone.utc)
+            }]
         }
+        
         support_tickets_collection.insert_one(ticket_data)
         
-        create_notification(user['_id'], f'Ticket Created: {ticket_id}', 'Your ticket has been created. We\'ll respond within 24 hours.', 'info')
-        return add_cors_headers(jsonify({'success': True, 'message': 'Ticket created', 'data': {'ticket_id': ticket_id}})), 201
+        # Create notification for user
+        create_notification(
+            user['_id'],
+            f'Ticket Created: {ticket_id}',
+            f'Your ticket "{subject}" has been created. We\'ll respond within 24 hours.',
+            'info'
+        )
+        
+        return add_cors_headers(jsonify({
+            'success': True,
+            'message': 'Ticket created successfully',
+            'data': {'ticket_id': ticket_id}
+        })), 201
+        
     except Exception as e:
         logger.error(f"Create ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
-
 @app.route('/api/investments', methods=['GET', 'OPTIONS'])
 def get_user_investments():
     user = get_user_from_request()
@@ -1558,11 +1579,14 @@ def get_ticket(ticket_id):
         if not ticket:
             return jsonify({'success': False, 'message': 'Ticket not found'}), 404
         
+        # Format ticket for response
         ticket['_id'] = str(ticket['_id'])
         if ticket.get('created_at'):
             ticket['created_at'] = ticket['created_at'].isoformat()
         if ticket.get('updated_at'):
             ticket['updated_at'] = ticket['updated_at'].isoformat()
+        
+        # Format messages
         for msg in ticket.get('messages', []):
             if msg.get('created_at'):
                 msg['created_at'] = msg['created_at'].isoformat()
@@ -1589,33 +1613,45 @@ def get_tickets():
         tickets = []
         if support_tickets_collection:
             try:
+                # FIXED: Correct sort syntax
                 tickets = list(support_tickets_collection.find(
                     {'user_id': str(user['_id'])}
-                ).sort('created_at', -1).skip(skip).limit(limit))
+                ).sort([('created_at', -1)]).skip(skip).limit(limit))
             except Exception as e:
                 logger.error(f"Error fetching tickets: {e}")
                 tickets = []
         
+        # Format tickets for response
+        formatted_tickets = []
         for t in tickets:
-            t['_id'] = str(t['_id'])
-            if t.get('created_at'):
-                t['created_at'] = t['created_at'].isoformat()
-            if t.get('updated_at'):
-                t['updated_at'] = t['updated_at'].isoformat()
-            t.pop('messages', None)
+            try:
+                t_copy = dict(t)
+                t_copy['_id'] = str(t_copy['_id'])
+                if t_copy.get('created_at'):
+                    t_copy['created_at'] = t_copy['created_at'].isoformat()
+                if t_copy.get('updated_at'):
+                    t_copy['updated_at'] = t_copy['updated_at'].isoformat()
+                # Remove messages from list view (too heavy)
+                t_copy.pop('messages', None)
+                t_copy['message_count'] = len(t.get('messages', []))
+                formatted_tickets.append(t_copy)
+            except Exception as e:
+                logger.error(f"Error formatting ticket: {e}")
+                continue
         
+        # Get total count
         total = 0
         try:
             if support_tickets_collection:
                 total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
         except Exception as e:
             logger.error(f"Error counting tickets: {e}")
-            total = len(tickets)
+            total = len(formatted_tickets)
         
         return add_cors_headers(jsonify({
             'success': True, 
             'data': {
-                'tickets': tickets, 
+                'tickets': formatted_tickets, 
                 'total': total, 
                 'page': page, 
                 'pages': (total + limit - 1) // limit if total > 0 else 1
@@ -1624,7 +1660,6 @@ def get_tickets():
     except Exception as e:
         logger.error(f"Get tickets error: {e}")
         return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}))
-
 
 
 
@@ -1642,8 +1677,26 @@ def close_ticket(ticket_id):
         if not ticket:
             return jsonify({'success': False, 'message': 'Ticket not found'}), 404
         
-        support_tickets_collection.update_one({'ticket_id': ticket_id}, {'$set': {'status': 'closed', 'closed_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc)}})
-        return add_cors_headers(jsonify({'success': True, 'message': 'Ticket closed'}))
+        support_tickets_collection.update_one(
+            {'ticket_id': ticket_id},
+            {
+                '$set': {
+                    'status': 'closed',
+                    'closed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        create_notification(
+            user['_id'],
+            f'Ticket Closed: {ticket_id}',
+            f'Your ticket "{ticket.get("subject")}" has been closed.',
+            'info'
+        )
+        
+        return add_cors_headers(jsonify({'success': True, 'message': 'Ticket closed successfully'}))
+        
     except Exception as e:
         logger.error(f"Close ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
