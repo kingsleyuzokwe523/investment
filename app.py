@@ -1196,71 +1196,6 @@ def get_tickets():
         logger.error(f"Get tickets error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/support/tickets', methods=['POST', 'OPTIONS'])
-def create_ticket():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        
-        subject = data.get('subject', '').strip()
-        message = data.get('message', '').strip()
-        category = data.get('category', 'general')
-        
-        if not subject or not message:
-            return jsonify({'success': False, 'message': 'Subject and message are required'}), 400
-        
-        ticket_id = 'TKT-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=10))
-        
-        ticket_data = {
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id']),
-            'username': user['username'],
-            'email': user['email'],
-            'subject': subject,
-            'message': message,
-            'category': category,
-            'priority': data.get('priority', 'medium'),
-            'status': 'open',
-            'created_at': datetime.now(timezone.utc),
-            'updated_at': datetime.now(timezone.utc),
-            'messages': [
-                {
-                    'sender': 'user',
-                    'sender_name': user['username'],
-                    'message': message,
-                    'created_at': datetime.now(timezone.utc)
-                }
-            ]
-        }
-        
-        result = support_tickets_collection.insert_one(ticket_data)
-        
-        create_notification(
-            user['_id'],
-            f'Ticket Created: {ticket_id}',
-            f'Your support ticket has been created. We will respond within 24 hours.',
-            'info'
-        )
-        
-        response = jsonify({
-            'success': True,
-            'message': 'Support ticket created successfully',
-            'data': {
-                'ticket_id': ticket_id,
-                'status': 'open'
-            }
-        })
-        return add_cors_headers(response), 201
-        
-    except Exception as e:
-        logger.error(f"Create ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
 def get_ticket(ticket_id):
@@ -1297,57 +1232,6 @@ def get_ticket(ticket_id):
         logger.error(f"Get ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/support/tickets/<ticket_id>/reply', methods=['POST', 'OPTIONS'])
-def reply_ticket(ticket_id):
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if support_tickets_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        message = data.get('message', '').strip()
-        
-        if not message:
-            return jsonify({'success': False, 'message': 'Message is required'}), 400
-        
-        ticket = support_tickets_collection.find_one({
-            'ticket_id': ticket_id,
-            'user_id': str(user['_id'])
-        })
-        
-        if not ticket:
-            return jsonify({'success': False, 'message': 'Ticket not found'}), 404
-        
-        if ticket['status'] == 'closed':
-            return jsonify({'success': False, 'message': 'Cannot reply to a closed ticket'}), 400
-        
-        reply = {
-            'sender': 'user',
-            'sender_name': user['username'],
-            'message': message,
-            'created_at': datetime.now(timezone.utc)
-        }
-        
-        support_tickets_collection.update_one(
-            {'ticket_id': ticket_id},
-            {
-                '$push': {'messages': reply},
-                '$set': {
-                    'updated_at': datetime.now(timezone.utc),
-                    'status': 'open'
-                }
-            }
-        )
-        
-        response = jsonify({'success': True, 'message': 'Reply sent successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Reply ticket error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
 def close_ticket(ticket_id):
