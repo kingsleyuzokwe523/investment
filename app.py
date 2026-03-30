@@ -1874,30 +1874,7 @@ def create_investment():
         logger.error(f"Investment error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== USER TRANSACTIONS ====================
-@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
-def get_transactions():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        transactions = []
-        if transactions_collection is not None:
-            transactions = list(transactions_collection.find(
-                {'user_id': str(user['_id'])}
-            ).sort('created_at', -1))
-        
-        for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx:
-                tx['created_at'] = tx['created_at'].isoformat()
-        
-        response = jsonify({'success': True, 'data': {'transactions': transactions}})
-        return add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Get transactions error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+
 # ==================== USER TRANSACTIONS ====================
 @app.route('/api/transactions', methods=['GET', 'OPTIONS'])
 def get_transactions():
