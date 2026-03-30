@@ -2091,7 +2091,7 @@ def submit_kyc():
         logger.error(f"KYC submission error: {e}")
         response = jsonify({'success': False, 'message': str(e)})
         return add_cors_headers(response), 500
-@response), 500
+
 #==================== KYC VERIFICATION ENDPOINTS ====================
 @app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
 def submit_kyc():
