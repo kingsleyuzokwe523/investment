@@ -718,21 +718,6 @@ def logout():
     response.set_cookie('veloxtrades_token', '', expires=0, path='/')
     return add_cors_headers(response)
 
-
-@app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
-def get_profile():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    wallet = user.get('wallet', {})
-    user_data = {
-        'id': str(user['_id']), 'full_name': user.get('full_name', ''), 'username': user.get('username', ''),
-        'email': user.get('email', ''), 'phone': user.get('phone', ''), 'country': user.get('country', ''),
-        'wallet': wallet, 'is_admin': user.get('is_admin', False), 'kyc_status': user.get('kyc_status', 'pending'),
-        'is_verified': user.get('is_verified', False), 'referral_code': user.get('referral_code', ''),
-        'referrals': user.get('referrals', []), 'created_at': user.get('created_at').isoformat() if user.get('created_at') else None
-    }
-    return add_cors_headers(jsonify({'success': True, 'data': {'user': user_data}}))
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
     # Handle OPTIONS preflight request
@@ -740,118 +725,120 @@ def login():
         response = make_response()
         return add_cors_headers(response)
     
-    # Check database connection
-    if not veloxtrades_users and not investment_users:
-        logger.error("❌ No database connection available")
-        return jsonify({'success': False, 'message': 'Database connection error. Please try again later.'}), 500
-    
     try:
+        # Get JSON data
         data = request.get_json()
         if not data:
-            logger.error("❌ No JSON data received")
             return jsonify({'success': False, 'message': 'No credentials provided'}), 400
             
         username_or_email = data.get('username', '').strip().lower()
         password = data.get('password', '')
-        
-        logger.info(f"🔐 Login attempt for: {username_or_email}")
 
         if not username_or_email or not password:
             return jsonify({'success': False, 'message': 'Username and password required'}), 400
 
-        # Search for user in ALL databases
+        # ========== SEARCH FOR USER IN BOTH DATABASES ==========
         user = None
         
-        # Try veloxtrades_db first
-        if veloxtrades_users:
-            user = veloxtrades_users.find_one({
-                '$or': [
-                    {'email': username_or_email}, 
-                    {'username': username_or_email}
-                ]
-            })
-            if user:
-                logger.info(f"✅ User found in veloxtrades_db: {username_or_email}")
+        # Try 1: Search in veloxtrades_db
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({
+                    '$or': [
+                        {'email': username_or_email}, 
+                        {'username': username_or_email}
+                    ]
+                })
+                if user:
+                    print(f"✅ User found in veloxtrades_db: {username_or_email}")
+            except Exception as e:
+                print(f"Error searching veloxtrades_db: {e}")
         
-        # Try investment_db if not found
-        if not user and investment_users:
-            user = investment_users.find_one({
-                '$or': [
-                    {'email': username_or_email}, 
-                    {'username': username_or_email}
-                ]
-            })
-            if user:
-                logger.info(f"✅ User found in investment_db: {username_or_email}")
+        # Try 2: Search in investment_db if not found
+        if user is None and investment_users is not None:
+            try:
+                user = investment_users.find_one({
+                    '$or': [
+                        {'email': username_or_email}, 
+                        {'username': username_or_email}
+                    ]
+                })
+                if user:
+                    print(f"✅ User found in investment_db: {username_or_email}")
+            except Exception as e:
+                print(f"Error searching investment_db: {e}")
         
-        # Try combined collection if not found
-        if not user and users_collection:
-            user = users_collection.find_one({
-                '$or': [
-                    {'email': username_or_email}, 
-                    {'username': username_or_email}
-                ]
-            })
-            if user:
-                logger.info(f"✅ User found in combined collection: {username_or_email}")
+        # Try 3: Search in combined collection if not found
+        if user is None and users_collection is not None:
+            try:
+                user = users_collection.find_one({
+                    '$or': [
+                        {'email': username_or_email}, 
+                        {'username': username_or_email}
+                    ]
+                })
+                if user:
+                    print(f"✅ User found in combined collection: {username_or_email}")
+            except Exception as e:
+                print(f"Error searching combined collection: {e}")
         
-        if not user:
-            logger.warning(f"❌ User not found: {username_or_email}")
+        # Check if user exists
+        if user is None:
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
 
-        # Debug: Log user info (without password)
-        logger.info(f"📝 User found: {user.get('username')}, Admin: {user.get('is_admin', False)}")
-        logger.info(f"📝 Password hash exists: {bool(user.get('password'))}")
-        logger.info(f"📝 Password hash length: {len(user.get('password', '')) if user.get('password') else 0}")
-
-        # Verify password with detailed error handling
+        # ========== VERIFY PASSWORD ==========
         try:
             stored_password = user.get('password', '')
             if not stored_password:
-                logger.error("❌ No password hash stored for user")
-                return jsonify({'success': False, 'message': 'Account error. Please contact support.'}), 500
+                return jsonify({'success': False, 'message': 'Account error'}), 500
             
-            password_valid = verify_password(stored_password, password)
+            # Verify password
+            password_valid = bcrypt.checkpw(
+                password.encode('utf-8'), 
+                stored_password.encode('utf-8')
+            )
             
             if not password_valid:
-                logger.warning(f"❌ Invalid password for user: {username_or_email}")
                 return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
                 
-            logger.info(f"✅ Password verified for: {username_or_email}")
-            
         except Exception as e:
-            logger.error(f"❌ Password verification error: {e}", exc_info=True)
-            return jsonify({'success': False, 'message': 'Authentication error. Please try again.'}), 500
+            print(f"Password verification error: {e}")
+            return jsonify({'success': False, 'message': 'Authentication error'}), 500
 
-        # Check if user is banned
+        # ========== CHECK IF USER IS BANNED ==========
         if user.get('is_banned', False):
-            logger.warning(f"❌ Banned user attempted login: {username_or_email}")
-            return jsonify({'success': False, 'message': 'Account has been suspended'}), 403
+            return jsonify({'success': False, 'message': 'Account suspended'}), 403
 
-        # Generate token
+        # ========== CREATE JWT TOKEN ==========
         try:
-            token = create_jwt_token(user['_id'], user['username'], user.get('is_admin', False))
-            logger.info(f"✅ Token created for: {username_or_email}")
+            payload = {
+                'user_id': str(user['_id']), 
+                'username': user.get('username', ''), 
+                'is_admin': user.get('is_admin', False),
+                'exp': datetime.now(timezone.utc) + timedelta(days=30),
+                'iat': datetime.now(timezone.utc)
+            }
+            token = jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
         except Exception as e:
-            logger.error(f"❌ Token creation error: {e}")
-            return jsonify({'success': False, 'message': 'Error creating session'}), 500
+            print(f"Token creation error: {e}")
+            return jsonify({'success': False, 'message': 'Session error'}), 500
 
-        # Update last login in ALL databases where user exists
+        # ========== UPDATE LAST LOGIN (try both databases) ==========
         try:
-            if veloxtrades_users:
+            if veloxtrades_users is not None:
                 veloxtrades_users.update_one(
                     {'_id': user['_id']}, 
                     {'$set': {'last_login': datetime.now(timezone.utc)}}
                 )
-            if investment_users:
+            if investment_users is not None:
                 investment_users.update_one(
                     {'_id': user['_id']}, 
                     {'$set': {'last_login': datetime.now(timezone.utc)}}
                 )
         except Exception as e:
-            logger.error(f"⚠️ Failed to update last login: {e}")
+            print(f"Last login update error (non-critical): {e}")
 
-        # Prepare user data
+        # ========== PREPARE USER DATA ==========
         wallet = user.get('wallet', {})
         if not isinstance(wallet, dict):
             wallet = {'balance': 0.00}
@@ -866,29 +853,55 @@ def login():
             'kyc_status': user.get('kyc_status', 'pending')
         }
 
-        logger.info(f"🎉 Login successful for: {username_or_email} (Admin: {user_data['is_admin']})")
-
-        # Create response
-        response = make_response(jsonify({
+        # ========== CREATE RESPONSE ==========
+        response_data = {
             'success': True, 
             'message': 'Login successful!', 
             'data': {'token': token, 'user': user_data}
-        }))
+        }
         
-        # Set cookie (removed domain for Render compatibility)
-        response.set_cookie('veloxtrades_token', 
-                           value=token, 
-                           httponly=True, 
-                           secure=True, 
-                           samesite='None',
-                           max_age=app.config['JWT_EXPIRATION_DAYS'] * 24 * 60 * 60, 
-                           path='/')
+        response = make_response(jsonify(response_data))
+        
+        # Set cookie (without domain for Render compatibility)
+        response.set_cookie(
+            'veloxtrades_token', 
+            value=token, 
+            httponly=True, 
+            secure=True, 
+            samesite='None',
+            max_age=30 * 24 * 60 * 60, 
+            path='/'
+        )
         
         return add_cors_headers(response)
         
     except Exception as e:
-        logger.error(f"❌ Login error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': f'Login failed: {str(e)}'}), 500
+        # Log the full error
+        print(f"❌ LOGIN ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return a clean error message
+        return jsonify({
+            'success': False, 
+            'message': 'Login failed. Please try again.'
+        }), 500
+@app.route('/api/auth/profile', methods=['GET', 'OPTIONS'])
+def get_profile():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    wallet = user.get('wallet', {})
+    user_data = {
+        'id': str(user['_id']), 'full_name': user.get('full_name', ''), 'username': user.get('username', ''),
+        'email': user.get('email', ''), 'phone': user.get('phone', ''), 'country': user.get('country', ''),
+        'wallet': wallet, 'is_admin': user.get('is_admin', False), 'kyc_status': user.get('kyc_status', 'pending'),
+        'is_verified': user.get('is_verified', False), 'referral_code': user.get('referral_code', ''),
+        'referrals': user.get('referrals', []), 'created_at': user.get('created_at').isoformat() if user.get('created_at') else None
+    }
+    return add_cors_headers(jsonify({'success': True, 'data': {'user': user_data}}))
+        
+
 
 def verify_password(hashed_password, password):
     """Verify password with enhanced error handling"""
