@@ -295,57 +295,64 @@ def connect_to_databases():
 
 
 db_connected = connect_to_databases()
-
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
 
 ALLOWED_ORIGINS = [
-    "http://localhost:5000", "http://127.0.0.1:5000", "http://localhost:3000", "http://localhost:5500",
-    "https://frontend-ugb2.onrender.com", "https://elite-eky6.onrender.com",
-    "https://veloxtrades.com.ng", "https://www.veloxtrades.com.ng",
-    "https://velox-wnn4.onrender.com", "https://investment-gto3.onrender.com"
+    "http://localhost:5000", 
+    "http://127.0.0.1:5000", 
+    "http://localhost:3000", 
+    "http://localhost:5500",
+    "https://frontend-ugb2.onrender.com", 
+    "https://elite-eky6.onrender.com",
+    "https://veloxtrades.com.ng", 
+    "https://www.veloxtrades.com.ng",
+    "https://velox-wnn4.onrender.com", 
+    "https://investment-gto3.onrender.com"
 ]
 
-CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With", "X-CSRFToken", "Origin"],
-     expose_headers=["Content-Type", "Authorization", "X-Total-Count"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"], max_age=86400)
-
-
+# ==================== SINGLE CORS CONFIGURATION ====================
+# Handle OPTIONS preflight requests
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
         response = make_response()
         origin = request.headers.get('Origin', '')
+        
+        # Set allowed origin
         if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-            response.headers.add("Access-Control-Allow-Origin", origin)
+            response.headers['Access-Control-Allow-Origin'] = origin
         else:
-            response.headers.add("Access-Control-Allow-Origin", "https://www.veloxtrades.com.ng")
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+            response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+        response.headers['Access-Control-Max-Age'] = '86400'  # Cache preflight for 24 hours
+        
         return response
 
+
+# Handle CORS headers for all responses
 @app.after_request
-def after_request(response):
+def add_cors_headers(response):
+    # Skip if it's an OPTIONS request (already handled)
+    if request.method == "OPTIONS":
+        return response
+    
     origin = request.headers.get('Origin', '')
-    allowed_origins = [
-        'https://www.veloxtrades.com.ng',
-        'https://veloxtrades.com.ng',
-        'https://investment-gto3.onrender.com',
-        'http://localhost:5000',
-        'http://localhost:3000'
-    ]
     
-    if origin in allowed_origins or 'veloxtrades.com.ng' in origin:
-        response.headers.add('Access-Control-Allow-Origin', origin)
+    # Set allowed origin
+    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
     else:
-        response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
     
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
+    
     return response
 
 # ==================== EMAIL CONFIGURATION ====================
@@ -3460,21 +3467,10 @@ if __name__ == '__main__':
     print("   Then login with: admin / admin123")
     print("=" * 70)
     
-    # Get port and host from environment
     port = int(os.getenv('PORT', '10000'))
     host = os.getenv('HOST', '0.0.0.0')
     
     print(f"🌐 Server running on {host}:{port}")
     print("=" * 70)
     
-    # Add CORS headers to all responses
-    @app.after_request
-    def add_cors(response):
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-        return response
-    
-    # Run the app
     app.run(host=host, port=port, debug=False, threaded=True)
