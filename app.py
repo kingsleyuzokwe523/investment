@@ -2234,58 +2234,59 @@ def admin_process_deposit(deposit_id):
         if deposit is None and deposits_collection is not None:
             try:
                 deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
-                deposit_collection_used = deposits_collection
-                logger.info(f"Found deposit in combined collection")
+                if deposit:
+                    deposit_collection_used = deposits_collection
+                    logger.info(f"Found deposit in combined collection")
             except Exception as e:
                 logger.error(f"Error finding in combined collection: {e}")
         
         if not deposit:
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
+        logger.info(f"Deposit found: Amount=${deposit.get('amount')}, User={deposit.get('user_id')}")
+        
         # Find user
         user = None
         user_id = deposit.get('user_id')
         
         # Try to find user in various collections
-        if users_collection is not None:
-            try:
-                user = users_collection.find_one({'_id': ObjectId(user_id)})
-            except Exception as e:
-                logger.error(f"Error finding user in combined: {e}")
-        
-        if not user and veloxtrades_users is not None:
+        if veloxtrades_users is not None:
             try:
                 user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    logger.info(f"Found user in veloxtrades_users: {user.get('username')}")
             except Exception as e:
                 logger.error(f"Error finding user in veloxtrades: {e}")
         
         if not user and investment_users is not None:
             try:
                 user = investment_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    logger.info(f"Found user in investment_users: {user.get('username')}")
             except Exception as e:
                 logger.error(f"Error finding user in investment: {e}")
         
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
-        logger.info(f"Found user: {user.get('username')} - {user.get('email')}")
-        
         if action == 'approve':
+            logger.info(f"Approving deposit for user: {user.get('username')}")
+            
             # Update user balance
             try:
                 if veloxtrades_users is not None:
-                    veloxtrades_users.update_one(
+                    result = veloxtrades_users.update_one(
                         {'_id': ObjectId(user_id)}, 
                         {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
                     )
-                    logger.info(f"Updated balance for user in veloxtrades_users")
+                    logger.info(f"Updated veloxtrades_users balance, modified: {result.modified_count}")
                 
                 if investment_users is not None:
-                    investment_users.update_one(
+                    result = investment_users.update_one(
                         {'_id': ObjectId(user_id)}, 
                         {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
                     )
-                    logger.info(f"Updated balance for user in investment_users")
+                    logger.info(f"Updated investment_users balance, modified: {result.modified_count}")
             except Exception as e:
                 logger.error(f"Error updating balance: {e}")
                 return jsonify({'success': False, 'message': f'Balance update failed: {str(e)}'}), 500
@@ -2293,11 +2294,11 @@ def admin_process_deposit(deposit_id):
             # Update deposit status
             try:
                 if deposit_collection_used is not None:
-                    deposit_collection_used.update_one(
+                    result = deposit_collection_used.update_one(
                         {'_id': ObjectId(deposit_id)}, 
                         {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
                     )
-                    logger.info(f"Updated deposit status to approved")
+                    logger.info(f"Updated deposit status to approved, modified: {result.modified_count}")
             except Exception as e:
                 logger.error(f"Error updating deposit: {e}")
             
@@ -2308,6 +2309,7 @@ def admin_process_deposit(deposit_id):
                         {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'}, 
                         {'$set': {'status': 'completed'}}
                     )
+                    logger.info("Updated transaction status")
             except Exception as e:
                 logger.error(f"Error updating transaction: {e}")
             
@@ -2319,6 +2321,7 @@ def admin_process_deposit(deposit_id):
                     f'Deposit of ${deposit["amount"]:,.2f} approved!', 
                     'success'
                 )
+                logger.info("Created notification")
             except Exception as e:
                 logger.error(f"Error creating notification: {e}")
             
@@ -2341,16 +2344,24 @@ def admin_process_deposit(deposit_id):
             # Add referral commission
             try:
                 add_referral_commission(user_id, deposit['amount'])
+                logger.info("Added referral commission")
             except Exception as e:
                 logger.error(f"Error adding referral commission: {e}")
             
-            return add_cors_headers(jsonify({
+            response_data = {
                 'success': True, 
                 'message': f'Deposit approved successfully!',
-                'data': {'email_sent': email_sent, 'amount': deposit['amount']}
-            }))
+                'data': {
+                    'email_sent': email_sent, 
+                    'amount': deposit['amount'],
+                    'user_balance_updated': True
+                }
+            }
+            return add_cors_headers(jsonify(response_data))
             
         elif action == 'reject':
+            logger.info(f"Rejecting deposit for user: {user.get('username')}")
+            
             # Update deposit status
             try:
                 if deposit_collection_used is not None:
@@ -2362,7 +2373,7 @@ def admin_process_deposit(deposit_id):
                             'rejected_at': datetime.now(timezone.utc)
                         }}
                     )
-                    logger.info(f"Updated deposit status to rejected")
+                    logger.info("Updated deposit status to rejected")
             except Exception as e:
                 logger.error(f"Error updating deposit: {e}")
             
@@ -2373,6 +2384,7 @@ def admin_process_deposit(deposit_id):
                         {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'}, 
                         {'$set': {'status': 'failed'}}
                     )
+                    logger.info("Updated transaction status")
             except Exception as e:
                 logger.error(f"Error updating transaction: {e}")
             
@@ -2384,6 +2396,7 @@ def admin_process_deposit(deposit_id):
                     f'Deposit of ${deposit["amount"]:,.2f} rejected. Reason: {reason}', 
                     'error'
                 )
+                logger.info("Created notification")
             except Exception as e:
                 logger.error(f"Error creating notification: {e}")
             
@@ -2403,11 +2416,12 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 logger.error(f"Error sending email: {e}")
             
-            return add_cors_headers(jsonify({
+            response_data = {
                 'success': True, 
                 'message': f'Deposit rejected!',
                 'data': {'email_sent': email_sent}
-            }))
+            }
+            return add_cors_headers(jsonify(response_data))
             
     except Exception as e:
         logger.error(f"Process deposit error: {e}", exc_info=True)
@@ -2415,7 +2429,6 @@ def admin_process_deposit(deposit_id):
             'success': False, 
             'message': f'Server error: {str(e)}'
         })), 500
-
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
