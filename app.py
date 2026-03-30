@@ -423,7 +423,9 @@ def verify_password(hashed_password, password):
     except Exception:
         return False
 
-
+def safe_collection(collection):
+    """Safely check if a collection exists"""
+    return collection is not None
 def create_jwt_token(user_id, username, is_admin=False):
     payload = {
         'user_id': str(user_id), 'username': username, 'is_admin': is_admin,
@@ -1184,7 +1186,6 @@ def create_investment():
 
 
 # ==================== TRANSACTION ENDPOINTS ====================
-@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
 def get_transactions():
     user = get_user_from_request()
     if not user:
@@ -1192,16 +1193,16 @@ def get_transactions():
     
     try:
         transactions = []
-        # Check if transactions_collection exists and has data
-        if transactions_collection is not None and hasattr(transactions_collection, 'collections') and transactions_collection.collections:
+        # FIXED: Use safe_collection check
+        if safe_collection(transactions_collection):
             try:
-                # FIXED: Correct sort syntax
                 transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
             except Exception as e:
-                logger.error(f"Error fetching transactions: {e}")
+                print(f"Error fetching transactions: {e}")
+                # Return empty list on error, don't crash
                 transactions = []
         
-        # Format transactions safely
+        # Format transactions
         formatted_transactions = []
         for tx in transactions:
             try:
@@ -1211,15 +1212,13 @@ def get_transactions():
                     tx_copy['created_at'] = tx_copy['created_at'].isoformat()
                 formatted_transactions.append(tx_copy)
             except Exception as e:
-                logger.error(f"Error formatting transaction: {e}")
+                print(f"Error formatting transaction: {e}")
                 continue
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': formatted_transactions}}))
+        return jsonify({'success': True, 'data': {'transactions': formatted_transactions}})
     except Exception as e:
-        logger.error(f"Get transactions error: {e}")
-        # Return empty list instead of 500 error
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': []}}))
-
+        print(f"Transactions error: {e}")
+        return jsonify({'success': True, 'data': {'transactions': []}})
 
 # ==================== DASHBOARD ENDPOINTS ====================
 @app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
