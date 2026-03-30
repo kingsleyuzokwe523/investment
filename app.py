@@ -2403,7 +2403,6 @@ def close_ticket(ticket_id):
     except Exception as e:
         logger.error(f"Close ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
 # ==================== KYC VERIFICATION ENDPOINTS ====================
 @app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
 def submit_kyc():
