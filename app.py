@@ -1708,57 +1708,98 @@ def close_ticket(ticket_id):
 def admin_get_stats():
     try:
         total_users = 0
-        if users_collection is not None:
-            total_users = users_collection.count_documents({})
-        
-        total_deposit_amount = 0
-        total_withdrawal_amount = 0
-        active_investments = 0
-        pending_deposits = 0
-        pending_withdrawals = 0
         banned_users = 0
         
-        if users_collection is not None:
-            banned_users = users_collection.count_documents({'is_banned': True})
+        # Try to get users from veloxtrades_db first (primary)
+        if veloxtrades_users is not None:
+            try:
+                total_users = veloxtrades_users.count_documents({})
+                banned_users = veloxtrades_users.count_documents({'is_banned': True})
+                logger.info(f"Stats from veloxtrades_users: {total_users} users, {banned_users} banned")
+            except Exception as e:
+                logger.error(f"Error counting from veloxtrades_users: {e}")
         
+        # If no users found, try investment_db
+        if total_users == 0 and investment_users is not None:
+            try:
+                total_users = investment_users.count_documents({})
+                banned_users = investment_users.count_documents({'is_banned': True})
+                logger.info(f"Stats from investment_users: {total_users} users, {banned_users} banned")
+            except Exception as e:
+                logger.error(f"Error counting from investment_users: {e}")
+        
+        # If still no users, try combined collection
+        if total_users == 0 and users_collection is not None:
+            try:
+                total_users = users_collection.count_documents({})
+                banned_users = users_collection.count_documents({'is_banned': True})
+                logger.info(f"Stats from combined collection: {total_users} users, {banned_users} banned")
+            except Exception as e:
+                logger.error(f"Error counting from combined collection: {e}")
+        
+        total_deposit_amount = 0
+        pending_deposits = 0
+        
+        # Try to get deposit stats from deposits_collection
         if deposits_collection is not None:
-            approved_deposits = list(deposits_collection.find({'status': 'approved'}))
-            total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
-            pending_deposits = deposits_collection.count_documents({'status': 'pending'})
+            try:
+                approved_deposits = list(deposits_collection.find({'status': 'approved'}))
+                total_deposit_amount = sum(d.get('amount', 0) for d in approved_deposits)
+                pending_deposits = deposits_collection.count_documents({'status': 'pending'})
+                logger.info(f"Deposit stats: approved amount=${total_deposit_amount}, pending={pending_deposits}")
+            except Exception as e:
+                logger.error(f"Error getting deposit stats: {e}")
         
+        total_withdrawal_amount = 0
+        pending_withdrawals = 0
+        
+        # Try to get withdrawal stats from withdrawals_collection
         if withdrawals_collection is not None:
-            approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
-            total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
-            pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
+            try:
+                approved_withdrawals = list(withdrawals_collection.find({'status': 'approved'}))
+                total_withdrawal_amount = sum(w.get('amount', 0) for w in approved_withdrawals)
+                pending_withdrawals = withdrawals_collection.count_documents({'status': 'pending'})
+                logger.info(f"Withdrawal stats: approved amount=${total_withdrawal_amount}, pending={pending_withdrawals}")
+            except Exception as e:
+                logger.error(f"Error getting withdrawal stats: {e}")
         
+        active_investments = 0
+        
+        # Try to get investment stats from investments_collection
         if investments_collection is not None:
-            active_investments = investments_collection.count_documents({'status': 'active'})
+            try:
+                active_investments = investments_collection.count_documents({'status': 'active'})
+                logger.info(f"Active investments: {active_investments}")
+            except Exception as e:
+                logger.error(f"Error getting investment stats: {e}")
         
         return add_cors_headers(jsonify({'success': True, 'data': {
-            'total_users': total_users, 'total_deposit_amount': total_deposit_amount,
-            'total_withdrawal_amount': total_withdrawal_amount, 'active_investments': active_investments,
-            'pending_deposits': pending_deposits, 'pending_withdrawals': pending_withdrawals, 'banned_users': banned_users
+            'total_users': total_users,
+            'total_deposit_amount': total_deposit_amount,
+            'total_withdrawal_amount': total_withdrawal_amount,
+            'active_investments': active_investments,
+            'pending_deposits': pending_deposits,
+            'pending_withdrawals': pending_withdrawals,
+            'banned_users': banned_users
         }}))
+        
     except Exception as e:
-        logger.error(f"Stats error: {e}")
+        logger.error(f"Stats error: {e}", exc_info=True)
         return add_cors_headers(jsonify({'success': True, 'data': {
-            'total_users': 0, 'total_deposit_amount': 0, 'total_withdrawal_amount': 0,
-            'active_investments': 0, 'pending_deposits': 0, 'pending_withdrawals': 0, 'banned_users': 0
+            'total_users': 0, 
+            'total_deposit_amount': 0, 
+            'total_withdrawal_amount': 0,
+            'active_investments': 0, 
+            'pending_deposits': 0, 
+            'pending_withdrawals': 0, 
+            'banned_users': 0
         }})), 200
-
 
 # ==================== ADMIN - USERS ====================
 @app.route('/api/admin/users', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_users():
     """Get users with pagination - supports up to 100 per page"""
-    if users_collection is None:
-        logger.error("Database connection error - users_collection is None")
-        return jsonify({
-            'success': False, 
-            'message': 'Database connection error', 
-            'data': {'users': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': 60}
-        }), 500
     
     try:
         # Get pagination parameters with safe defaults
@@ -1802,25 +1843,55 @@ def admin_get_users():
                     ]
                 }
         
-        # Get total count safely
-        try:
-            total = users_collection.count_documents(query)
-            logger.info(f"Total users found: {total}")
-        except Exception as count_error:
-            logger.error(f"Error counting users: {count_error}")
-            total = 0
-        
-        # FIXED: Use list of tuples for sort (PyMongo 3.x+ compatible)
+        # CRITICAL FIX: Try veloxtrades_users directly first
         users = []
-        try:
-            # CORRECT SORT SYNTAX - use list of (field, direction) tuples
-            cursor = users_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
-            users = list(cursor)
-            logger.info(f"Fetched {len(users)} users for page {page}")
-        except Exception as fetch_error:
-            logger.error(f"Error fetching users: {fetch_error}")
-            logger.error(traceback.format_exc())
-            users = []
+        total = 0
+        
+        # Try veloxtrades_users (primary database)
+        if veloxtrades_users is not None:
+            try:
+                total = veloxtrades_users.count_documents(query)
+                cursor = veloxtrades_users.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                users = list(cursor)
+                logger.info(f"Fetched {len(users)} users from veloxtrades_users, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from veloxtrades_users: {e}", exc_info=True)
+        
+        # If no users found, try investment_users
+        if len(users) == 0 and investment_users is not None:
+            try:
+                total = investment_users.count_documents(query)
+                cursor = investment_users.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                users = list(cursor)
+                logger.info(f"Fetched {len(users)} users from investment_users, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from investment_users: {e}", exc_info=True)
+        
+        # If still no users, try combined collection as last resort
+        if len(users) == 0 and users_collection is not None:
+            try:
+                total = users_collection.count_documents(query)
+                cursor = users_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                users = list(cursor)
+                logger.info(f"Fetched {len(users)} users from combined collection, total: {total}")
+            except Exception as e:
+                logger.error(f"Error fetching from combined collection: {e}", exc_info=True)
+        
+        # If still no users and total is 0, try to get a raw count to debug
+        if len(users) == 0 and total == 0:
+            # Emergency debug - get raw count from veloxtrades_users
+            if veloxtrades_users is not None:
+                try:
+                    raw_total = veloxtrades_users.count_documents({})
+                    logger.warning(f"Emergency check - raw total in veloxtrades_users: {raw_total}")
+                    if raw_total > 0:
+                        # Force fetch without query
+                        cursor = veloxtrades_users.find({}).sort([('created_at', -1)]).skip(skip).limit(limit)
+                        users = list(cursor)
+                        total = raw_total
+                        logger.info(f"Emergency fetch: got {len(users)} users")
+                except Exception as e:
+                    logger.error(f"Emergency fetch failed: {e}")
         
         # Format users safely
         formatted_users = []
@@ -1891,7 +1962,7 @@ def admin_get_users():
         
         total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
         
-        logger.info(f"Returning {len(formatted_users)} formatted users, page {page} of {total_pages}")
+        logger.info(f"Returning {len(formatted_users)} formatted users, page {page} of {total_pages}, total: {total}")
         
         response_data = {
             'success': True,
@@ -1920,7 +1991,6 @@ def admin_get_users():
                 'limit': 60
             }
         }), 500
-
 @app.route('/api/admin/users/<user_id>/balance', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_adjust_balance(user_id):
