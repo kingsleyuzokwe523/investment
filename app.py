@@ -2227,10 +2227,11 @@ def admin_process_deposit(deposit_id):
     # Handle OPTIONS preflight request
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        origin = request.headers.get('Origin', 'https://www.veloxtrades.com.ng')
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
     
     # Verify admin
@@ -2248,11 +2249,11 @@ def admin_process_deposit(deposit_id):
         
         print(f"🔵 Processing deposit {deposit_id}, action: {action}")
         
-        # Find deposit - try different approaches
+        # Find deposit - check with is not None
         deposit = None
         
-        # Try to find by ObjectId in veloxtrades_deposits
-        if veloxtrades_deposits:
+        # Try veloxtrades_deposits
+        if veloxtrades_deposits is not None:
             try:
                 deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
                 if deposit:
@@ -2260,8 +2261,8 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error finding in veloxtrades_deposits: {e}")
         
-        # If not found, try investment_deposits
-        if not deposit and investment_deposits:
+        # Try investment_deposits
+        if deposit is None and investment_deposits is not None:
             try:
                 deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
                 if deposit:
@@ -2269,17 +2270,26 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error finding in investment_deposits: {e}")
         
+        # Try combined collection
+        if deposit is None and deposits_collection is not None:
+            try:
+                deposit = deposits_collection.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    print(f"✅ Found deposit in combined collection")
+            except Exception as e:
+                print(f"Error finding in combined collection: {e}")
+        
         if not deposit:
             print(f"❌ Deposit {deposit_id} not found")
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
         print(f"📝 Deposit details: Amount=${deposit.get('amount')}, Status={deposit.get('status')}")
         
-        # Find user
+        # Find user - check with is not None
         user_id = deposit.get('user_id')
         target_user = None
         
-        if veloxtrades_users:
+        if veloxtrades_users is not None:
             try:
                 target_user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
                 if target_user:
@@ -2287,7 +2297,7 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error finding user: {e}")
         
-        if not target_user and investment_users:
+        if target_user is None and investment_users is not None:
             try:
                 target_user = investment_users.find_one({'_id': ObjectId(user_id)})
                 if target_user:
@@ -2295,27 +2305,25 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error finding user: {e}")
         
-        if not target_user:
+        if target_user is None:
             print(f"❌ User {user_id} not found")
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
             print(f"💰 Approving deposit for {target_user.get('username')}")
             
-            # Update balance
-            balance_updated = False
-            if veloxtrades_users:
+            # Update balance - check with is not None
+            if veloxtrades_users is not None:
                 try:
                     result = veloxtrades_users.update_one(
                         {'_id': ObjectId(user_id)},
                         {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
                     )
-                    balance_updated = result.modified_count > 0
-                    print(f"📊 veloxtrades_users balance updated: {balance_updated}")
+                    print(f"📊 veloxtrades_users balance updated: {result.modified_count > 0}")
                 except Exception as e:
                     print(f"Error updating veloxtrades_users: {e}")
             
-            if investment_users:
+            if investment_users is not None:
                 try:
                     result = investment_users.update_one(
                         {'_id': ObjectId(user_id)},
@@ -2326,7 +2334,7 @@ def admin_process_deposit(deposit_id):
                     print(f"Error updating investment_users: {e}")
             
             # Update deposit status
-            if veloxtrades_deposits:
+            if veloxtrades_deposits is not None:
                 try:
                     veloxtrades_deposits.update_one(
                         {'_id': ObjectId(deposit_id)},
@@ -2338,21 +2346,20 @@ def admin_process_deposit(deposit_id):
             
             print(f"🎉 Deposit approved successfully!")
             
-            response_data = {
+            return jsonify({
                 'success': True,
                 'message': 'Deposit approved successfully!',
                 'data': {
                     'amount': deposit['amount'],
-                    'user': target_user.get('username'),
-                    'balance_updated': balance_updated
+                    'user': target_user.get('username')
                 }
-            }
+            })
             
         elif action == 'reject':
             print(f"❌ Rejecting deposit for {target_user.get('username')}")
             
             # Update deposit status
-            if veloxtrades_deposits:
+            if veloxtrades_deposits is not None:
                 try:
                     veloxtrades_deposits.update_one(
                         {'_id': ObjectId(deposit_id)},
@@ -2362,29 +2369,19 @@ def admin_process_deposit(deposit_id):
                 except Exception as e:
                     print(f"Error updating deposit: {e}")
             
-            response_data = {
+            return jsonify({
                 'success': True,
                 'message': 'Deposit rejected successfully!',
                 'data': {'amount': deposit['amount']}
-            }
+            })
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
-        
-        # Add CORS headers
-        response = jsonify(response_data)
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return response
         
     except Exception as e:
         print(f"🔥 ERROR in process_deposit: {e}")
         import traceback
         traceback.print_exc()
-        
-        error_response = jsonify({'success': False, 'message': f'Server error: {str(e)}'})
-        error_response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        error_response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return error_response, 500
+        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
@@ -2430,10 +2427,11 @@ def admin_resend_single_deposit_email(deposit_id):
     # Handle OPTIONS preflight request
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://www.veloxtrades.com.ng')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        origin = request.headers.get('Origin', 'https://www.veloxtrades.com.ng')
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
     
     # Verify admin
@@ -2444,17 +2442,21 @@ def admin_resend_single_deposit_email(deposit_id):
     try:
         print(f"🔵 Resending email for deposit {deposit_id}")
         
-        # Find deposit
+        # Find deposit - check with is not None
         deposit = None
-        if veloxtrades_deposits:
+        if veloxtrades_deposits is not None:
             try:
                 deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    print(f"✅ Found deposit in veloxtrades_deposits")
             except:
                 pass
         
-        if not deposit and investment_deposits:
+        if deposit is None and investment_deposits is not None:
             try:
                 deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    print(f"✅ Found deposit in investment_deposits")
             except:
                 pass
         
@@ -2464,13 +2466,13 @@ def admin_resend_single_deposit_email(deposit_id):
         
         # Find user
         target_user = None
-        if veloxtrades_users:
+        if veloxtrades_users is not None:
             try:
                 target_user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
             except:
                 pass
         
-        if not target_user and investment_users:
+        if target_user is None and investment_users is not None:
             try:
                 target_user = investment_users.find_one({'_id': ObjectId(deposit['user_id'])})
             except:
@@ -2501,21 +2503,13 @@ def admin_resend_single_deposit_email(deposit_id):
         
         print(f"✅ Email sent: {email_sent}")
         
-        response_data = {'success': email_sent, 'message': 'Email resent' if email_sent else 'Failed to send'}
-        response = jsonify(response_data)
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return response
+        return jsonify({'success': email_sent, 'message': 'Email resent' if email_sent else 'Failed to send'})
         
     except Exception as e:
         print(f"🔥 ERROR in resend-email: {e}")
         import traceback
         traceback.print_exc()
-        
-        error_response = jsonify({'success': False, 'message': f'Server error: {str(e)}'})
-        error_response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        error_response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return error_response, 500
+        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
 
 # ==================== ADMIN - WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
