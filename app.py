@@ -2365,6 +2365,7 @@ def submit_kyc():
         # Check if already submitted
         existing = kyc_collection.find_one({'user_id': str(user['_id'])})
        
+
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
 def close_ticket(ticket_id):
     user = get_user_from_request()
