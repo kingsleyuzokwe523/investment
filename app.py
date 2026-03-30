@@ -2039,58 +2039,6 @@ def get_kyc_status():
         logger.error(f"Get KYC status error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# POST /api/kyc/submit
-@app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
-def submit_kyc():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        data = request.get_json()
-        
-        full_name = data.get('full_name', '').strip()
-        date_of_birth = data.get('date_of_birth', '')
-        country = data.get('country', '')
-        id_type = data.get('id_type', '')
-        id_number = data.get('id_number', '')
-        id_front_url = data.get('id_front_url', '')
-        
-        if not all([full_name, date_of_birth, country, id_type, id_number, id_front_url]):
-            return jsonify({'success': False, 'message': 'Please provide all required KYC information'}), 400
-        
-        # Check if already submitted
-        existing = kyc_collection.find_one({'user_id': str(user['_id'])})
-        
-        if existing:
-            return jsonify({'success': False, 'message': 'KYC already submitted'}), 400
-        
-        # Create KYC record
-        kyc_data = {
-            'user_id': str(user['_id']),
-            'full_name': full_name,
-            'date_of_birth': date_of_birth,
-            'country': country,
-            'id_type': id_type,
-            'id_number': id_number,
-            'id_front_url': id_front_url,
-            'status': 'pending',
-            'submitted_at': datetime.now(timezone.utc),
-            'updated_at': datetime.now(timezone.utc)
-        }
-        
-        kyc_collection.insert_one(kyc_data)
-        
-        response = jsonify({'success': True, 'message': 'KYC submitted successfully'})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"KYC submission error: {e}")
-        response = jsonify({'success': False, 'message': str(e)})
-        return add_cors_headers(response), 500
 
 #==================== KYC VERIFICATION ENDPOINTS ====================
 @app.route('/api/kyc/submit', methods=['POST', 'OPTIONS'])
