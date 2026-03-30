@@ -2118,40 +2118,6 @@ def submit_kyc():
         logger.error(f"KYC submit error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/api/kyc/status', methods=['GET', 'OPTIONS'])
-def get_kyc_status():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    if kyc_collection is None:
-        return jsonify({'success': False, 'message': 'Database connection error'}), 500
-    
-    try:
-        kyc = kyc_collection.find_one({'user_id': str(user['_id'])})
-        
-        if not kyc:
-            return jsonify({
-                'success': True,
-                'data': {
-                    'status': 'not_submitted',
-                    'message': 'No KYC application found'
-                }
-            })
-        
-        result = {
-            'status': kyc.get('status'),
-            'full_name': kyc.get('full_name'),
-            'submitted_at': kyc.get('submitted_at').isoformat() if kyc.get('submitted_at') else None,
-            'rejection_reason': kyc.get('rejection_reason')
-        }
-        
-        response = jsonify({'success': True, 'data': result})
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Get KYC status error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/kyc', methods=['GET', 'OPTIONS'])
 def get_kyc_details():
