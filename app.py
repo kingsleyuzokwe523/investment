@@ -1753,27 +1753,19 @@ def get_user_investments():
     
     try:
         investments = []
-        # FIXED: Check properly
-        if investments_collection is not None and hasattr(investments_collection, 'collections') and investments_collection.collections:
-            try:
-                investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort('start_date', -1))
-            except Exception as e:
-                logger.error(f"Error fetching investments: {e}")
-                investments = []
+        if investments_collection is not None:
+            # FIXED: Use list of tuples for sort
+            investments = list(investments_collection.find({'user_id': str(user['_id'])}).sort([('start_date', -1)]))
         
         formatted_investments = []
         for inv in investments:
-            try:
-                inv_copy = dict(inv)
-                inv_copy['_id'] = str(inv_copy['_id'])
-                if inv_copy.get('start_date'):
-                    inv_copy['start_date'] = inv_copy['start_date'].isoformat()
-                if inv_copy.get('end_date'):
-                    inv_copy['end_date'] = inv_copy['end_date'].isoformat()
-                formatted_investments.append(inv_copy)
-            except Exception as e:
-                logger.error(f"Error formatting investment: {e}")
-                continue
+            inv_copy = dict(inv)
+            inv_copy['_id'] = str(inv_copy['_id'])
+            if inv_copy.get('start_date'):
+                inv_copy['start_date'] = inv_copy['start_date'].isoformat()
+            if inv_copy.get('end_date'):
+                inv_copy['end_date'] = inv_copy['end_date'].isoformat()
+            formatted_investments.append(inv_copy)
         
         return add_cors_headers(jsonify({'success': True, 'data': {'investments': formatted_investments}}))
     except Exception as e:
