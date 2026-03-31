@@ -2129,46 +2129,101 @@ def get_tickets():
         skip = (page - 1) * limit
         
         tickets = []
-        if support_tickets_collection is not None:
+        
+        # Search in veloxtrades_support_tickets
+        if veloxtrades_support_tickets is not None:
             try:
-                # ✅ FIXED: Use list of tuples
-                tickets = list(support_tickets_collection.find(
+                veloxtrades_tickets = list(veloxtrades_support_tickets.find(
                     {'user_id': str(user['_id'])}
                 ).sort([('created_at', -1)]).skip(skip).limit(limit))
+                tickets.extend(veloxtrades_tickets)
+                print(f"🎫 Found {len(veloxtrades_tickets)} tickets in veloxtrades_db")
             except Exception as e:
-                logger.error(f"Error fetching tickets: {e}")
+                print(f"Error fetching from veloxtrades_support_tickets: {e}")
+        
+        # Search in investment_support_tickets
+        if investment_support_tickets is not None:
+            try:
+                investment_tickets = list(investment_support_tickets.find(
+                    {'user_id': str(user['_id'])}
+                ).sort([('created_at', -1)]).skip(skip).limit(limit))
+                # Avoid duplicates
+                existing_ids = {str(t.get('_id')) for t in tickets}
+                for t in investment_tickets:
+                    if str(t.get('_id')) not in existing_ids:
+                        tickets.append(t)
+                print(f"🎫 Found {len(investment_tickets)} tickets in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_support_tickets: {e}")
+        
+        # Sort by date
+        tickets.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
         
         # Format tickets
         formatted_tickets = []
         for t in tickets:
-            t_copy = dict(t)
-            t_copy['_id'] = str(t_copy['_id'])
-            if t_copy.get('created_at'):
-                t_copy['created_at'] = t_copy['created_at'].isoformat()
-            if t_copy.get('updated_at'):
-                t_copy['updated_at'] = t_copy['updated_at'].isoformat()
-            t_copy.pop('messages', None)
-            t_copy['message_count'] = len(t.get('messages', []))
-            formatted_tickets.append(t_copy)
+            try:
+                t_copy = {
+                    '_id': str(t['_id']),
+                    'ticket_id': t.get('ticket_id', ''),
+                    'user_id': str(t.get('user_id', '')),
+                    'username': t.get('username', ''),
+                    'subject': t.get('subject', ''),
+                    'category': t.get('category', 'general'),
+                    'priority': t.get('priority', 'medium'),
+                    'status': t.get('status', 'open'),
+                    'message_count': len(t.get('messages', [])),
+                    'created_at': t.get('created_at').isoformat() if t.get('created_at') else None,
+                    'updated_at': t.get('updated_at').isoformat() if t.get('updated_at') else None
+                }
+                formatted_tickets.append(t_copy)
+            except Exception as e:
+                print(f"Error formatting ticket: {e}")
+                continue
         
-        total = support_tickets_collection.count_documents({'user_id': str(user['_id'])})
+        # Count total
+        total = 0
+        if veloxtrades_support_tickets is not None:
+            try:
+                total += veloxtrades_support_tickets.count_documents({'user_id': str(user['_id'])})
+            except Exception as e:
+                print(f"Error counting veloxtrades tickets: {e}")
         
-        return add_cors_headers(jsonify({
+        if investment_support_tickets is not None:
+            try:
+                total += investment_support_tickets.count_documents({'user_id': str(user['_id'])})
+            except Exception as e:
+                print(f"Error counting investment tickets: {e}")
+        
+        pages = (total + limit - 1) // limit if total > 0 else 1
+        
+        print(f"✅ Returning {len(formatted_tickets)} tickets (total: {total})")
+        
+        response = jsonify({
             'success': True,
             'data': {
                 'tickets': formatted_tickets,
                 'total': total,
                 'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
+                'pages': pages
             }
-        }))
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get tickets error: {e}")
-        return add_cors_headers(jsonify({
+        print(f"🔥 Get tickets error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({
             'success': True,
-            'data': {'tickets': [], 'total': 0, 'page': 1, 'pages': 1}
-        }))
-
+            'data': {
+                'tickets': [],
+                'total': 0,
+                'page': 1,
+                'pages': 1
+            }
+        })
+        return add_cors_headers(response)
 
 @app.route('/api/support/tickets/<ticket_id>/close', methods=['POST', 'OPTIONS'])
 def close_ticket(ticket_id):
