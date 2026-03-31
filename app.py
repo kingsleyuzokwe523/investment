@@ -1447,62 +1447,7 @@ def process_investment_profits():
         
     except Exception as e:
         logger.error(f"Error in profit processing: {e}")
-# ==================== TRANSACTION ENDPOINTS ====================
-@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
-def get_transactions():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-    
-    try:
-        transactions = []
-        
-        # Try veloxtrades_transactions
-        if veloxtrades_transactions is not None:
-            try:
-                veloxtrades_tx = list(veloxtrades_transactions.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
-                transactions.extend(veloxtrades_tx)
-                print(f"Found {len(veloxtrades_tx)} transactions in veloxtrades_db")
-            except Exception as e:
-                print(f"Error fetching from veloxtrades_transactions: {e}")
-        
-        # Try investment_transactions
-        if investment_transactions is not None:
-            try:
-                investment_tx = list(investment_transactions.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
-                # Avoid duplicates
-                existing_ids = {str(tx.get('_id')) for tx in transactions}
-                for tx in investment_tx:
-                    if str(tx.get('_id')) not in existing_ids:
-                        transactions.append(tx)
-                print(f"Found {len(investment_tx)} transactions in investment_db")
-            except Exception as e:
-                print(f"Error fetching from investment_transactions: {e}")
-        
-        # Format transactions
-        formatted_transactions = []
-        for tx in transactions:
-            try:
-                tx_copy = dict(tx)
-                tx_copy['_id'] = str(tx_copy['_id'])
-                if tx_copy.get('created_at'):
-                    tx_copy['created_at'] = tx_copy['created_at'].isoformat()
-                formatted_transactions.append(tx_copy)
-            except Exception as e:
-                print(f"Error formatting transaction: {e}")
-                continue
-        
-        response = jsonify({'success': True, 'data': {'transactions': formatted_transactions}})
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return response
-        
-    except Exception as e:
-        print(f"Transactions error: {e}")
-        response = jsonify({'success': True, 'data': {'transactions': []}})
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return response
+
 
 # ==================== DASHBOARD ENDPOINTS ====================
 @app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
