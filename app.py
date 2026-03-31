@@ -1739,13 +1739,12 @@ def get_notifications():
         
         notifications = []
         try:
-            # FIXED: Use list of tuples for sort
+            # ✅ FIXED: Use list of tuples for sort
             notifications = list(notifications_collection.find(
                 {'user_id': str(user['_id'])}
             ).sort([('created_at', -1)]).skip(skip).limit(limit))
         except Exception as e:
             logger.error(f"Error fetching notifications: {e}")
-            # Return empty list on error
             return add_cors_headers(jsonify({
                 'success': True, 
                 'data': {
@@ -1794,7 +1793,6 @@ def get_notifications():
         
     except Exception as e:
         logger.error(f"Get notifications error: {e}")
-        # Always return 200 with empty data, never 500
         return add_cors_headers(jsonify({
             'success': True, 
             'data': {
