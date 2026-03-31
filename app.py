@@ -1739,7 +1739,7 @@ def get_notifications():
         
         notifications = []
         try:
-            # FIXED: Correct sort syntax - use list of tuples
+            # FIXED: Use list of tuples for sort
             notifications = list(notifications_collection.find(
                 {'user_id': str(user['_id'])}
             ).sort([('created_at', -1)]).skip(skip).limit(limit))
