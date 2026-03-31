@@ -2602,14 +2602,6 @@ def admin_process_deposit(deposit_id):
     return jsonify({'success': False, 'message': 'Deposit processing temporarily disabled'}), 503
 
 
-@app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_investments():
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        return response
-    return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
 
 
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
