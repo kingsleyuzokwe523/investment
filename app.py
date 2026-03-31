@@ -3880,44 +3880,103 @@ def admin_process_investment(investment_id):
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
 
 
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
+    """Bulk resend deposit approval/rejection emails"""
+    
+    # Handle OPTIONS preflight
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    
     try:
         if deposits_collection is None:
             return jsonify({'success': False, 'message': 'Database connection error'}), 500
         
         data = request.get_json() or {}
         status_filter = data.get('status', 'approved')
-        query = {'status': status_filter} if status_filter != 'all' else {'status': {'$in': ['approved', 'rejected']}}
+        
+        # Build query based on status filter
+        if status_filter != 'all':
+            query = {'status': status_filter}
+        else:
+            query = {'status': {'$in': ['approved', 'rejected']}}
         
         deposits = list(deposits_collection.find(query).limit(100))
         sent = 0
         failed = 0
         
+        print(f"📧 Resending emails for {len(deposits)} deposits with status: {status_filter}")
+        
         for deposit in deposits:
             if users_collection is None:
                 failed += 1
                 continue
+            
+            # Find user
             user = users_collection.find_one({'_id': ObjectId(deposit['user_id'])})
             if not user:
+                print(f"❌ User not found for deposit: {deposit.get('_id')}")
                 failed += 1
                 continue
+            
+            # Send email based on status
             if deposit['status'] == 'approved':
-                if send_deposit_approved_email(user, deposit['amount'], deposit['crypto'], deposit.get('transaction_hash')):
-                    sent += 1
-                else:
+                try:
+                    if send_deposit_approved_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit.get('crypto', 'USDT'), 
+                        deposit.get('transaction_hash')
+                    ):
+                        sent += 1
+                        print(f"✅ Resent approval email to {user.get('email')} for ${deposit['amount']}")
+                    else:
+                        failed += 1
+                        print(f"❌ Failed to send approval email to {user.get('email')}")
+                except Exception as e:
+                    print(f"❌ Error sending approval email: {e}")
                     failed += 1
+                    
             elif deposit['status'] == 'rejected':
-                if send_deposit_rejected_email(user, deposit['amount'], deposit['crypto'], deposit.get('rejection_reason', 'Not specified')):
-                    sent += 1
-                else:
+                try:
+                    if send_deposit_rejected_email(
+                        user, 
+                        deposit['amount'], 
+                        deposit.get('crypto', 'USDT'), 
+                        deposit.get('rejection_reason', 'Not specified')
+                    ):
+                        sent += 1
+                        print(f"✅ Resent rejection email to {user.get('email')} for ${deposit['amount']}")
+                    else:
+                        failed += 1
+                        print(f"❌ Failed to send rejection email to {user.get('email')}")
+                except Exception as e:
+                    print(f"❌ Error sending rejection email: {e}")
                     failed += 1
+            else:
+                print(f"⚠️ Skipping deposit with unknown status: {deposit.get('status')}")
         
-        return add_cors_headers(jsonify({'success': True, 'message': f'Resent {sent} emails, {failed} failed', 'data': {'sent': sent, 'failed': failed}}))
+        print(f"📧 Email resend complete: {sent} sent, {failed} failed")
+        
+        response = jsonify({
+            'success': True, 
+            'message': f'Resent {sent} emails, {failed} failed', 
+            'data': {'sent': sent, 'failed': failed}
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
         logger.error(f"Bulk resend error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+        import traceback
+        traceback.print_exc()
+        response = jsonify({'success': False, 'message': str(e)})
+        return add_cors_headers(response), 500
 
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 def admin_resend_single_deposit_email(deposit_id):
