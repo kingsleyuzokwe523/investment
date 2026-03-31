@@ -1533,39 +1533,21 @@ def user_dashboard():
         
         # Search in investment_investments
        # Update user balance in investment_users
-if investment_users is not None:
-    try:
-        result = investment_users.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
-        )
-        print(f"✅ investment_users updated: {result.modified_count > 0}")
-    except Exception as e:
-        print(f"⚠️ investment_users not available: {e}")
-else:
-    print(f"⚠️ investment_users collection is None - skipping")
-        # Also search in combined collection if it exists
-        if investments_collection is not None and hasattr(investments_collection, 'collections') and investments_collection.collections:
-            try:
-                combined_inv = list(investments_collection.find({
-                    'user_id': str(user['_id']), 
-                    'status': 'active'
-                }))
-                # Avoid duplicates by checking IDs
-                existing_ids = {str(inv.get('_id')) for inv in active_investments}
-                for inv in combined_inv:
-                    if str(inv.get('_id')) not in existing_ids:
-                        active_investments.append(inv)
-                print(f"📊 Found {len(combined_inv)} active investments in combined collection")
-            except Exception as e:
-                print(f"Error fetching from combined investments: {e}")
-        
-        total_active = sum(inv.get('amount', 0) for inv in active_investments)
-        pending_profit = sum(inv.get('expected_profit', 0) for inv in active_investments)
-        
-        print(f"💰 Total active investments: ${total_active}")
-        print(f"💰 Pending profit: ${pending_profit}")
-        
+# Update user balance in investment_users
+try:
+    if investment_users is not None:
+        try:
+            result = investment_users.update_one(
+                {'_id': ObjectId(user_id)},
+                {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+            )
+            print(f"✅ investment_users updated: {result.modified_count > 0}")
+        except Exception as e:
+            print(f"❌ Error updating investment_users: {e}")
+    else:
+        print(f"⚠️ investment_users collection is None - skipping")
+except Exception as e:
+    print(f"❌ investment_users error: {e}")
         # ========== GET RECENT TRANSACTIONS FROM BOTH DATABASES ==========
         all_transactions = []
         
