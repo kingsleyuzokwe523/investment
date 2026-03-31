@@ -1747,46 +1747,103 @@ def get_notifications():
         skip = (page - 1) * limit
         
         notifications = []
-        if notifications_collection is not None:
+        
+        # Search in veloxtrades_notifications
+        if veloxtrades_notifications is not None:
             try:
-                # ✅ FIXED: Use list of tuples
-                notifications = list(notifications_collection.find(
+                veloxtrades_notif = list(veloxtrades_notifications.find(
                     {'user_id': str(user['_id'])}
                 ).sort([('created_at', -1)]).skip(skip).limit(limit))
+                notifications.extend(veloxtrades_notif)
+                print(f"📬 Found {len(veloxtrades_notif)} notifications in veloxtrades_db")
             except Exception as e:
-                logger.error(f"Error fetching notifications: {e}")
+                print(f"Error fetching from veloxtrades_notifications: {e}")
+        
+        # Search in investment_notifications
+        if investment_notifications is not None:
+            try:
+                investment_notif = list(investment_notifications.find(
+                    {'user_id': str(user['_id'])}
+                ).sort([('created_at', -1)]).skip(skip).limit(limit))
+                # Avoid duplicates
+                existing_ids = {str(n.get('_id')) for n in notifications}
+                for n in investment_notif:
+                    if str(n.get('_id')) not in existing_ids:
+                        notifications.append(n)
+                print(f"📬 Found {len(investment_notif)} notifications in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_notifications: {e}")
+        
+        # Sort by date
+        notifications.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
         
         # Format notifications
         formatted_notifications = []
         for n in notifications:
             try:
-                n_copy = dict(n)
-                n_copy['_id'] = str(n_copy['_id'])
-                if n_copy.get('created_at'):
-                    n_copy['created_at'] = n_copy['created_at'].isoformat()
+                n_copy = {
+                    '_id': str(n['_id']),
+                    'user_id': str(n.get('user_id', '')),
+                    'title': n.get('title', ''),
+                    'message': n.get('message', ''),
+                    'type': n.get('type', 'info'),
+                    'read': n.get('read', False),
+                    'created_at': n.get('created_at').isoformat() if n.get('created_at') else None
+                }
                 formatted_notifications.append(n_copy)
             except Exception as e:
+                print(f"Error formatting notification: {e}")
                 continue
         
-        total = notifications_collection.count_documents({'user_id': str(user['_id'])})
-        unread = notifications_collection.count_documents({'user_id': str(user['_id']), 'read': False})
+        # Count total and unread
+        total = 0
+        unread = 0
         
-        return add_cors_headers(jsonify({
+        if veloxtrades_notifications is not None:
+            try:
+                total += veloxtrades_notifications.count_documents({'user_id': str(user['_id'])})
+                unread += veloxtrades_notifications.count_documents({'user_id': str(user['_id']), 'read': False})
+            except Exception as e:
+                print(f"Error counting veloxtrades notifications: {e}")
+        
+        if investment_notifications is not None:
+            try:
+                total += investment_notifications.count_documents({'user_id': str(user['_id'])})
+                unread += investment_notifications.count_documents({'user_id': str(user['_id']), 'read': False})
+            except Exception as e:
+                print(f"Error counting investment notifications: {e}")
+        
+        pages = (total + limit - 1) // limit if total > 0 else 1
+        
+        print(f"✅ Returning {len(formatted_notifications)} notifications (total: {total}, unread: {unread})")
+        
+        response = jsonify({
             'success': True,
             'data': {
                 'notifications': formatted_notifications,
                 'total': total,
                 'unread': unread,
                 'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
+                'pages': pages
             }
-        }))
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get notifications error: {e}")
-        return add_cors_headers(jsonify({
+        print(f"🔥 Get notifications error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({
             'success': True,
-            'data': {'notifications': [], 'total': 0, 'unread': 0, 'page': 1, 'pages': 1}
-        }))
+            'data': {
+                'notifications': [],
+                'total': 0,
+                'unread': 0,
+                'page': 1,
+                'pages': 1
+            }
+        })
+        return add_cors_headers(response)
 @app.route('/api/notifications/<notification_id>/read', methods=['PUT', 'OPTIONS'])
 def mark_notification_read(notification_id):
     user = get_user_from_request()
@@ -1964,36 +2021,69 @@ def get_user_investments():
     
     try:
         investments = []
-        if investments_collection is not None:
+        
+        # Search in veloxtrades_investments
+        if veloxtrades_investments is not None:
             try:
-                # ✅ FIXED: Use list of tuples
-                investments = list(investments_collection.find(
+                veloxtrades_inv = list(veloxtrades_investments.find(
                     {'user_id': str(user['_id'])}
                 ).sort([('start_date', -1)]))
+                investments.extend(veloxtrades_inv)
+                print(f"📊 Found {len(veloxtrades_inv)} investments in veloxtrades_db")
             except Exception as e:
-                logger.error(f"Get investments error: {e}")
+                print(f"Error fetching from veloxtrades_investments: {e}")
         
+        # Search in investment_investments
+        if investment_investments is not None:
+            try:
+                investment_inv = list(investment_investments.find(
+                    {'user_id': str(user['_id'])}
+                ).sort([('start_date', -1)]))
+                # Avoid duplicates
+                existing_ids = {str(inv.get('_id')) for inv in investments}
+                for inv in investment_inv:
+                    if str(inv.get('_id')) not in existing_ids:
+                        investments.append(inv)
+                print(f"📊 Found {len(investment_inv)} investments in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_investments: {e}")
+        
+        # Format investments
         formatted_investments = []
         for inv in investments:
             try:
-                inv_copy = dict(inv)
-                inv_copy['_id'] = str(inv_copy['_id'])
-                if inv_copy.get('start_date'):
-                    inv_copy['start_date'] = inv_copy['start_date'].isoformat()
-                if inv_copy.get('end_date'):
-                    inv_copy['end_date'] = inv_copy['end_date'].isoformat()
+                inv_copy = {
+                    '_id': str(inv['_id']),
+                    'user_id': str(inv.get('user_id', '')),
+                    'username': inv.get('username', ''),
+                    'plan': inv.get('plan', ''),
+                    'plan_name': inv.get('plan_name', 'Investment'),
+                    'amount': inv.get('amount', 0),
+                    'roi': inv.get('roi', 0),
+                    'expected_profit': inv.get('expected_profit', 0),
+                    'duration_hours': inv.get('duration_hours', 0),
+                    'status': inv.get('status', 'pending'),
+                    'start_date': inv.get('start_date').isoformat() if inv.get('start_date') else None,
+                    'end_date': inv.get('end_date').isoformat() if inv.get('end_date') else None,
+                    'created_at': inv.get('created_at').isoformat() if inv.get('created_at') else None,
+                    'approved_at': inv.get('approved_at').isoformat() if inv.get('approved_at') else None
+                }
                 formatted_investments.append(inv_copy)
             except Exception as e:
+                print(f"Error formatting investment: {e}")
                 continue
         
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': formatted_investments}}))
+        print(f"✅ Returning {len(formatted_investments)} investments for user {user.get('username')}")
+        
+        response = jsonify({'success': True, 'data': {'investments': formatted_investments}})
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': []}}))
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': formatted_investments}}))
-    except Exception as e:
-        logger.error(f"Get investments error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': []}}))
+        print(f"🔥 Get investments error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({'success': True, 'data': {'investments': []}})
+        return add_cors_headers(response) 
 @app.route('/api/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
 def get_ticket(ticket_id):
     user = get_user_from_request()
