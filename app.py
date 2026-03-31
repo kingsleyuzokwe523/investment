@@ -467,7 +467,7 @@ def check_email_configuration():
     except Exception as e:
         return False, f"Email error: {str(e)}"
 
-ddef send_investment_rejected_email(user, amount, plan_name, reason):
+def send_investment_rejected_email(user, amount, plan_name, reason):
     try:
         subject = f"❌ Investment Request Rejected - ${amount:,.2f}"
         user_name = user.get('full_name', user.get('username', 'User'))
