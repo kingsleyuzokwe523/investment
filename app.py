@@ -3799,7 +3799,8 @@ def admin_process_withdrawal(withdrawal_id):
 @app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_investments():
-    """Get all investments with filtering"""
+    """Get all investments for admin"""
+    
     if request.method == "OPTIONS":
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
@@ -3808,7 +3809,7 @@ def admin_get_investments():
     try:
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'all')  # all, pending, active, completed, rejected
+        status = request.args.get('status', 'all')
         skip = (page - 1) * limit
         
         query = {}
@@ -3818,21 +3819,18 @@ def admin_get_investments():
         investments = []
         total = 0
         
-        # Fetch from veloxtrades_investments
         if veloxtrades_investments is not None:
             try:
                 total = veloxtrades_investments.count_documents(query)
                 cursor = veloxtrades_investments.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 investments = list(cursor)
-                print(f"📊 Found {len(investments)} investments in veloxtrades_db")
             except Exception as e:
-                print(f"Error fetching from veloxtrades_investments: {e}")
+                print(f"Error fetching investments: {e}")
+                investments = []
         
-        # Format investments with user details
         formatted_investments = []
         for inv in investments:
             try:
-                # Get user details
                 user = None
                 if veloxtrades_users is not None:
                     user = veloxtrades_users.find_one({'_id': ObjectId(inv['user_id'])})
@@ -3854,10 +3852,7 @@ def admin_get_investments():
                     'status': inv.get('status', 'pending'),
                     'created_at': inv.get('created_at').isoformat() if inv.get('created_at') else None,
                     'start_date': inv.get('start_date').isoformat() if inv.get('start_date') else None,
-                    'end_date': inv.get('end_date').isoformat() if inv.get('end_date') else None,
-                    'approved_at': inv.get('approved_at').isoformat() if inv.get('approved_at') else None,
-                    'rejected_at': inv.get('rejected_at').isoformat() if inv.get('rejected_at') else None,
-                    'rejection_reason': inv.get('rejection_reason', '')
+                    'end_date': inv.get('end_date').isoformat() if inv.get('end_date') else None
                 }
                 formatted_investments.append(inv_copy)
             except Exception as e:
@@ -3877,10 +3872,8 @@ def admin_get_investments():
         
     except Exception as e:
         print(f"🔥 Get investments error: {e}")
-        import traceback
-        traceback.print_exc()
-        return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}})), 200
-
+        response = jsonify({'success': True, 'data': {'investments': [], 'total': 0}})
+        return add_cors_headers(response)
 @app.route('/api/admin/investments/<investment_id>/complete', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_complete_investment(investment_id):
@@ -4152,12 +4145,19 @@ def admin_process_investment(investment_id):
                 except Exception as e:
                     print(f"❌ Error updating investment: {e}")
 
-# ==================== ADMIN - TRANSACTIONS ====================
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_transactions():
-    if transactions_collection is None:
-        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+    """Get all transactions for admin"""
+    
+    # Handle OPTIONS preflight
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
     
     try:
         page = int(request.args.get('page', 1))
@@ -4169,19 +4169,48 @@ def admin_get_transactions():
         if tx_type != 'all':
             query['type'] = tx_type
         
-        total = transactions_collection.count_documents(query)
+        transactions = []
+        total = 0
         
-        # ✅ FIXED: Use list of tuples
-        transactions = list(transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
+        if transactions_collection is not None:
+            try:
+                total = transactions_collection.count_documents(query)
+                # FIXED: Use list of tuples for sort
+                cursor = transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                transactions = list(cursor)
+            except Exception as e:
+                print(f"Error fetching transactions: {e}")
+                transactions = []
         
+        # Format transactions
         result_transactions = []
         for tx in transactions:
-            tx['_id'] = str(tx['_id'])
-            if 'created_at' in tx and isinstance(tx['created_at'], datetime):
-                tx['created_at'] = tx['created_at'].isoformat()
-            result_transactions.append(tx)
+            try:
+                tx_copy = dict(tx)
+                tx_copy['_id'] = str(tx_copy['_id'])
+                if 'created_at' in tx_copy and isinstance(tx_copy['created_at'], datetime):
+                    tx_copy['created_at'] = tx_copy['created_at'].isoformat()
+                
+                # Get user info if available
+                if 'user_id' in tx_copy and users_collection is not None:
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(tx_copy['user_id'])})
+                        if user:
+                            tx_copy['user'] = {
+                                'username': user.get('username', 'Unknown'),
+                                'email': user.get('email', '')
+                            }
+                    except:
+                        tx_copy['user'] = {'username': 'Unknown', 'email': ''}
+                else:
+                    tx_copy['user'] = {'username': 'Unknown', 'email': ''}
+                
+                result_transactions.append(tx_copy)
+            except Exception as e:
+                print(f"Error formatting transaction: {e}")
+                continue
         
-        return add_cors_headers(jsonify({
+        response = jsonify({
             'success': True,
             'data': {
                 'transactions': result_transactions,
@@ -4189,10 +4218,15 @@ def admin_get_transactions():
                 'page': page,
                 'pages': (total + limit - 1) // limit if total > 0 else 1
             }
-        }))
+        })
+        return add_cors_headers(response)
+        
     except Exception as e:
-        logger.error(f"Get admin transactions error: {e}")
-        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': [], 'total': 0}})), 200
+        print(f"🔥 Get admin transactions error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({'success': True, 'data': {'transactions': [], 'total': 0}})
+        return add_cors_headers(response)
 
 
 
