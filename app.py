@@ -3240,22 +3240,182 @@ def admin_process_investment(investment_id):
             )
         except Exception as e:
             print(f"Error creating notification: {e}")
-        
-        return jsonify({
-            'success': True,
-            'message': f'Investment rejected and refunded!',
-            'data': {'amount': investment['amount'], 'user': user.get('username')}
-        })
+# ==================== ADMIN - INVESTMENT ENDPOINTS (COMMENTED OUT - FIXING) ====================
+
+"""
+@app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_investments():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
     
-    return jsonify({'success': False, 'message': 'Invalid action'}), 400
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        investments = []
+        total = 0
+        
+        if veloxtrades_investments is not None:
+            try:
+                total = veloxtrades_investments.count_documents(query)
+                cursor = veloxtrades_investments.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                investments = list(cursor)
+            except Exception as e:
+                print(f"Error fetching investments: {e}")
+        
+        formatted = []
+        for inv in investments:
+            try:
+                inv['_id'] = str(inv['_id'])
+                if inv.get('created_at'):
+                    inv['created_at'] = inv['created_at'].isoformat()
+                formatted.append(inv)
+            except Exception as e:
+                continue
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'investments': formatted,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        print(f"Error: {e}")
+        return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}}))
+"""
 
 
-# ==================== ADMIN - TRANSACTIONS ====================
+"""
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_process_investment(investment_id):
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data'}), 400
+        
+        action = data.get('action')
+        reason = data.get('reason', '')
+        
+        print(f"Processing investment {investment_id}, action: {action}")
+        
+        investment = None
+        if veloxtrades_investments is not None:
+            try:
+                investment = veloxtrades_investments.find_one({'_id': ObjectId(investment_id)})
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not investment:
+            return jsonify({'success': False, 'message': 'Investment not found'}), 404
+        
+        user = None
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(investment['user_id'])})
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if action == 'approve':
+            if veloxtrades_investments is not None:
+                veloxtrades_investments.update_one(
+                    {'_id': ObjectId(investment_id)},
+                    {'$set': {'status': 'active', 'approved_at': datetime.now(timezone.utc)}}
+                )
+            
+            if veloxtrades_users is not None:
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(investment['user_id'])},
+                    {'$inc': {'wallet.total_invested': investment['amount']}}
+                )
+            
+            return jsonify({'success': True, 'message': 'Investment approved'})
+            
+        elif action == 'reject':
+            if veloxtrades_users is not None:
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(investment['user_id'])},
+                    {'$inc': {'wallet.balance': investment['amount']}}
+                )
+            
+            if veloxtrades_investments is not None:
+                veloxtrades_investments.update_one(
+                    {'_id': ObjectId(investment_id)},
+                    {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
+                )
+            
+            return jsonify({'success': True, 'message': 'Investment rejected, refunded'})
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+"""
+
+
+# ==================== TEMPORARY PLACEHOLDER FUNCTIONS ====================
+# These placeholder functions prevent 404 errors while we fix the main ones
+
+@app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_investments_placeholder():
+    """Temporary placeholder - returns empty list"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    return add_cors_headers(jsonify({
+        'success': True,
+        'data': {
+            'investments': [],
+            'total': 0,
+            'page': 1,
+            'pages': 1
+        }
+    }))
+
+
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_process_investment_placeholder(investment_id):
+    """Temporary placeholder - returns success message"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    return add_cors_headers(jsonify({
+        'success': True,
+        'message': 'Investment processing is temporarily disabled while we fix the code. Please try again later.',
+        'data': {'investment_id': investment_id}
+    }))
+
+
+# ==================== ADMIN - TRANSACTIONS (WORKING) ====================
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_transactions():
-    """Get all transactions for admin"""
-    
     if request.method == "OPTIONS":
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
@@ -3264,51 +3424,59 @@ def admin_get_transactions():
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
     
-    page = int(request.args.get('page', 1))
-    limit = int(request.args.get('limit', 50))
-    tx_type = request.args.get('type', 'all')
-    skip = (page - 1) * limit
-    
-    query = {}
-    if tx_type != 'all':
-        query['type'] = tx_type
-    
-    transactions = []
-    total = 0
-    
-    if transactions_collection is not None:
-        try:
-            total = transactions_collection.count_documents(query)
-            cursor = transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
-            transactions = list(cursor)
-        except Exception as e:
-            print(f"Error fetching transactions: {e}")
-            transactions = []
-    
-    result_transactions = []
-    for tx in transactions:
-        try:
-            tx_copy = dict(tx)
-            tx_copy['_id'] = str(tx_copy['_id'])
-            if 'created_at' in tx_copy and isinstance(tx_copy['created_at'], datetime):
-                tx_copy['created_at'] = tx_copy['created_at'].isoformat()
-            result_transactions.append(tx_copy)
-        except Exception as e:
-            print(f"Error formatting transaction: {e}")
-            continue
-    
-    total_pages = (total + limit - 1) // limit if total > 0 else 1
-    
-    response = jsonify({
-        'success': True,
-        'data': {
-            'transactions': result_transactions,
-            'total': total,
-            'page': page,
-            'pages': total_pages
-        }
-    })
-    return add_cors_headers(response)
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))
+        tx_type = request.args.get('type', 'all')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if tx_type != 'all':
+            query['type'] = tx_type
+        
+        transactions = []
+        total = 0
+        
+        if transactions_collection is not None:
+            try:
+                total = transactions_collection.count_documents(query)
+                cursor = transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                transactions = list(cursor)
+            except Exception as e:
+                print(f"Error fetching transactions: {e}")
+                transactions = []
+        
+        formatted = []
+        for tx in transactions:
+            try:
+                tx_copy = dict(tx)
+                tx_copy['_id'] = str(tx_copy['_id'])
+                if tx_copy.get('created_at'):
+                    tx_copy['created_at'] = tx_copy['created_at'].isoformat()
+                formatted.append(tx_copy)
+            except Exception as e:
+                print(f"Error formatting transaction: {e}")
+                continue
+        
+        total_pages = (total + limit - 1) // limit if total > 0 else 1
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'transactions': formatted,
+                'total': total,
+                'page': page,
+                'pages': total_pages
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 Get admin transactions error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({'success': True, 'data': {'transactions': [], 'total': 0}})
+        return add_cors_headers(response)
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
