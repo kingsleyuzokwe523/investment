@@ -2605,16 +2605,16 @@ def admin_get_deposits():
         deposits = []
         total = 0
         
-        # Try veloxtrades_deposits first (primary)
-        if veloxtrades_deposits is not None:
-            try:
-                total = veloxtrades_deposits.count_documents(query)
-                cursor = veloxtrades_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
-                deposits = list(cursor)
-                logger.info(f"Fetched {len(deposits)} deposits from veloxtrades_deposits, total: {total}")
-            except Exception as e:
-                logger.error(f"Error fetching from veloxtrades_deposits: {e}", exc_info=True)
-        
+     # Try investment_deposits
+if deposit is None and investment_deposits is not None:
+    try:
+        deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+        if deposit:
+            deposit_collection_used = investment_deposits
+            print(f"✅ Found deposit in investment_deposits")
+            print(f"📧 Email: {target_user.get('email')}")  # This line should have print
+    except Exception as e:
+        print(f"Error in investment_deposits: {e}")
         # If no deposits found, try investment_deposits
         if len(deposits) == 0 and investment_deposits is not None:
             try:
