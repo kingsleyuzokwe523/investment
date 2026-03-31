@@ -3584,7 +3584,9 @@ def admin_process_investment(investment_id):
                     'user': user.get('username'),
                     'email_sent': email_sent,
                     'refunded': True
-                }@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+
+# ==================== ADMIN - INVESTMENT PROCESSING ====================
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_investment(investment_id):
     """Admin approves or rejects investment request"""
@@ -3670,13 +3672,11 @@ def admin_process_investment(investment_id):
                 try:
                     investment_collection_used.update_one(
                         {'_id': ObjectId(investment_id)},
-                        {
-                            '$set': {
-                                'status': 'active',
-                                'approved_at': datetime.now(timezone.utc),
-                                'approved_by': str(get_user_from_request()['_id'])
-                            }
-                        }
+                        {'$set': {
+                            'status': 'active',
+                            'approved_at': datetime.now(timezone.utc),
+                            'approved_by': str(get_user_from_request()['_id'])
+                        }}
                     )
                     print(f"✅ Investment status updated to active")
                 except Exception as e:
@@ -3708,12 +3708,10 @@ def admin_process_investment(investment_id):
                 try:
                     transactions_collection.update_one(
                         {'investment_id': investment_id, 'type': 'investment_request'},
-                        {
-                            '$set': {
-                                'status': 'completed',
-                                'description': f'Investment in {investment["plan_name"]} - Active (Profit: ${investment["expected_profit"]:,.2f})'
-                            }
-                        }
+                        {'$set': {
+                            'status': 'completed',
+                            'description': f'Investment in {investment["plan_name"]} - Active (Profit: ${investment["expected_profit"]:,.2f})'
+                        }}
                     )
                     print(f"✅ Updated investment_request transaction")
                 except Exception as e:
@@ -3802,14 +3800,12 @@ def admin_process_investment(investment_id):
                 try:
                     investment_collection_used.update_one(
                         {'_id': ObjectId(investment_id)},
-                        {
-                            '$set': {
-                                'status': 'rejected',
-                                'rejection_reason': reason,
-                                'rejected_at': datetime.now(timezone.utc),
-                                'rejected_by': str(get_user_from_request()['_id'])
-                            }
-                        }
+                        {'$set': {
+                            'status': 'rejected',
+                            'rejection_reason': reason,
+                            'rejected_at': datetime.now(timezone.utc),
+                            'rejected_by': str(get_user_from_request()['_id'])
+                        }}
                     )
                     print(f"✅ Investment status updated to rejected")
                 except Exception as e:
@@ -3820,12 +3816,10 @@ def admin_process_investment(investment_id):
                 try:
                     transactions_collection.update_one(
                         {'investment_id': investment_id, 'type': 'investment_request'},
-                        {
-                            '$set': {
-                                'status': 'failed',
-                                'description': f'Investment request rejected: {reason} (Refunded ${investment["amount"]:,.2f})'
-                            }
-                        }
+                        {'$set': {
+                            'status': 'failed',
+                            'description': f'Investment request rejected: {reason} (Refunded ${investment["amount"]:,.2f})'
+                        }}
                     )
                     print(f"✅ Updated investment_request transaction")
                 except Exception as e:
@@ -3884,6 +3878,8 @@ def admin_process_investment(investment_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
+
+
 @require_admin
 def admin_resend_deposit_emails():
     try:
