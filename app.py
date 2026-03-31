@@ -615,17 +615,37 @@ def get_email_template(title, content, button_text=None, button_link=None):
     <style>body{{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0;}} .container{{max-width:600px;margin:0 auto;padding:20px;}} .header{{background:linear-gradient(135deg,#10b981,#059669);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0;}} .content{{background:white;padding:30px;border-radius:0 0 10px 10px;}} .footer{{text-align:center;padding:20px;font-size:12px;color:#666;}}</style>
     </head><body><div class="container"><div class="header"><h1>VELOXTRADES</h1></div><div class="content"><h2>{title}</h2>{content}{button_html}</div><div class="footer"><p>© 2025 Veloxtrades</p></div></div></body></html>'''
 
-
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
     try:
         subject = f"✅ Deposit Approved - ${amount:,.2f} added"
         user_name = user.get('full_name', user.get('username', 'User'))
-        plain_body = f"Dear {user_name},\n\nYour deposit of ${amount:,.2f} has been APPROVED!\n\nAmount: ${amount:,.2f}\nMethod: {crypto.upper()}\n\nThank you!"
-        content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>✅ DEPOSIT APPROVED!</strong></p><p>Amount: ${amount:,.2f}</p></div>'
+        user_email = user.get('email')
+        
+        print(f"📧 Sending approval email to: {user_email}")
+        
+        plain_body = f"""Dear {user_name},
+
+Your deposit of ${amount:,.2f} has been APPROVED!
+
+Amount: ${amount:,.2f}
+Method: {crypto.upper()}
+Transaction: {transaction_hash or 'N/A'}
+
+Thank you for choosing Veloxtrades!
+
+Best regards,
+Veloxtrades Team"""
+        
+        content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>✅ DEPOSIT APPROVED!</strong></p><p>Amount: ${amount:,.2f}</p><p>Method: {crypto.upper()}</p></div>'
         html_body = get_email_template(subject, content, 'Go to Dashboard', f'{FRONTEND_URL}/dashboard.html')
-        return send_email(user['email'], subject, plain_body, html_body)
+        
+        result = send_email(user_email, subject, plain_body, html_body)
+        print(f"📧 Email send result: {result}")
+        return result
     except Exception as e:
-        logger.error(f"Error in send_deposit_approved_email: {e}")
+        print(f"❌ Error in send_deposit_approved_email: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
@@ -706,6 +726,7 @@ INVESTMENT_PLANS = {
 }
 
 # ==================== AUTO-PROFIT SCHEDULER ====================
+
 def process_investment_profits():
     if investments_collection is None:
         return
@@ -2388,26 +2409,42 @@ def admin_process_deposit(deposit_id):
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
     
-    # Verify admin
-    user = get_user_from_request()
-    if not user or not user.get('is_admin'):
-        return jsonify({'success': False, 'message': 'Admin access required'}), 403
-    
     try:
+        print(f"\n🔵 ===== PROCESSING DEPOSIT =====")
+        print(f"Deposit ID: {deposit_id}")
+        
+        # Get admin user
+        user = get_user_from_request()
+        if not user:
+            print(f"❌ No user found in request")
+            return jsonify({'success': False, 'message': 'Authentication required'}), 401
+        
+        if not user.get('is_admin'):
+            print(f"❌ User {user.get('username')} is not admin")
+            return jsonify({'success': False, 'message': 'Admin access required'}), 403
+        
+        print(f"✅ Admin authenticated: {user.get('username')}")
+        
+        # Get request data
         data = request.get_json()
         if not data:
+            print(f"❌ No data provided")
             return jsonify({'success': False, 'message': 'No data provided'}), 400
         
         action = data.get('action')
         reason = data.get('reason', '')
         
-        print(f"🔵 ===== PROCESSING DEPOSIT =====")
-        print(f"Deposit ID: {deposit_id}")
-        print(f"Action: {action}")
+        print(f"Action: {action}, Reason: {reason}")
+        
+        if action not in ['approve', 'reject']:
+            print(f"❌ Invalid action: {action}")
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
         # ========== FIND DEPOSIT ==========
         deposit = None
         deposit_collection_used = None
+        
+        print(f"🔍 Searching for deposit with ID: {deposit_id}")
         
         # Try veloxtrades_deposits
         if veloxtrades_deposits is not None:
@@ -2430,19 +2467,24 @@ def admin_process_deposit(deposit_id):
                 print(f"Error in investment_deposits: {e}")
         
         if not deposit:
+            print(f"❌ Deposit {deposit_id} NOT FOUND in any database")
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
-        print(f"📝 Deposit: Amount=${deposit.get('amount')}, Status={deposit.get('status')}, User={deposit.get('user_id')}")
+        print(f"📝 Deposit found: Amount=${deposit.get('amount')}, Status={deposit.get('status')}, User ID={deposit.get('user_id')}")
         
         # ========== FIND USER ==========
         target_user = None
         user_id = deposit.get('user_id')
         
+        print(f"🔍 Searching for user with ID: {user_id}")
+        
         if veloxtrades_users is not None:
             try:
                 target_user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
                 if target_user:
-                    print(f"✅ Found user in veloxtrades_users: {target_user.get('username')} | Email: {target_user.get('email')}")
+                    print(f"✅ Found user in veloxtrades_users: {target_user.get('username')}")
+                    print(f"📧 User email: {target_user.get('email')}")
+                    print(f"💰 Current balance: ${target_user.get('wallet', {}).get('balance', 0)}")
             except Exception as e:
                 print(f"Error in veloxtrades_users: {e}")
         
@@ -2451,10 +2493,12 @@ def admin_process_deposit(deposit_id):
                 target_user = investment_users.find_one({'_id': ObjectId(user_id)})
                 if target_user:
                     print(f"✅ Found user in investment_users: {target_user.get('username')}")
+                    print(f"📧 User email: {target_user.get('email')}")
             except Exception as e:
                 print(f"Error in investment_users: {e}")
         
         if not target_user:
+            print(f"❌ User {user_id} NOT FOUND")
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
         if action == 'approve':
@@ -2463,12 +2507,10 @@ def admin_process_deposit(deposit_id):
             # ========== UPDATE USER BALANCE ==========
             old_balance = target_user.get('wallet', {}).get('balance', 0)
             new_balance = old_balance + deposit['amount']
-            old_deposited = target_user.get('wallet', {}).get('total_deposited', 0)
-            new_deposited = old_deposited + deposit['amount']
             
             print(f"📊 Old balance: ${old_balance}")
             print(f"📊 Adding: ${deposit['amount']}")
-            print(f"📊 New balance: ${new_balance}")
+            print(f"📊 New balance should be: ${new_balance}")
             
             # Update in veloxtrades_users
             balance_updated = False
@@ -2484,7 +2526,11 @@ def admin_process_deposit(deposit_id):
                         }
                     )
                     balance_updated = result.modified_count > 0
-                    print(f"✅ veloxtrades_users updated: {balance_updated}")
+                    print(f"✅ veloxtrades_users updated: {balance_updated} (modified_count={result.modified_count})")
+                    
+                    # Verify the update
+                    verify_user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                    print(f"✅ Verified new balance: ${verify_user.get('wallet', {}).get('balance', 0)}")
                 except Exception as e:
                     print(f"❌ Error updating veloxtrades_users: {e}")
             
@@ -2550,6 +2596,7 @@ def admin_process_deposit(deposit_id):
             # ========== SEND EMAIL ==========
             email_sent = False
             try:
+                print(f"📧 Attempting to send email to: {target_user.get('email')}")
                 email_sent = send_deposit_approved_email(
                     target_user,
                     deposit['amount'],
@@ -2559,6 +2606,7 @@ def admin_process_deposit(deposit_id):
                 print(f"✅ Email sent: {email_sent}")
             except Exception as e:
                 print(f"❌ Error sending email: {e}")
+                print(f"Email error details: {traceback.format_exc()}")
             
             # ========== ADD REFERRAL COMMISSION ==========
             try:
@@ -2569,22 +2617,29 @@ def admin_process_deposit(deposit_id):
             
             print(f"🎉 ===== DEPOSIT APPROVED SUCCESSFULLY =====")
             print(f"   User: {target_user.get('username')}")
+            print(f"   Email: {target_user.get('email')}")
             print(f"   Amount: ${deposit['amount']}")
             print(f"   Balance updated: {balance_updated}")
             print(f"   Email sent: {email_sent}")
             print(f"   New balance: ${new_balance}")
             
-            return jsonify({
+            response_data = {
                 'success': True,
                 'message': f'Deposit approved successfully! ${deposit["amount"]} added to {target_user.get("username")}',
                 'data': {
                     'amount': deposit['amount'],
                     'user': target_user.get('username'),
+                    'email': target_user.get('email'),
                     'new_balance': new_balance,
                     'email_sent': email_sent,
                     'balance_updated': balance_updated
                 }
-            })
+            }
+            
+            response = jsonify(response_data)
+            response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
             
         elif action == 'reject':
             print(f"❌ REJECTING DEPOSIT for {target_user.get('username')}")
@@ -2620,6 +2675,7 @@ def admin_process_deposit(deposit_id):
             # Send rejection email
             email_sent = False
             try:
+                print(f"📧 Attempting to send rejection email to: {target_user.get('email')}")
                 email_sent = send_deposit_rejected_email(
                     target_user,
                     deposit['amount'],
@@ -2629,12 +2685,18 @@ def admin_process_deposit(deposit_id):
                 print(f"✅ Rejection email sent: {email_sent}")
             except Exception as e:
                 print(f"❌ Error sending email: {e}")
+                print(f"Email error details: {traceback.format_exc()}")
             
-            return jsonify({
+            response_data = {
                 'success': True,
                 'message': f'Deposit rejected!',
                 'data': {'email_sent': email_sent}
-            })
+            }
+            
+            response = jsonify(response_data)
+            response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
@@ -2643,8 +2705,11 @@ def admin_process_deposit(deposit_id):
         print(f"Error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
-
+        
+        error_response = jsonify({'success': False, 'message': f'Server error: {str(e)}'})
+        error_response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        error_response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return error_response, 500
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_investment(investment_id):
@@ -3070,7 +3135,26 @@ def admin_get_withdrawals():
         logger.error(f"Get withdrawals error: {e}", exc_info=True)
         return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
 
-
+@app.route('/api/admin/test-email', methods=['GET', 'OPTIONS'])
+@require_admin
+def test_email():
+    """Test email configuration"""
+    try:
+        test_email = "test@example.com"  # Replace with your email to test
+        subject = "Test Email from Veloxtrades"
+        body = "This is a test email to verify email configuration."
+        
+        result = send_email(test_email, subject, body)
+        
+        return jsonify({
+            'success': result,
+            'message': 'Email sent' if result else 'Email failed',
+            'email_configured': EMAIL_CONFIGURED,
+            'email_user': EMAIL_USER,
+            'email_host': EMAIL_HOST
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_withdrawal(withdrawal_id):
