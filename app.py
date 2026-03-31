@@ -3453,8 +3453,6 @@ def admin_process_investment(investment_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
-            # ========== UPDATE INVESTMENT STATUS ==========
-
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
