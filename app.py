@@ -403,7 +403,17 @@ def check_email_configuration():
     except Exception as e:
         return False, f"Email error: {str(e)}"
 
-
+def send_investment_rejected_email(user, amount, plan_name, reason):
+    try:
+        subject = f"❌ Investment Request Rejected - ${amount:,.2f}"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        plain_body = f"Dear {user_name},\n\nYour investment request of ${amount:,.2f} in {plan_name} was REJECTED.\n\nReason: {reason}\n\nFunds have been refunded to your balance."
+        content = f'<p>Dear {user_name},</p><div style="background:#fee2e2;padding:15px;"><p><strong>❌ INVESTMENT REJECTED</strong></p><p>Amount: ${amount:,.2f}<br>Plan: {plan_name}<br>Reason: {reason}</p><p>Your funds have been refunded.</p></div>'
+        html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
+        return send_email(user['email'], subject, plain_body, html_body)
+    except Exception as e:
+        logger.error(f"Error in send_investment_rejected_email: {e}")
+        return False
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -665,12 +675,35 @@ def send_investment_completed_email(user, amount, plan_name, profit):
 
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
-    'standard': {'name': 'Standard Plan', 'roi': 8, 'duration_hours': 20, 'min_deposit': 50, 'max_deposit': 999},
-    'advanced': {'name': 'Advanced Plan', 'roi': 18, 'duration_hours': 48, 'min_deposit': 1000, 'max_deposit': 5000},
-    'professional': {'name': 'Professional Plan', 'roi': 35, 'duration_hours': 96, 'min_deposit': 5001, 'max_deposit': 10000},
-    'classic': {'name': 'Classic Plan', 'roi': 50, 'duration_hours': 144, 'min_deposit': 10001, 'max_deposit': float('inf')}
+    'standard': {
+        'name': 'Standard Plan',
+        'roi': 8,  # 8% profit
+        'duration_hours': 20,
+        'min_deposit': 50,
+        'max_deposit': 999
+    },
+    'advanced': {
+        'name': 'Advanced Plan',
+        'roi': 18,
+        'duration_hours': 48,
+        'min_deposit': 1000,
+        'max_deposit': 5000
+    },
+    'professional': {
+        'name': 'Professional Plan',
+        'roi': 35,
+        'duration_hours': 96,
+        'min_deposit': 5001,
+        'max_deposit': 10000
+    },
+    'classic': {
+        'name': 'Classic Plan',
+        'roi': 50,
+        'duration_hours': 144,
+        'min_deposit': 10001,
+        'max_deposit': float('inf')
+    }
 }
-
 
 # ==================== AUTO-PROFIT SCHEDULER ====================
 def process_investment_profits():
@@ -1145,18 +1178,22 @@ def create_investment():
         if not plan:
             return jsonify({'success': False, 'message': 'Invalid plan'}), 400
         
-        # Check if amount is within plan limits
+        # Check amount limits
         if amount < plan['min_deposit']:
             return jsonify({'success': False, 'message': f'Minimum investment for {plan["name"]} is ${plan["min_deposit"]}'}), 400
         if amount > plan['max_deposit']:
             return jsonify({'success': False, 'message': f'Maximum investment for {plan["name"]} is ${plan["max_deposit"]}'}), 400
         
-        # Check if user has enough balance
+        # Check balance
         wallet_balance = user.get('wallet', {}).get('balance', 0)
         if wallet_balance < amount:
             return jsonify({'success': False, 'message': 'Insufficient balance'}), 400
         
-        # CRITICAL: DEDUCT BALANCE IMMEDIATELY (like deposit)
+        # Calculate expected profit
+        expected_profit = amount * plan['roi'] / 100
+        end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
+        
+        # ========== DEDUCT BALANCE IMMEDIATELY ==========
         if veloxtrades_users is not None:
             veloxtrades_users.update_one(
                 {'_id': user['_id']}, 
@@ -1168,10 +1205,7 @@ def create_investment():
                 {'$inc': {'wallet.balance': -amount}}
             )
         
-        # Create investment request with status 'pending'
-        expected_profit = amount * plan['roi'] / 100
-        end_date = datetime.now(timezone.utc) + timedelta(hours=plan['duration_hours'])
-        
+        # Create investment request (PENDING status)
         investment_data = {
             'investment_id': 'INV-' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=12)),
             'user_id': str(user['_id']),
@@ -1184,7 +1218,7 @@ def create_investment():
             'duration_hours': plan['duration_hours'],
             'start_date': datetime.now(timezone.utc),
             'end_date': end_date,
-            'status': 'pending',  # PENDING - needs admin approval
+            'status': 'pending',  # PENDING - waiting for admin approval
             'created_at': datetime.now(timezone.utc)
         }
         
@@ -1206,7 +1240,7 @@ def create_investment():
         create_notification(
             user['_id'],
             'Investment Request Submitted 📝',
-            f'Your investment request of ${amount:,.2f} in {plan["name"]} has been submitted and is pending admin approval.',
+            f'Your investment request of ${amount:,.2f} in {plan["name"]} has been submitted. Expected profit: ${expected_profit:,.2f}',
             'info'
         )
         
@@ -1217,6 +1251,7 @@ def create_investment():
                 'investment_id': str(result.inserted_id),
                 'amount': amount,
                 'plan': plan['name'],
+                'expected_profit': expected_profit,
                 'status': 'pending'
             }
         }))
@@ -1225,7 +1260,95 @@ def create_investment():
         logger.error(f"Investment error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
+def process_investment_profits():
+    """Auto-process completed investments and add profit to user balance"""
+    if investments_collection is None:
+        return
+    
+    try:
+        logger.info("🔄 Processing investment profits...")
+        
+        # Find all active investments that have ended
+        cursor = investments_collection.find({
+            'status': 'active',
+            'end_date': {'$lte': datetime.now(timezone.utc)}
+        })
+        
+        processed = 0
+        for inv in cursor:
+            try:
+                user_id = inv['user_id']
+                profit = inv.get('expected_profit', 0)
+                amount = inv.get('amount', 0)
+                
+                # ========== ADD PROFIT TO USER BALANCE ==========
+                if veloxtrades_users is not None:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {
+                            'wallet.balance': profit,
+                            'wallet.total_profit': profit
+                        }}
+                    )
+                if investment_users is not None:
+                    investment_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {
+                            'wallet.balance': profit,
+                            'wallet.total_profit': profit
+                        }}
+                    )
+                
+                # ========== MARK INVESTMENT AS COMPLETED ==========
+                investments_collection.update_one(
+                    {'_id': inv['_id']},
+                    {'$set': {
+                        'status': 'completed',
+                        'completed_at': datetime.now(timezone.utc)
+                    }}
+                )
+                
+                # ========== CREATE PROFIT TRANSACTION ==========
+                if transactions_collection is not None:
+                    transactions_collection.insert_one({
+                        'user_id': user_id,
+                        'type': 'profit',
+                        'amount': profit,
+                        'status': 'completed',
+                        'description': f'Profit from {inv.get("plan_name", "Investment")} - ${profit:,.2f}',
+                        'investment_id': str(inv['_id']),
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                
+                # ========== NOTIFY USER ==========
+                create_notification(
+                    user_id,
+                    'Investment Completed! 🎉',
+                    f'Your investment of ${amount:,.2f} in {inv.get("plan_name", "Investment")} has completed! You earned ${profit:,.2f} profit!',
+                    'success'
+                )
+                
+                # ========== GET USER FOR EMAIL ==========
+                user = None
+                if veloxtrades_users is not None:
+                    user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                if user is None and investment_users is not None:
+                    user = investment_users.find_one({'_id': ObjectId(user_id)})
+                
+                # ========== SEND COMPLETION EMAIL ==========
+                if user:
+                    send_investment_completed_email(user, amount, inv.get('plan_name', 'Investment'), profit)
+                
+                processed += 1
+                logger.info(f"✅ Processed investment profit for {user.get('username')}: +${profit}")
+                
+            except Exception as e:
+                logger.error(f"Error processing investment {inv.get('_id')}: {e}")
+        
+        logger.info(f"✅ Processed {processed} completed investments")
+        
+    except Exception as e:
+        logger.error(f"Error in profit processing: {e}")
 # ==================== TRANSACTION ENDPOINTS ====================
 def get_transactions():
     user = get_user_from_request()
@@ -2529,6 +2652,216 @@ def admin_process_deposit(deposit_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
+
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_process_investment(investment_id):
+    """Admin approves or rejects investment request"""
+    
+    try:
+        data = request.get_json()
+        action = data.get('action')
+        reason = data.get('reason', '')
+        
+        print(f"🔵 Processing investment {investment_id}, action: {action}")
+        
+        # Find investment
+        investment = None
+        investment_collection_used = None
+        
+        if veloxtrades_investments is not None:
+            try:
+                investment = veloxtrades_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = veloxtrades_investments
+            except:
+                pass
+        
+        if investment is None and investment_investments is not None:
+            try:
+                investment = investment_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = investment_investments
+            except:
+                pass
+        
+        if investment is None and investments_collection is not None:
+            try:
+                investment = investments_collection.find_one({'_id': ObjectId(investment_id)})
+                investment_collection_used = investments_collection
+            except:
+                pass
+        
+        if not investment:
+            return jsonify({'success': False, 'message': 'Investment not found'}), 404
+        
+        # Find user
+        user = None
+        user_id = investment.get('user_id')
+        
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+            except:
+                pass
+        
+        if user is None and investment_users is not None:
+            try:
+                user = investment_users.find_one({'_id': ObjectId(user_id)})
+            except:
+                pass
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if action == 'approve':
+            print(f"💰 Approving investment for {user.get('username')}")
+            
+            # ========== UPDATE INVESTMENT STATUS ==========
+            if investment_collection_used is not None:
+                investment_collection_used.update_one(
+                    {'_id': ObjectId(investment_id)},
+                    {'$set': {
+                        'status': 'active',
+                        'approved_at': datetime.now(timezone.utc),
+                        'approved_by': str(get_user_from_request()['_id'])
+                    }}
+                )
+            
+            # ========== UPDATE USER'S TOTAL INVESTED ==========
+            if veloxtrades_users is not None:
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(user_id)},
+                    {'$inc': {'wallet.total_invested': investment['amount']}}
+                )
+            if investment_users is not None:
+                investment_users.update_one(
+                    {'_id': ObjectId(user_id)},
+                    {'$inc': {'wallet.total_invested': investment['amount']}}
+                )
+            
+            # ========== UPDATE TRANSACTION ==========
+            if transactions_collection is not None:
+                # Update the pending request
+                transactions_collection.update_one(
+                    {'investment_id': investment_id, 'type': 'investment_request'},
+                    {'$set': {
+                        'status': 'completed',
+                        'description': f'Investment in {investment["plan_name"]} - Active (Profit: ${investment["expected_profit"]:,.2f})'
+                    }}
+                )
+                
+                # Add investment record
+                transactions_collection.insert_one({
+                    'user_id': str(user_id),
+                    'type': 'investment',
+                    'amount': investment['amount'],
+                    'status': 'completed',
+                    'description': f'Investment in {investment["plan_name"]} - ${investment["amount"]:,.2f} at {investment["roi"]}% ROI',
+                    'investment_id': investment_id,
+                    'created_at': datetime.now(timezone.utc)
+                })
+            
+            # ========== NOTIFY USER ==========
+            create_notification(
+                user_id,
+                'Investment Approved! 🎉',
+                f'Your investment of ${investment["amount"]:,.2f} in {investment["plan_name"]} has been approved! Expected profit: ${investment["expected_profit"]:,.2f} after {investment["duration_hours"]} hours.',
+                'success'
+            )
+            
+            # ========== SEND EMAIL ==========
+            send_investment_confirmation_email(
+                user,
+                investment['amount'],
+                investment['plan_name'],
+                investment['roi'],
+                investment['expected_profit']
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment approved successfully!',
+                'data': {
+                    'amount': investment['amount'],
+                    'user': user.get('username'),
+                    'expected_profit': investment['expected_profit'],
+                    'duration_hours': investment['duration_hours'],
+                    'end_date': investment['end_date'].isoformat() if investment.get('end_date') else None
+                }
+            })
+            
+        elif action == 'reject':
+            print(f"❌ Rejecting investment for {user.get('username')}")
+            
+            # ========== REFUND USER BALANCE (Money was deducted at request) ==========
+            if veloxtrades_users is not None:
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(user_id)},
+                    {'$inc': {'wallet.balance': investment['amount']}}
+                )
+            if investment_users is not None:
+                investment_users.update_one(
+                    {'_id': ObjectId(user_id)},
+                    {'$inc': {'wallet.balance': investment['amount']}}
+                )
+            
+            # ========== UPDATE INVESTMENT STATUS ==========
+            if investment_collection_used is not None:
+                investment_collection_used.update_one(
+                    {'_id': ObjectId(investment_id)},
+                    {'$set': {
+                        'status': 'rejected',
+                        'rejection_reason': reason,
+                        'rejected_at': datetime.now(timezone.utc),
+                        'rejected_by': str(get_user_from_request()['_id'])
+                    }}
+                )
+            
+            # ========== UPDATE TRANSACTION ==========
+            if transactions_collection is not None:
+                transactions_collection.update_one(
+                    {'investment_id': investment_id, 'type': 'investment_request'},
+                    {'$set': {
+                        'status': 'failed',
+                        'description': f'Investment request rejected: {reason} (Refunded ${investment["amount"]:,.2f})'
+                    }}
+                )
+                
+                # Add refund transaction
+                transactions_collection.insert_one({
+                    'user_id': str(user_id),
+                    'type': 'refund',
+                    'amount': investment['amount'],
+                    'status': 'completed',
+                    'description': f'Refund for rejected investment in {investment["plan_name"]} - Reason: {reason}',
+                    'investment_id': investment_id,
+                    'created_at': datetime.now(timezone.utc)
+                })
+            
+            # ========== NOTIFY USER ==========
+            create_notification(
+                user_id,
+                'Investment Rejected ❌',
+                f'Your investment request of ${investment["amount"]:,.2f} was rejected. Reason: {reason}. ${investment["amount"]:,.2f} has been refunded to your balance.',
+                'error'
+            )
+            
+            # ========== SEND REJECTION EMAIL ==========
+            send_investment_rejected_email(user, investment['amount'], investment['plan_name'], reason)
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment rejected and ${investment["amount"]:,.2f} refunded to user!'
+            })
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
+            
+    except Exception as e:
+        logger.error(f"Process investment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 @require_admin
 def admin_resend_deposit_emails():
     try:
