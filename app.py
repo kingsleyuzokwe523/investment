@@ -3659,8 +3659,11 @@ def admin_complete_investment(investment_id):
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_transactions():
+    if request.method == 'OPTIONS':
+        return add_cors_headers(jsonify({'success': True})), 200
+
     if transactions_collection is None:
-        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+        return add_cors_headers(jsonify({'success': True, 'data': {'transactions': [], 'total': 0}})), 200
     
     try:
         page = int(request.args.get('page', 1))
@@ -3674,8 +3677,10 @@ def admin_get_transactions():
         
         total = transactions_collection.count_documents(query)
         
-        # FIXED: Use list of tuples for sort
-        transactions = list(transactions_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
+        # FIXED: In PyMongo 4.0+, use two separate arguments or a simple list
+        # We use .sort('field', direction) for reliability
+        cursor = transactions_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)
+        transactions = list(cursor)
         
         result_transactions = []
         for tx in transactions:
@@ -3685,7 +3690,11 @@ def admin_get_transactions():
             
             if users_collection is not None and 'user_id' in tx:
                 try:
-                    user = users_collection.find_one({'_id': ObjectId(tx['user_id'])})
+                    # Handle user_id regardless of whether it's an ObjectId or String
+                    u_id = tx['user_id']
+                    user_lookup = ObjectId(u_id) if isinstance(u_id, str) and len(u_id) == 24 else u_id
+                    user = users_collection.find_one({'_id': user_lookup})
+                    
                     tx['user'] = {
                         'username': user.get('username', 'Unknown') if user else 'Unknown',
                         'email': user.get('email', '') if user else ''
@@ -3696,7 +3705,7 @@ def admin_get_transactions():
                 tx['user'] = {'username': 'Unknown', 'email': ''}
             result_transactions.append(tx)
         
-        response = jsonify({
+        response_data = {
             'success': True,
             'data': {
                 'transactions': result_transactions,
@@ -3704,11 +3713,14 @@ def admin_get_transactions():
                 'page': page,
                 'pages': (total + limit - 1) // limit if total > 0 else 1
             }
-        })
-        return add_cors_headers(response)
+        }
+        return add_cors_headers(jsonify(response_data))
+
     except Exception as e:
         logger.error(f"Get admin transactions error: {e}", exc_info=True)
-        return jsonify({'success': True, 'data': {'transactions': [], 'total': 0}}), 200
+        # Ensure we still return a valid response structure and CORS headers
+        err_res = jsonify({'success': False, 'message': str(e), 'data': {'transactions': [], 'total': 0}})
+        return add_cors_headers(err_res), 200
 
 
 # ==================== ADMIN - CREATE TRANSACTION ====================
