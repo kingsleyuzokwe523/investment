@@ -2592,6 +2592,9 @@ def admin_delete_user(user_id):
 # ADMIN - DEPOSIT & INVESTMENT ENDPOINTS (TEMPORARILY DISABLED FOR DEPLOYMENT)
 # ============================================================================
 
+# ============================================================================
+# ADMIN - DEPOSIT PROCESSING
+# ============================================================================
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
@@ -2602,18 +2605,9 @@ def admin_process_deposit(deposit_id):
     return jsonify({'success': False, 'message': 'Deposit processing temporarily disabled'}), 503
 
 
-
-
-@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_process_investment(investment_id):
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        return response
-    return jsonify({'success': False, 'message': 'Investment processing temporarily disabled'}), 503
-
-
+# ============================================================================
+# ADMIN - DEPOSIT EMAIL RESEND
+# ============================================================================
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_single_deposit_email(deposit_id):
@@ -2624,95 +2618,37 @@ def admin_resend_single_deposit_email(deposit_id):
     return jsonify({'success': False, 'message': 'Email resend temporarily disabled'}), 503
 
 
-
-@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
-def admin_resend_single_deposit_email(deposit_id):
-    # Handle OPTIONS preflight request
+@app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_deposit_emails():
     if request.method == "OPTIONS":
         response = make_response()
-        origin = request.headers.get('Origin', 'https://www.veloxtrades.com.ng')
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
         return response
-    
-    # Verify admin
-    user = get_user_from_request()
-    if not user or not user.get('is_admin'):
-        return jsonify({'success': False, 'message': 'Admin access required'}), 403
-    
-    try:
-        print(f"🔵 Resending email for deposit {deposit_id}")
-        
-        # Find deposit - check with is not None
-        deposit = None
-        if veloxtrades_deposits is not None:
-            try:
-                deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
-                if deposit:
-                    print(f"✅ Found deposit in veloxtrades_deposits")
-            except:
-                pass
-        
-        if deposit is None and investment_deposits is not None:
-            try:
-                deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
-                if deposit:
-                    print(f"✅ Found deposit in investment_deposits")
-            except:
-                pass
-        
-        if not deposit:
-            print(f"❌ Deposit not found")
-            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
-        
-        # Find user
-        target_user = None
-        if veloxtrades_users is not None:
-            try:
-                target_user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
-            except:
-                pass
-        
-        if target_user is None and investment_users is not None:
-            try:
-                target_user = investment_users.find_one({'_id': ObjectId(deposit['user_id'])})
-            except:
-                pass
-        
-        if not target_user:
-            print(f"❌ User not found")
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        # Send email based on status
-        email_sent = False
-        if deposit['status'] == 'approved':
-            print(f"📧 Sending approval email to {target_user.get('email')}")
-            email_sent = send_deposit_approved_email(
-                target_user,
-                deposit['amount'],
-                deposit.get('crypto', 'USDT'),
-                deposit.get('transaction_hash')
-            )
-        elif deposit['status'] == 'rejected':
-            print(f"📧 Sending rejection email to {target_user.get('email')}")
-            email_sent = send_deposit_rejected_email(
-                target_user,
-                deposit['amount'],
-                deposit.get('crypto', 'USDT'),
-                deposit.get('rejection_reason', 'Not specified')
-            )
-        
-        print(f"✅ Email sent: {email_sent}")
-        
-        return jsonify({'success': email_sent, 'message': 'Email resent' if email_sent else 'Failed to send'})
-        
-    except Exception as e:
-        print(f"🔥 ERROR in resend-email: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
+    return jsonify({'success': False, 'message': 'Bulk email resend temporarily disabled'}), 503
+
+
+# ============================================================================
+# ADMIN - INVESTMENT ENDPOINTS
+# ============================================================================
+@app.route('/api/admin/investments', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_investments():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
+
+
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_process_investment(investment_id):
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    return jsonify({'success': False, 'message': 'Investment processing temporarily disabled'}), 503
 
 # ==================== ADMIN - WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
