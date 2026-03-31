@@ -2794,41 +2794,7 @@ def admin_process_deposit(deposit_id):
         
         # Try investment_deposits
         if deposit is None and investment_deposits is not None:
-            try:
-                deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
-                if deposit:
-                    deposit_collection_used = investment_deposits
-                    print(f"✅ Found deposit in investment_deposits")
-            except Exception as e:
-                print(f"Error in investment_deposits: {e}")
-        
-        if not deposit:
-            print(f"❌ Deposit {deposit_id} NOT FOUND")
-            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
-        
-        print(f"📝 Deposit: Amount=${deposit.get('amount')}, Status={deposit.get('status')}, User={deposit.get('user_id')}")
-        
-        # ========== FIND USER ==========
-        target_user = None
-        user_id = deposit.get('user_id')
-        
-        print(f"🔍 Searching for user: {user_id}")
-        
-        if veloxtrades_users is not None:
-            try:
-                target_user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
-                if target_user:
-                    print(f"✅ Found user in veloxtrades_users: {target_user.get('username')}")
-                    print(f"📧 Email: {target_user.get('email')}")
-            except Exception as e:
-                print(f"Error in veloxtrades_users: {e}")
-        
-        if target_user is None and investment_users is not None:
-            try:
-                target_user = investment_users.find_one({'_id': ObjectId(user_id)})
-                if target_user:
-                    print(f"✅ Found user in investment_users: {target_user.get('username')}")
-                    print(f"📧 Email: {target_user.get('email')}")
+(f"📧 Email: {target_user.get('email')}")
             except Exception as e:
                 print(f"Error in investment_users: {e}")
         
@@ -2995,91 +2961,6 @@ def admin_process_deposit(deposit_id):
                         {'_id': ObjectId(deposit_id)},
                         {'$set': {
                             'status': 'rejected',
-                            'rejection_reason': reason,
-                            'rejected_at': datetime.now(timezone.utc),
-                            'processed_by': str(user.get('_id'))
-                        }}
-                    )
-                    print(f"✅ Deposit status updated to rejected")
-                except Exception as e:
-                    print(f"❌ Error updating deposit: {e}")
-            
-            # ========== UPDATE TRANSACTION ==========
-            if transactions_collection is not None:
-                try:
-                    transactions_collection.update_one(
-                        {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'},
-                        {'$set': {
-                            'status': 'failed',
-                            'description': f'Deposit rejected: {reason}',
-                            'rejected_at': datetime.now(timezone.utc)
-                        }}
-                    )
-                    print(f"✅ Transaction updated to failed")
-                except Exception as e:
-                    print(f"❌ Error updating transaction: {e}")
-            
-            # ========== CREATE NOTIFICATION ==========
-            try:
-                create_notification(
-                    user_id,
-                    'Deposit Rejected ❌',
-                    f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}',
-                    'error'
-                )
-                print(f"✅ Notification created")
-            except Exception as e:
-                print(f"❌ Error creating notification: {e}")
-            
-            # ========== SEND REJECTION EMAIL ==========
-            email_sent = False
-            try:
-                print(f"📧 Sending rejection email to: {target_user.get('email')}")
-                email_sent = send_deposit_rejected_email(
-                    target_user,
-                    deposit['amount'],
-                    deposit.get('crypto', 'USDT'),
-                    reason
-                )
-                if email_sent:
-                    print(f"✅ Rejection email sent successfully")
-                else:
-                    print(f"❌ Failed to send rejection email")
-            except Exception as e:
-                print(f"❌ Error sending email: {e}")
-                import traceback
-                traceback.print_exc()
-            
-            print(f"❌ ===== DEPOSIT REJECTED =====")
-            
-            response_data = {
-                'success': True,
-                'message': f'Deposit rejected! Email sent to {target_user.get("email")}',
-                'data': {
-                    'amount': deposit['amount'],
-                    'user': target_user.get('username'),
-                    'email': target_user.get('email'),
-                    'email_sent': email_sent
-                }
-            }
-            
-            response = jsonify(response_data)
-            response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            return response
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-        
-    except Exception as e:
-        print(f"🔥 ===== DEPOSIT PROCESSING ERROR =====")
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        error_response = jsonify({'success': False, 'message': f'Server error: {str(e)}'})
-        error_response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        error_response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return error_response, 500
 
 # ==================== ADMIN - INVESTMENT PROCESSING ====================
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
@@ -3358,19 +3239,7 @@ def admin_process_investment(investment_id):
                     {'_id': ObjectId(investment['user_id'])},
                     {'$inc': {'wallet.balance': investment['amount']}}
                 )
-            
-            if veloxtrades_investments is not None:
-                veloxtrades_investments.update_one(
-                    {'_id': ObjectId(investment_id)},
-                    {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
-                )
-            
-            return jsonify({'success': True, 'message': 'Investment rejected, refunded'})
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-"""
+
 
 
 # ==================== TEMPORARY PLACEHOLDER FUNCTIONS ====================
