@@ -2965,6 +2965,300 @@ def admin_process_deposit(deposit_id):
         error_response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
         error_response.headers['Access-Control-Allow-Credentials'] = 'true'
         return error_response, 500
+
+@app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
+def admin_process_investment(investment_id):
+    """Admin approves or rejects investment request"""
+    
+    # Handle OPTIONS preflight
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    
+    try:
+        data = request.get_json()
+        action = data.get('action')
+        reason = data.get('reason', '')
+        
+        print(f"🔵 Processing investment {investment_id}, action: {action}")
+        
+        # Find investment
+        investment = None
+        investment_collection_used = None
+        
+        if veloxtrades_investments is not None:
+            try:
+                investment = veloxtrades_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = veloxtrades_investments
+                    print(f"✅ Found investment in veloxtrades_investments")
+            except Exception as e:
+                print(f"Error in veloxtrades_investments: {e}")
+        
+        if investment is None and investment_investments is not None:
+            try:
+                investment = investment_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = investment_investments
+                    print(f"✅ Found investment in investment_investments")
+            except Exception as e:
+                print(f"Error in investment_investments: {e}")
+        
+        if investment is None and investments_collection is not None:
+            try:
+                investment = investments_collection.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = investments_collection
+                    print(f"✅ Found investment in combined collection")
+            except Exception as e:
+                print(f"Error in combined collection: {e}")
+        
+        if not investment:
+            return jsonify({'success': False, 'message': 'Investment not found'}), 404
+        
+        # Find user
+        user = None
+        user_id = investment.get('user_id')
+        
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user in veloxtrades_users: {user.get('username')}")
+            except Exception as e:
+                print(f"Error in veloxtrades_users: {e}")
+        
+        if user is None and investment_users is not None:
+            try:
+                user = investment_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user in investment_users: {user.get('username')}")
+            except Exception as e:
+                print(f"Error in investment_users: {e}")
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if action == 'approve':
+            print(f"💰 Approving investment for {user.get('username')}")
+            
+            # ========== UPDATE INVESTMENT STATUS ==========
+            if investment_collection_used is not None:
+                try:
+                    investment_collection_used.update_one(
+                        {'_id': ObjectId(investment_id)},
+                        {'$set': {
+                            'status': 'active',
+                            'approved_at': datetime.now(timezone.utc),
+                            'approved_by': str(get_user_from_request()['_id'])
+                        }}
+                    )
+                    print(f"✅ Investment status updated to active")
+                except Exception as e:
+                    print(f"❌ Error updating investment: {e}")
+            
+            # ========== UPDATE USER'S TOTAL INVESTED ==========
+            try:
+                if veloxtrades_users is not None:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.total_invested': investment['amount']}}
+                    )
+                    print(f"✅ Updated veloxtrades_users total_invested")
+            except Exception as e:
+                print(f"❌ Error updating veloxtrades_users: {e}")
+            
+            try:
+                if investment_users is not None:
+                    investment_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.total_invested': investment['amount']}}
+                    )
+                    print(f"✅ Updated investment_users total_invested")
+            except Exception as e:
+                print(f"❌ Error updating investment_users: {e}")
+            
+            # ========== UPDATE TRANSACTION ==========
+            if transactions_collection is not None:
+                try:
+                    # Update the pending request
+                    transactions_collection.update_one(
+                        {'investment_id': investment_id, 'type': 'investment_request'},
+                        {'$set': {
+                            'status': 'completed',
+                            'description': f'Investment in {investment["plan_name"]} - Active (Profit: ${investment["expected_profit"]:,.2f})'
+                        }}
+                    )
+                    print(f"✅ Updated investment_request transaction")
+                except Exception as e:
+                    print(f"❌ Error updating transaction: {e}")
+                
+                try:
+                    # Add investment record
+                    transactions_collection.insert_one({
+                        'user_id': str(user_id),
+                        'type': 'investment',
+                        'amount': investment['amount'],
+                        'status': 'completed',
+                        'description': f'Investment in {investment["plan_name"]} - ${investment["amount"]:,.2f} at {investment["roi"]}% ROI',
+                        'investment_id': investment_id,
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                    print(f"✅ Investment transaction record created")
+                except Exception as e:
+                    print(f"❌ Error creating investment transaction: {e}")
+            
+            # ========== NOTIFY USER ==========
+            try:
+                create_notification(
+                    user_id,
+                    'Investment Approved! 🎉',
+                    f'Your investment of ${investment["amount"]:,.2f} in {investment["plan_name"]} has been approved! Expected profit: ${investment["expected_profit"]:,.2f} after {investment["duration_hours"]} hours.',
+                    'success'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"❌ Error creating notification: {e}")
+            
+            # ========== SEND EMAIL ==========
+            email_sent = False
+            try:
+                email_sent = send_investment_confirmation_email(
+                    user,
+                    investment['amount'],
+                    investment['plan_name'],
+                    investment['roi'],
+                    investment['expected_profit']
+                )
+                print(f"✅ Confirmation email sent: {email_sent}")
+            except Exception as e:
+                print(f"❌ Error sending email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment approved successfully!',
+                'data': {
+                    'amount': investment['amount'],
+                    'user': user.get('username'),
+                    'expected_profit': investment['expected_profit'],
+                    'duration_hours': investment['duration_hours'],
+                    'end_date': investment['end_date'].isoformat() if investment.get('end_date') else None,
+                    'email_sent': email_sent
+                }
+            })
+            
+        elif action == 'reject':
+            print(f"❌ Rejecting investment for {user.get('username')}")
+            
+            # ========== REFUND USER BALANCE ==========
+            try:
+                if veloxtrades_users is not None:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.balance': investment['amount']}}
+                    )
+                    print(f"✅ Refunded ${investment['amount']} to user in veloxtrades_users")
+            except Exception as e:
+                print(f"❌ Error refunding in veloxtrades_users: {e}")
+            
+            try:
+                if investment_users is not None:
+                    investment_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.balance': investment['amount']}}
+                    )
+                    print(f"✅ Refunded ${investment['amount']} to user in investment_users")
+            except Exception as e:
+                print(f"❌ Error refunding in investment_users: {e}")
+            
+            # ========== UPDATE INVESTMENT STATUS ==========
+            if investment_collection_used is not None:
+                try:
+                    investment_collection_used.update_one(
+                        {'_id': ObjectId(investment_id)},
+                        {'$set': {
+                            'status': 'rejected',
+                            'rejection_reason': reason,
+                            'rejected_at': datetime.now(timezone.utc),
+                            'rejected_by': str(get_user_from_request()['_id'])
+                        }}
+                    )
+                    print(f"✅ Investment status updated to rejected")
+                except Exception as e:
+                    print(f"❌ Error updating investment: {e}")
+            
+            # ========== UPDATE TRANSACTION ==========
+            if transactions_collection is not None:
+                try:
+                    transactions_collection.update_one(
+                        {'investment_id': investment_id, 'type': 'investment_request'},
+                        {'$set': {
+                            'status': 'failed',
+                            'description': f'Investment request rejected: {reason} (Refunded ${investment["amount"]:,.2f})'
+                        }}
+                    )
+                    print(f"✅ Updated investment_request transaction")
+                except Exception as e:
+                    print(f"❌ Error updating transaction: {e}")
+                
+                try:
+                    # Add refund transaction
+                    transactions_collection.insert_one({
+                        'user_id': str(user_id),
+                        'type': 'refund',
+                        'amount': investment['amount'],
+                        'status': 'completed',
+                        'description': f'Refund for rejected investment in {investment["plan_name"]} - Reason: {reason}',
+                        'investment_id': investment_id,
+                        'created_at': datetime.now(timezone.utc)
+                    })
+                    print(f"✅ Refund transaction record created")
+                except Exception as e:
+                    print(f"❌ Error creating refund transaction: {e}")
+            
+            # ========== NOTIFY USER ==========
+            try:
+                create_notification(
+                    user_id,
+                    'Investment Rejected ❌',
+                    f'Your investment request of ${investment["amount"]:,.2f} was rejected. Reason: {reason}. ${investment["amount"]:,.2f} has been refunded to your balance.',
+                    'error'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"❌ Error creating notification: {e}")
+            
+            # ========== SEND REJECTION EMAIL ==========
+            email_sent = False
+            try:
+                email_sent = send_investment_rejected_email(user, investment['amount'], investment['plan_name'], reason)
+                print(f"✅ Rejection email sent: {email_sent}")
+            except Exception as e:
+                print(f"❌ Error sending rejection email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment rejected and ${investment["amount"]:,.2f} refunded to user!',
+                'data': {
+                    'amount': investment['amount'],
+                    'user': user.get('username'),
+                    'email_sent': email_sent,
+                    'refunded': True
+                }
+            })
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
+            
+    except Exception as e:
+        print(f"🔥 ===== PROCESS INVESTMENT ERROR =====")
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_investment(investment_id):
@@ -3148,32 +3442,7 @@ def admin_process_investment(investment_id):
                     'status': 'completed',
                     'description': f'Refund for rejected investment in {investment["plan_name"]} - Reason: {reason}',
                     'investment_id': investment_id,
-                    'created_at': datetime.now(timezone.utc)
-                })
-            
-            # ========== NOTIFY USER ==========
-            create_notification(
-                user_id,
-                'Investment Rejected ❌',
-                f'Your investment request of ${investment["amount"]:,.2f} was rejected. Reason: {reason}. ${investment["amount"]:,.2f} has been refunded to your balance.',
-                'error'
-            )
-            
-            # ========== SEND REJECTION EMAIL ==========
-            send_investment_rejected_email(user, investment['amount'], investment['plan_name'], reason)
-            
-            return jsonify({
-                'success': True,
-                'message': f'Investment rejected and ${investment["amount"]:,.2f} refunded to user!'
-            })
-        else:
-            return jsonify({'success': False, 'message': 'Invalid action'}), 400
-            
-    except Exception as e:
-        logger.error(f"Process investment error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'message': str(e)}), 500
+
 @require_admin
 def admin_resend_deposit_emails():
     try:
