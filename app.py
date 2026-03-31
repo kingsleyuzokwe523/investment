@@ -97,7 +97,15 @@ settings_collection = None
 email_logs_collection = None
 referral_stats_collection = None
 
+import signal
+import sys
 
+def signal_handler(sig, frame):
+    print(f"Signal {sig} received, cleaning up...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 class DualDatabaseCollection:
     def __init__(self, collections, name):
         # Filter out None collections
@@ -1427,6 +1435,7 @@ def process_investment_profits():
     except Exception as e:
         logger.error(f"Error in profit processing: {e}")
 # ==================== TRANSACTION ENDPOINTS ====================
+@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
 def get_transactions():
     user = get_user_from_request()
     if not user:
@@ -1434,14 +1443,28 @@ def get_transactions():
     
     try:
         transactions = []
-        # FIXED: Use safe_collection check
-        if safe_collection(transactions_collection):
+        
+        # Try veloxtrades_transactions
+        if veloxtrades_transactions is not None:
             try:
-                transactions = list(transactions_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
+                veloxtrades_tx = list(veloxtrades_transactions.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
+                transactions.extend(veloxtrades_tx)
+                print(f"Found {len(veloxtrades_tx)} transactions in veloxtrades_db")
             except Exception as e:
-                print(f"Error fetching transactions: {e}")
-                # Return empty list on error, don't crash
-                transactions = []
+                print(f"Error fetching from veloxtrades_transactions: {e}")
+        
+        # Try investment_transactions
+        if investment_transactions is not None:
+            try:
+                investment_tx = list(investment_transactions.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
+                # Avoid duplicates
+                existing_ids = {str(tx.get('_id')) for tx in transactions}
+                for tx in investment_tx:
+                    if str(tx.get('_id')) not in existing_ids:
+                        transactions.append(tx)
+                print(f"Found {len(investment_tx)} transactions in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_transactions: {e}")
         
         # Format transactions
         formatted_transactions = []
@@ -1456,10 +1479,17 @@ def get_transactions():
                 print(f"Error formatting transaction: {e}")
                 continue
         
-        return jsonify({'success': True, 'data': {'transactions': formatted_transactions}})
+        response = jsonify({'success': True, 'data': {'transactions': formatted_transactions}})
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+        
     except Exception as e:
         print(f"Transactions error: {e}")
-        return jsonify({'success': True, 'data': {'transactions': []}})
+        response = jsonify({'success': True, 'data': {'transactions': []}})
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
 
 # ==================== DASHBOARD ENDPOINTS ====================
 @app.route('/api/user/dashboard', methods=['GET', 'OPTIONS'])
@@ -1502,17 +1532,18 @@ def user_dashboard():
                 print(f"Error fetching from veloxtrades_investments: {e}")
         
         # Search in investment_investments
-        if investment_investments is not None:
-            try:
-                investment_inv = list(investment_investments.find({
-                    'user_id': str(user['_id']), 
-                    'status': 'active'
-                }))
-                active_investments.extend(investment_inv)
-                print(f"📊 Found {len(investment_inv)} active investments in investment_db")
-            except Exception as e:
-                print(f"Error fetching from investment_investments: {e}")
-        
+       # Update user balance in investment_users
+if investment_users is not None:
+    try:
+        result = investment_users.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+        )
+        print(f"✅ investment_users updated: {result.modified_count > 0}")
+    except Exception as e:
+        print(f"⚠️ investment_users not available: {e}")
+else:
+    print(f"⚠️ investment_users collection is None - skipping")
         # Also search in combined collection if it exists
         if investments_collection is not None and hasattr(investments_collection, 'collections') and investments_collection.collections:
             try:
