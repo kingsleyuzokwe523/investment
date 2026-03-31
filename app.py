@@ -2608,14 +2608,7 @@ def admin_process_deposit(deposit_id):
 # ============================================================================
 # ADMIN - DEPOSIT EMAIL RESEND
 # ============================================================================
-@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
-@require_admin
-def admin_resend_single_deposit_email(deposit_id):
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-        return response
-    return jsonify({'success': False, 'message': 'Email resend temporarily disabled'}), 503
+
 
 
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
@@ -2626,7 +2619,6 @@ def admin_resend_deposit_emails():
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
         return response
     return jsonify({'success': False, 'message': 'Bulk email resend temporarily disabled'}), 503
-
 
 # ============================================================================
 # ADMIN - INVESTMENT ENDPOINTS
