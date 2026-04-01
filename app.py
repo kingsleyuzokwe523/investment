@@ -641,60 +641,11 @@ EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
 EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
 EMAIL_CONFIGURED = bool(EMAIL_USER and EMAIL_PASSWORD and EMAIL_HOST)
 
-# Brevo Configuration (primary)
-BREVO_API_KEY = os.getenv('BREVO_API_KEY', '')
-BREVO_FROM_NAME = os.getenv('BREVO_FROM_NAME', 'Veloxtrades.com')
-BREVO_FROM_EMAIL = os.getenv('BREVO_FROM_EMAIL', 'support@veloxtrades.com')
-BREVO_REPLY_TO = os.getenv('BREVO_REPLY_TO', '')
-BREVO_CONFIGURED = bool(BREVO_API_KEY)
 
 
-def send_email_via_brevo(to_email, subject, plain_body, html_body=None):
-    """Send email using Brevo API"""
-    if not BREVO_CONFIGURED:
-        print("❌ Brevo API key not configured")
-        return False
-    
-    try:
-        url = "https://api.brevo.com/v3/smtp/email"
-        
-        payload = {
-            "sender": {
-                "name": BREVO_FROM_NAME,
-                "email": BREVO_FROM_EMAIL
-            },
-            "to": [{"email": to_email}],
-            "subject": subject,
-            "htmlContent": html_body or plain_body.replace('\n', '<br>'),
-            "textContent": plain_body
-        }
-        
-        # Add reply-to if configured
-        if BREVO_REPLY_TO:
-            payload["replyTo"] = {
-                "email": BREVO_REPLY_TO,
-                "name": "Veloxtrades Support"
-            }
-        
-        headers = {
-            "accept": "application/json",
-            "api-key": BREVO_API_KEY,
-            "content-type": "application/json"
-        }
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code in [200, 201, 202]:
-            print(f"✅ Email sent via Brevo to {to_email}")
-            return True
-        else:
-            print(f"❌ Brevo error: {response.status_code}")
-            print(f"   Response: {response.text}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Brevo exception: {e}")
-        return False
+def send_email(to_email, subject, plain_body, html_body=None):
+    """Main email function - uses SMTP directly"""
+    return send_email_via_smtp(to_email, subject, plain_body, html_body)
 
 
 def send_email_via_smtp(to_email, subject, body, html_body=None, max_retries=3):
@@ -732,22 +683,6 @@ def send_email_via_smtp(to_email, subject, body, html_body=None, max_retries=3):
     
     return False
 
-
-def send_email(to_email, subject, plain_body, html_body=None):
-    """Main email function - tries Brevo first, falls back to SMTP"""
-    if not to_email:
-        print("❌ No recipient email provided")
-        return False
-    
-    # Try Brevo first if configured
-    if BREVO_CONFIGURED:
-        result = send_email_via_brevo(to_email, subject, plain_body, html_body)
-        if result:
-            return True
-        print("⚠️ Brevo failed, trying SMTP fallback...")
-    
-    # Fallback to SMTP
-    return send_email_via_smtp(to_email, subject, plain_body, html_body)
 
 
 def check_email_configuration():
