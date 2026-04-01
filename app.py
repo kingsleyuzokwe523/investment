@@ -2343,6 +2343,92 @@ def create_ticket():
     except Exception as e:
         logger.error(f"Create ticket error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+# ==================== USER TRANSACTIONS ENDPOINT ====================
+@app.route('/api/transactions', methods=['GET', 'OPTIONS'])
+def get_transactions():
+    """Get all transactions for the authenticated user"""
+    
+    # Handle OPTIONS preflight
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        transactions = []
+        
+        # Search in veloxtrades_transactions
+        if veloxtrades_transactions is not None:
+            try:
+                veloxtrades_tx = list(veloxtrades_transactions.find(
+                    {'user_id': str(user['_id'])}
+                ).sort([('created_at', -1)]))
+                transactions.extend(veloxtrades_tx)
+                print(f"📝 Found {len(veloxtrades_tx)} transactions in veloxtrades_db")
+            except Exception as e:
+                print(f"Error fetching from veloxtrades_transactions: {e}")
+        
+        # Search in investment_transactions
+        if investment_transactions is not None:
+            try:
+                investment_tx = list(investment_transactions.find(
+                    {'user_id': str(user['_id'])}
+                ).sort([('created_at', -1)]))
+                # Avoid duplicates
+                existing_ids = {str(tx.get('_id')) for tx in transactions}
+                for tx in investment_tx:
+                    if str(tx.get('_id')) not in existing_ids:
+                        transactions.append(tx)
+                print(f"📝 Found {len(investment_tx)} transactions in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_transactions: {e}")
+        
+        # Sort by date (newest first)
+        transactions.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+        
+        # Format transactions for frontend
+        formatted_transactions = []
+        for tx in transactions:
+            try:
+                tx_copy = {
+                    '_id': str(tx['_id']),
+                    'user_id': str(tx.get('user_id', '')),
+                    'type': tx.get('type', 'unknown'),
+                    'amount': tx.get('amount', 0),
+                    'status': tx.get('status', 'pending'),
+                    'description': tx.get('description', ''),
+                    'created_at': tx.get('created_at').isoformat() if tx.get('created_at') else None,
+                    'deposit_id': tx.get('deposit_id', ''),
+                    'withdrawal_id': tx.get('withdrawal_id', ''),
+                    'investment_id': tx.get('investment_id', '')
+                }
+                formatted_transactions.append(tx_copy)
+            except Exception as e:
+                print(f"Error formatting transaction: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'transactions': formatted_transactions
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 Get transactions error: {e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({'success': True, 'data': {'transactions': []}})
+        return add_cors_headers(response)
 @app.route('/api/investments', methods=['GET', 'OPTIONS'])
 def get_user_investments():
     user = get_user_from_request()
