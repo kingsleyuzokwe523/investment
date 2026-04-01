@@ -3285,6 +3285,7 @@ def admin_get_kyc_stats():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN - SUPPORT TICKETS ====================
+# ==================== ADMIN - SUPPORT TICKETS ====================
 @app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_tickets():
@@ -3306,18 +3307,15 @@ def admin_get_tickets():
         tickets = []
         total = 0
         
-        # Try veloxtrades_support_tickets
         if veloxtrades_support_tickets is not None:
             try:
                 total = veloxtrades_support_tickets.count_documents(query)
-                # ✅ FIXED: Use list of tuples for sort
                 cursor = veloxtrades_support_tickets.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 tickets = list(cursor)
                 print(f"🎫 Found {len(tickets)} tickets in veloxtrades_db")
             except Exception as e:
                 print(f"Error fetching tickets: {e}")
         
-        # Try investment_support_tickets
         if investment_support_tickets is not None:
             try:
                 cursor = investment_support_tickets.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
@@ -3330,7 +3328,6 @@ def admin_get_tickets():
             except Exception as e:
                 print(f"Error fetching tickets from investment_db: {e}")
         
-        # Format tickets
         formatted = []
         for t in tickets:
             try:
@@ -3343,7 +3340,6 @@ def admin_get_tickets():
                 t.pop('messages', None)
                 formatted.append(t)
             except Exception as e:
-                print(f"Error formatting ticket: {e}")
                 continue
         
         response = jsonify({
@@ -3356,6 +3352,10 @@ def admin_get_tickets():
             }
         })
         return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 Tickets error: {e}")
+        return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}})), 200
         
     except Exception as e:
         print(f"🔥 Tickets error: {e}")
