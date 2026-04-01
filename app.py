@@ -3096,66 +3096,6 @@ def admin_create_transaction():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
-@require_admin
-def admin_get_kyc_applications():
-    if kyc_collection is None:
-        return jsonify({'success': True, 'data': {'applications': [], 'total': 0}}), 200
-    
-    try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 20))
-        status = request.args.get('status', 'pending')
-        skip = (page - 1) * limit
-        
-        query = {}
-        if status != 'all':
-            query['status'] = status
-        
-        total = kyc_collection.count_documents(query)
-        
-        # FIXED: Use list of tuples for sort
-        applications = list(kyc_collection.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit))
-        
-        result_applications = []
-        for app in applications:
-            app['_id'] = str(app['_id'])
-            if app.get('submitted_at'):
-                app['submitted_at'] = app['submitted_at'].isoformat()
-            if app.get('reviewed_at'):
-                app['reviewed_at'] = app['reviewed_at'].isoformat()
-            
-            if users_collection and app.get('user_id'):
-                try:
-                    user = users_collection.find_one({'_id': ObjectId(app['user_id'])})
-                    if user:
-                        app['user_details'] = {
-                            'username': user.get('username', ''),
-                            'email': user.get('email', ''),
-                            'phone': user.get('phone', ''),
-                            'wallet_balance': user.get('wallet', {}).get('balance', 0)
-                        }
-                except:
-                    app['user_details'] = {'username': 'Unknown', 'email': ''}
-            
-            result_applications.append(app)
-        
-        response = jsonify({
-            'success': True,
-            'data': {
-                'applications': result_applications,
-                'total': total,
-                'page': page,
-                'pages': (total + limit - 1) // limit if total > 0 else 1
-            }
-        })
-        return add_cors_headers(response)
-        
-    except Exception as e:
-        logger.error(f"Admin get KYC applications error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
 @app.route('/api/admin/kyc/<kyc_id>', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_application(kyc_id):
@@ -3180,6 +3120,7 @@ def admin_get_kyc_application(kyc_id):
         logger.error(f"Get KYC application error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@# ==================== ADMIN - KYC APPLICATIONS ====================
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_applications():
@@ -3205,7 +3146,6 @@ def admin_get_kyc_applications():
         if veloxtrades_kyc is not None:
             try:
                 total = veloxtrades_kyc.count_documents(query)
-                # ✅ FIXED: Use list of tuples for sort
                 cursor = veloxtrades_kyc.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit)
                 applications = list(cursor)
                 print(f"📋 Found {len(applications)} KYC applications in veloxtrades_db")
@@ -3225,7 +3165,6 @@ def admin_get_kyc_applications():
             except Exception as e:
                 print(f"Error fetching KYC from investment_db: {e}")
         
-        # Format applications
         formatted = []
         for app in applications:
             try:
@@ -3236,7 +3175,6 @@ def admin_get_kyc_applications():
                     app['reviewed_at'] = app['reviewed_at'].isoformat()
                 formatted.append(app)
             except Exception as e:
-                print(f"Error formatting KYC: {e}")
                 continue
         
         response = jsonify({
@@ -3251,9 +3189,7 @@ def admin_get_kyc_applications():
         return add_cors_headers(response)
         
     except Exception as e:
-        print(f"🔥 KYC applications error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"🔥 KYC error: {e}")
         return add_cors_headers(jsonify({'success': True, 'data': {'applications': [], 'total': 0}})), 200
 @app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
 @require_admin
