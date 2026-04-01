@@ -3120,7 +3120,7 @@ def admin_get_kyc_application(kyc_id):
         logger.error(f"Get KYC application error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@# ==================== ADMIN - KYC APPLICATIONS ====================
+# ==================== ADMIN - KYC APPLICATIONS ====================
 @app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_kyc_applications():
