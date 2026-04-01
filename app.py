@@ -2796,7 +2796,91 @@ def admin_process_withdrawal(withdrawal_id):
         logger.error(f"Process withdrawal error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
+@app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_deposits():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        deposits = []
+        total = 0
+        
+        # Try veloxtrades_deposits
+        if veloxtrades_deposits is not None:
+            try:
+                total = veloxtrades_deposits.count_documents(query)
+                cursor = veloxtrades_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                deposits = list(cursor)
+                print(f"💰 Found {len(deposits)} deposits in veloxtrades_db, total: {total}")
+            except Exception as e:
+                print(f"Error fetching deposits: {e}")
+        
+        # Try investment_deposits
+        if investment_deposits is not None:
+            try:
+                cursor = investment_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                inv_deposits = list(cursor)
+                existing_ids = {str(d.get('_id')) for d in deposits}
+                for d in inv_deposits:
+                    if str(d.get('_id')) not in existing_ids:
+                        deposits.append(d)
+                print(f"💰 Found {len(inv_deposits)} deposits in investment_db")
+            except Exception as e:
+                print(f"Error fetching deposits from investment_db: {e}")
+        
+        # Format deposits
+        formatted = []
+        for d in deposits:
+            try:
+                d['_id'] = str(d['_id'])
+                if d.get('created_at'):
+                    d['created_at'] = d['created_at'].isoformat()
+                if d.get('approved_at'):
+                    d['approved_at'] = d['approved_at'].isoformat()
+                if d.get('rejected_at'):
+                    d['rejected_at'] = d['rejected_at'].isoformat()
+                
+                # Get username if missing
+                if not d.get('username') and d.get('user_id'):
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(d['user_id'])})
+                        if user:
+                            d['username'] = user.get('username', 'Unknown')
+                    except:
+                        d['username'] = 'Unknown'
+                formatted.append(d)
+            except Exception as e:
+                print(f"Error formatting deposit: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'deposits': formatted,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 Deposits error: {e}")
+        import traceback
+        traceback.print_exc()
+        return add_cors_headers(jsonify({'success': True, 'data': {'deposits': [], 'total': 0}})), 200
 # ==================== ADMIN - INVESTMENTS ====================
 
 @app.route('/api/admin/transactions', methods=['GET', 'OPTIONS'])
