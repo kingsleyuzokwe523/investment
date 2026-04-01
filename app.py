@@ -684,37 +684,122 @@ def add_referral_commission(user_id, deposit_amount):
 
 
 # ==================== EMAIL TEMPLATES ====================
-def get_email_template(title, content, button_text=None, button_link=None):
+def get_email_template(title, content, button_text=None, button_link=None, transaction_details=None):
+    """Generate HTML email template with optional transaction details"""
     button_html = ''
     if button_text and button_link:
-        button_html = f'<div style="text-align:center;margin:30px 0;"><a href="{button_link}" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">{button_text}</a></div>'
-    return f'''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>{title}</title>
-    <style>body{{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0;}} .container{{max-width:600px;margin:0 auto;padding:20px;}} .header{{background:linear-gradient(135deg,#10b981,#059669);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0;}} .content{{background:white;padding:30px;border-radius:0 0 10px 10px;}} .footer{{text-align:center;padding:20px;font-size:12px;color:#666;}}</style>
-    </head><body><div class="container"><div class="header"><h1>VELOXTRADES</h1></div><div class="content"><h2>{title}</h2>{content}{button_html}</div><div class="footer"><p>© 2025 Veloxtrades</p></div></div></body></html>'''
+        button_html = f'<div style="text-align:center;margin:30px 0;"><a href="{button_link}" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;display:inline-block;">{button_text}</a></div>'
+    
+    details_html = ''
+    if transaction_details:
+        details_html = '<div style="background:#f8fafc;border-radius:10px;padding:15px;margin:20px 0;"><h3 style="margin:0 0 10px 0;color:#1e293b;">📋 Transaction Details</h3>'
+        for key, value in transaction_details.items():
+            details_html += f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e2e8f0;"><span style="color:#64748b;">{key}:</span><span style="font-weight:500;color:#1e293b;">{value}</span></div>'
+        details_html += '</div>'
+    
+    return f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{title}</title>
+    <style>
+        body{{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0;}}
+        .container{{max-width:600px;margin:0 auto;padding:20px;}}
+        .header{{background:linear-gradient(135deg,#10b981,#059669);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0;}}
+        .content{{background:white;padding:30px;border-radius:0 0 10px 10px;}}
+        .footer{{text-align:center;padding:20px;font-size:12px;color:#666;}}
+        .highlight{{background:#d1fae5;padding:15px;border-radius:8px;margin:15px 0;}}
+        .warning{{background:#fee2e2;padding:15px;border-radius:8px;margin:15px 0;}}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>VELOXTRADES</h1>
+        </div>
+        <div class="content">
+            <h2>{title}</h2>
+            {content}
+            {details_html}
+            {button_html}
+        </div>
+        <div class="footer">
+            <p>© 2025 Veloxtrades | <a href="{FRONTEND_URL}/support.html" style="color:#10b981;">Contact Support</a></p>
+        </div>
+    </div>
+</body>
+</html>'''
+
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
+    """Send deposit approval email with detailed transaction info"""
     try:
-        subject = f"✅ Deposit Approved - ${amount:,.2f} added"
+        subject = f"✅ Deposit Approved - ${amount:,.2f} added to your balance"
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
         
         print(f"📧 Sending approval email to: {user_email}")
         
+        # Format date and time
+        from datetime import datetime
+        current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        
         plain_body = f"""Dear {user_name},
 
-Your deposit of ${amount:,.2f} has been APPROVED!
+GREAT NEWS! Your deposit has been APPROVED and the funds have been added to your Veloxtrades account!
 
-Amount: ${amount:,.2f}
-Method: {crypto.upper()}
-Transaction: {transaction_hash or 'N/A'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 DEPOSIT DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Amount: ${amount:,.2f}
+• Method: {crypto.upper()}
+• Transaction ID: {transaction_hash or 'N/A'}
+• Status: ✅ APPROVED
+• Date: {current_time}
 
-Thank you for choosing Veloxtrades!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 YOUR NEW BALANCE: ${(user.get('wallet', {}).get('balance', 0) + amount):,.2f}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You can now use these funds to start investing in our high-yield plans!
+
+What's Next?
+• Visit your dashboard to view your updated balance
+• Choose an investment plan that suits your goals
+• Start earning up to 50% returns on your investment
+
+Need help? Our support team is available 24/7.
 
 Best regards,
-Veloxtrades Team"""
+Veloxtrades Team
+https://www.veloxtrades.com.ng"""
         
-        content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>✅ DEPOSIT APPROVED!</strong></p><p>Amount: ${amount:,.2f}</p><p>Method: {crypto.upper()}</p></div>'
-        html_body = get_email_template(subject, content, 'Go to Dashboard', f'{FRONTEND_URL}/dashboard.html')
+        transaction_details = {
+            "💰 Amount": f"${amount:,.2f}",
+            "💎 Cryptocurrency": crypto.upper(),
+            "🔗 Transaction ID": transaction_hash or "Manual Entry",
+            "✅ Status": "APPROVED",
+            "📅 Date & Time": current_time,
+            "🏦 New Balance": f"${(user.get('wallet', {}).get('balance', 0) + amount):,.2f}"
+        }
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        
+        <div class="highlight">
+            <p style="font-size:18px;margin:0;">🎉 <strong>DEPOSIT APPROVED!</strong></p>
+            <p style="margin:10px 0 0 0;">Your deposit has been successfully processed and added to your balance.</p>
+        </div>
+        
+        <p>Here's what you need to know:</p>
+        <ul>
+            <li><strong>Amount:</strong> ${amount:,.2f} has been added to your account</li>
+            <li><strong>New Balance:</strong> <strong style="color:#10b981;">$${(user.get('wallet', {}).get('balance', 0) + amount):,.2f}</strong></li>
+            <li>You can now start investing immediately</li>
+        </ul>
+        '''
+        
+        html_body = get_email_template(subject, content, 'Go to Dashboard', f'{FRONTEND_URL}/dashboard.html', transaction_details)
         
         result = send_email(user_email, subject, plain_body, html_body)
         print(f"📧 Email send result: {result}")
@@ -725,50 +810,350 @@ Veloxtrades Team"""
         traceback.print_exc()
         return False
 
+
 def send_deposit_rejected_email(user, amount, crypto, reason):
-    subject = f"❌ Deposit Rejected - ${amount:,.2f}"
-    user_name = user.get('full_name', user.get('username', 'User'))
-    plain_body = f"Dear {user_name},\n\nYour deposit of ${amount:,.2f} was REJECTED.\n\nReason: {reason}\n\nPlease contact support."
-    content = f'<p>Dear {user_name},</p><div style="background:#fee2e2;padding:15px;"><p><strong>❌ DEPOSIT REJECTED</strong></p><p>Reason: {reason}</p></div>'
-    html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/deposit.html')
-    return send_email(user['email'], subject, plain_body, html_body)
+    """Send deposit rejection email with detailed explanation"""
+    try:
+        subject = f"❌ Deposit Update - ${amount:,.2f} (Action Required)"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        user_email = user.get('email')
+        
+        print(f"📧 Sending rejection email to: {user_email}")
+        
+        from datetime import datetime
+        current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        
+        plain_body = f"""Dear {user_name},
 
+We have reviewed your deposit request, and unfortunately, it could not be approved at this time.
 
-def send_withdrawal_approved_email(user, amount, currency, wallet_address):
-    subject = f"✅ Withdrawal Approved - ${amount:,.2f}"
-    user_name = user.get('full_name', user.get('username', 'User'))
-    plain_body = f"Dear {user_name},\n\nYour withdrawal of ${amount:,.2f} has been APPROVED!\n\nAmount: ${amount:,.2f}\nWallet: {wallet_address}"
-    content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>✅ WITHDRAWAL APPROVED!</strong></p><p>Amount: ${amount:,.2f}</p></div>'
-    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, plain_body, html_body)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 DEPOSIT DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Amount: ${amount:,.2f}
+• Method: {crypto.upper()}
+• Status: ❌ REJECTED
+• Date: {current_time}
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ REASON FOR REJECTION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{reason}
 
-def send_withdrawal_rejected_email(user, amount, currency, reason):
-    subject = f"❌ Withdrawal Rejected - ${amount:,.2f}"
-    user_name = user.get('full_name', user.get('username', 'User'))
-    plain_body = f"Dear {user_name},\n\nYour withdrawal of ${amount:,.2f} was REJECTED.\n\nReason: {reason}"
-    content = f'<p>Dear {user_name},</p><div style="background:#fee2e2;padding:15px;"><p><strong>❌ WITHDRAWAL REJECTED</strong></p><p>Reason: {reason}</p></div>'
-    html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/withdraw.html')
-    return send_email(user['email'], subject, plain_body, html_body)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+What You Can Do:
+• Verify the transaction details and try again
+• Contact our support team for assistance
+• Ensure you're sending from a verified wallet
+
+If you believe this is an error, please contact our support team immediately with your transaction ID.
+
+Best regards,
+Veloxtrades Support Team
+https://www.veloxtrades.com.ng"""
+        
+        transaction_details = {
+            "💰 Amount": f"${amount:,.2f}",
+            "💎 Cryptocurrency": crypto.upper(),
+            "❌ Status": "REJECTED",
+            "📅 Date": current_time,
+            "⚠️ Reason": reason
+        }
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        
+        <div class="warning">
+            <p style="font-size:18px;margin:0;">❌ <strong>DEPOSIT REJECTED</strong></p>
+            <p style="margin:10px 0 0 0;">We were unable to approve your deposit at this time.</p>
+        </div>
+        
+        <p><strong>Reason for rejection:</strong></p>
+        <div style="background:#fef2f2;padding:12px;border-radius:8px;margin:10px 0;">
+            {reason}
+        </div>
+        
+        <p><strong>What to do next:</strong></p>
+        <ul>
+            <li>Verify the transaction details are correct</li>
+            <li>Make sure you sent from a valid wallet</li>
+            <li>Contact support if you need assistance</li>
+        </ul>
+        '''
+        
+        html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/deposit.html', transaction_details)
+        
+        return send_email(user_email, subject, plain_body, html_body)
+    except Exception as e:
+        print(f"❌ Error in send_deposit_rejected_email: {e}")
+        return False
 
 
 def send_investment_confirmation_email(user, amount, plan_name, roi, expected_profit):
-    subject = f"🚀 Investment Confirmed - ${amount:,.2f}"
-    user_name = user.get('full_name', user.get('username', 'User'))
-    plain_body = f"Dear {user_name},\n\nYour investment of ${amount:,.2f} in {plan_name} has STARTED!\n\nROI: {roi}%\nExpected Profit: ${expected_profit:,.2f}"
-    content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>✅ INVESTMENT STARTED!</strong></p><p>Amount: ${amount:,.2f}<br>ROI: {roi}%</p></div>'
-    html_body = get_email_template(subject, content, 'View Investments', f'{FRONTEND_URL}/investments.html')
-    return send_email(user['email'], subject, plain_body, html_body)
+    """Send investment confirmation email with detailed ROI information"""
+    try:
+        subject = f"🚀 Investment Confirmed - ${amount:,.2f} in {plan_name}"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        user_email = user.get('email')
+        
+        print(f"📧 Sending investment confirmation email to: {user_email}")
+        
+        from datetime import datetime, timedelta
+        current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        
+        # Calculate end date based on plan
+        duration_map = {
+            'Standard Plan': 20,  # hours
+            'Advanced Plan': 48,   # hours (2 days)
+            'Professional Plan': 96,  # hours (4 days)
+            'Classic Plan': 144   # hours (6 days)
+        }
+        duration_hours = duration_map.get(plan_name, 24)
+        end_date = (datetime.now() + timedelta(hours=duration_hours)).strftime("%B %d, %Y at %I:%M %p")
+        
+        plain_body = f"""Dear {user_name},
+
+GREAT NEWS! Your investment has been CONFIRMED and is now ACTIVE!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 INVESTMENT DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Investment Amount: ${amount:,.2f}
+• Plan: {plan_name}
+• ROI: {roi}%
+• Expected Profit: ${expected_profit:,.2f}
+• Total Expected Return: ${amount + expected_profit:,.2f}
+• Start Date: {current_time}
+• Estimated Completion: {end_date}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 WHAT HAPPENS NEXT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your investment is now growing! Once the investment period ends:
+• The principal (${amount:,.2f}) + profit (${expected_profit:,.2f}) will be automatically added to your balance
+• You will receive a completion notification
+• You can reinvest or withdraw your earnings
+
+Your profit projection: +{roi}% = ${expected_profit:,.2f}
+
+Track your investment progress in real-time from your dashboard.
+
+Best regards,
+Veloxtrades Team
+https://www.veloxtrades.com.ng"""
+        
+        transaction_details = {
+            "💰 Investment Amount": f"${amount:,.2f}",
+            "📈 Plan": plan_name,
+            "🏆 ROI": f"{roi}%",
+            "💵 Expected Profit": f"${expected_profit:,.2f}",
+            "🎯 Total Return": f"${amount + expected_profit:,.2f}",
+            "📅 Start Date": current_time,
+            "⏰ Completion Date": end_date
+        }
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        
+        <div class="highlight">
+            <p style="font-size:18px;margin:0;">🚀 <strong>INVESTMENT ACTIVE!</strong></p>
+            <p style="margin:10px 0 0 0;">Your investment of ${amount:,.2f} in {plan_name} is now growing!</p>
+        </div>
+        
+        <p><strong>Your Investment at a Glance:</strong></p>
+        <ul>
+            <li><strong>Amount Invested:</strong> ${amount:,.2f}</li>
+            <li><strong>ROI:</strong> {roi}%</li>
+            <li><strong>Expected Profit:</strong> <span style="color:#10b981;">+${expected_profit:,.2f}</span></li>
+            <li><strong>Total Return:</strong> <strong style="color:#10b981;">${amount + expected_profit:,.2f}</strong></li>
+        </ul>
+        
+        <p>Your investment will automatically complete on <strong>{end_date}</strong>. You'll receive a notification when it's done!</p>
+        '''
+        
+        html_body = get_email_template(subject, content, 'View Investment', f'{FRONTEND_URL}/investments.html', transaction_details)
+        
+        return send_email(user_email, subject, plain_body, html_body)
+    except Exception as e:
+        print(f"❌ Error in send_investment_confirmation_email: {e}")
+        return False
+
+
+def send_investment_rejected_email(user, amount, plan_name, reason):
+    """Send investment rejection email with refund details"""
+    try:
+        subject = f"❌ Investment Request Update - ${amount:,.2f} (Refunded)"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        user_email = user.get('email')
+        
+        print(f"📧 Sending investment rejection email to: {user_email}")
+        
+        from datetime import datetime
+        current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        
+        plain_body = f"""Dear {user_name},
+
+We have reviewed your investment request. Unfortunately, it could not be approved at this time.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 INVESTMENT REQUEST DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Requested Amount: ${amount:,.2f}
+• Plan: {plan_name}
+• Status: ❌ REJECTED
+• Date: {current_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ REASON FOR REJECTION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{reason}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 REFUND INFORMATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The full amount of ${amount:,.2f} has been REFUNDED to your wallet balance.
+
+What You Can Do:
+• Verify the investment details and try again
+• Ensure you meet the minimum investment requirements
+• Contact our support team for assistance
+
+If you believe this is an error, please contact our support team immediately.
+
+Best regards,
+Veloxtrades Support Team
+https://www.veloxtrades.com.ng"""
+        
+        transaction_details = {
+            "💰 Requested Amount": f"${amount:,.2f}",
+            "📈 Plan": plan_name,
+            "❌ Status": "REJECTED",
+            "📅 Date": current_time,
+            "⚠️ Reason": reason,
+            "💸 Refunded Amount": f"${amount:,.2f}"
+        }
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        
+        <div class="warning">
+            <p style="font-size:18px;margin:0;">❌ <strong>INVESTMENT REQUEST REJECTED</strong></p>
+            <p style="margin:10px 0 0 0;">Your investment request could not be approved.</p>
+        </div>
+        
+        <p><strong>Reason for rejection:</strong></p>
+        <div style="background:#fef2f2;padding:12px;border-radius:8px;margin:10px 0;">
+            {reason}
+        </div>
+        
+        <div style="background:#d1fae5;padding:15px;border-radius:8px;margin:15px 0;">
+            <p style="margin:0;"><strong>💰 REFUND COMPLETED</strong></p>
+            <p style="margin:5px 0 0 0;">${amount:,.2f} has been credited back to your wallet balance.</p>
+        </div>
+        
+        <p><strong>What to do next:</strong></p>
+        <ul>
+            <li>Check your balance - the funds have been refunded</li>
+            <li>Review the investment requirements for {plan_name}</li>
+            <li>Try again with a different amount or plan</li>
+            <li>Contact support if you need assistance</li>
+        </ul>
+        '''
+        
+        html_body = get_email_template(subject, content, 'View Balance', f'{FRONTEND_URL}/dashboard.html', transaction_details)
+        
+        return send_email(user_email, subject, plain_body, html_body)
+    except Exception as e:
+        print(f"❌ Error in send_investment_rejected_email: {e}")
+        return False
 
 
 def send_investment_completed_email(user, amount, plan_name, profit):
-    subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
-    user_name = user.get('full_name', user.get('username', 'User'))
-    plain_body = f"Dear {user_name},\n\nYour investment has been COMPLETED!\n\nProfit Earned: ${profit:,.2f}\nTotal Return: ${amount + profit:,.2f}"
-    content = f'<p>Dear {user_name},</p><div style="background:#d1fae5;padding:15px;"><p><strong>🎉 INVESTMENT COMPLETED!</strong></p><p>Profit: ${profit:,.2f}</p></div>'
-    html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-    return send_email(user['email'], subject, plain_body, html_body)
+    """Send investment completion email with profit details"""
+    try:
+        subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
+        user_name = user.get('full_name', user.get('username', 'User'))
+        user_email = user.get('email')
+        
+        print(f"📧 Sending investment completion email to: {user_email}")
+        
+        from datetime import datetime
+        current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        
+        total_return = amount + profit
+        
+        plain_body = f"""Dear {user_name},
 
+🎉 CONGRATULATIONS! Your investment has been COMPLETED successfully!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 INVESTMENT SUMMARY:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Initial Investment: ${amount:,.2f}
+• Plan: {plan_name}
+• Profit Earned: +${profit:,.2f}
+• Total Return: ${total_return:,.2f}
+• Completion Date: {current_time}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 WHAT HAPPENS NEXT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The total amount of ${total_return:,.2f} has been automatically added to your balance!
+
+You can now:
+• Reinvest your profits for compound growth
+• Start a new investment with a different plan
+• Withdraw your earnings
+
+Your balance has been updated. Visit your dashboard to see your new balance!
+
+Thank you for trusting Veloxtrades for your investment journey.
+
+Best regards,
+Veloxtrades Team
+https://www.veloxtrades.com.ng"""
+        
+        transaction_details = {
+            "💰 Initial Investment": f"${amount:,.2f}",
+            "📈 Plan": plan_name,
+            "💵 Profit Earned": f"+${profit:,.2f}",
+            "🎯 Total Return": f"${total_return:,.2f}",
+            "✅ Status": "COMPLETED",
+            "📅 Completion Date": current_time
+        }
+        
+        content = f'''
+        <p>Dear <strong>{user_name}</strong>,</p>
+        
+        <div class="highlight">
+            <p style="font-size:18px;margin:0;">🎉 <strong>INVESTMENT COMPLETED!</strong></p>
+            <p style="margin:10px 0 0 0;">Your investment has finished and profits have been credited!</p>
+        </div>
+        
+        <p><strong>Your Results:</strong></p>
+        <ul>
+            <li><strong>Initial Investment:</strong> ${amount:,.2f}</li>
+            <li><strong>Profit Earned:</strong> <span style="color:#10b981;">+${profit:,.2f}</span></li>
+            <li><strong>Total Returned:</strong> <strong style="color:#10b981;">${total_return:,.2f}</strong></li>
+        </ul>
+        
+        <p>Your balance has been updated with <strong>${total_return:,.2f}</strong>!</p>
+        
+        <p><strong>What would you like to do next?</strong></p>
+        <ul>
+            <li>Reinvest and watch your wealth grow</li>
+            <li>Try a different investment plan</li>
+            <li>Withdraw your earnings</li>
+        </ul>
+        '''
+        
+        html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html', transaction_details)
+        
+        return send_email(user_email, subject, plain_body, html_body)
+    except Exception as e:
+        print(f"❌ Error in send_investment_completed_email: {e}")
+        return False
 
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
@@ -2595,22 +2980,269 @@ def admin_delete_user(user_id):
 # ============================================================================
 # ADMIN - DEPOSIT PROCESSING
 # ============================================================================
+# ==================== ADMIN - DEPOSIT PROCESSING ====================
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
     if request.method == "OPTIONS":
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
-    return jsonify({'success': False, 'message': 'Deposit processing temporarily disabled'}), 503
-
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+        
+        action = data.get('action')
+        reason = data.get('reason', '')
+        
+        print(f"🔵 Processing deposit {deposit_id}, action: {action}")
+        
+        # Find deposit
+        deposit = None
+        deposit_collection_used = None
+        
+        if veloxtrades_deposits is not None:
+            try:
+                deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    deposit_collection_used = veloxtrades_deposits
+                    print(f"✅ Found deposit in veloxtrades_deposits")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if deposit is None and investment_deposits is not None:
+            try:
+                deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+                if deposit:
+                    deposit_collection_used = investment_deposits
+                    print(f"✅ Found deposit in investment_deposits")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not deposit:
+            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+        
+        print(f"📝 Deposit: Amount=${deposit.get('amount')}, Status={deposit.get('status')}")
+        
+        # Find user
+        user = None
+        user_id = deposit.get('user_id')
+        
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user: {user.get('username')}")
+                    print(f"📧 Email: {user.get('email')}")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if user is None and investment_users is not None:
+            try:
+                user = investment_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user in investment_users: {user.get('username')}")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if action == 'approve':
+            print(f"💰 APPROVING DEPOSIT for {user.get('username')}")
+            
+            old_balance = user.get('wallet', {}).get('balance', 0)
+            new_balance = old_balance + deposit['amount']
+            
+            # Update balance in both databases
+            if veloxtrades_users is not None:
+                try:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                    )
+                    print(f"✅ veloxtrades_users balance updated")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            if investment_users is not None:
+                try:
+                    investment_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.balance': deposit['amount'], 'wallet.total_deposited': deposit['amount']}}
+                    )
+                    print(f"✅ investment_users balance updated")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Update deposit status
+            if deposit_collection_used is not None:
+                try:
+                    deposit_collection_used.update_one(
+                        {'_id': ObjectId(deposit_id)},
+                        {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}}
+                    )
+                    print(f"✅ Deposit status updated to approved")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Update transaction
+            if transactions_collection is not None:
+                try:
+                    transactions_collection.update_one(
+                        {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'},
+                        {'$set': {'status': 'completed'}}
+                    )
+                    print(f"✅ Transaction updated")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Create notification
+            try:
+                create_notification(
+                    user_id,
+                    'Deposit Approved! ✅',
+                    f'Your deposit of ${deposit["amount"]:,.2f} has been approved!',
+                    'success'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            # Send email
+            try:
+                send_deposit_approved_email(
+                    user,
+                    deposit['amount'],
+                    deposit.get('crypto', 'USDT'),
+                    deposit.get('transaction_hash')
+                )
+                print(f"✅ Approval email sent")
+            except Exception as e:
+                print(f"Error sending email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Deposit approved successfully!',
+                'data': {
+                    'amount': deposit['amount'],
+                    'user': user.get('username'),
+                    'new_balance': new_balance
+                }
+            })
+            
+        elif action == 'reject':
+            print(f"❌ REJECTING DEPOSIT for {user.get('username')}")
+            
+            # Update deposit status
+            if deposit_collection_used is not None:
+                try:
+                    deposit_collection_used.update_one(
+                        {'_id': ObjectId(deposit_id)},
+                        {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
+                    )
+                    print(f"✅ Deposit status updated to rejected")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Update transaction
+            if transactions_collection is not None:
+                try:
+                    transactions_collection.update_one(
+                        {'deposit_id': deposit.get('deposit_id'), 'type': 'deposit', 'status': 'pending'},
+                        {'$set': {'status': 'failed'}}
+                    )
+                    print(f"✅ Transaction updated")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Create notification
+            try:
+                create_notification(
+                    user_id,
+                    'Deposit Rejected ❌',
+                    f'Your deposit of ${deposit["amount"]:,.2f} was rejected. Reason: {reason}',
+                    'error'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            # Send email
+            try:
+                send_deposit_rejected_email(
+                    user,
+                    deposit['amount'],
+                    deposit.get('crypto', 'USDT'),
+                    reason
+                )
+                print(f"✅ Rejection email sent")
+            except Exception as e:
+                print(f"Error sending email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Deposit rejected!',
+                'data': {'amount': deposit['amount']}
+            })
+            
+    except Exception as e:
+        print(f"🔥 Deposit processing error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # ============================================================================
 # ADMIN - DEPOSIT EMAIL RESEND
 # ============================================================================
 
+# ==================== ADMIN - RESEND DEPOSIT EMAIL ====================
+@app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
+@require_admin
+def admin_resend_single_deposit_email(deposit_id):
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    try:
+        if veloxtrades_deposits is None:
+            return jsonify({'success': False, 'message': 'Database error'}), 500
+        
+        deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+        if not deposit:
+            return jsonify({'success': False, 'message': 'Deposit not found'}), 404
+        
+        user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if deposit['status'] == 'approved':
+            sent = send_deposit_approved_email(
+                user, deposit['amount'], deposit.get('crypto', 'USDT'), deposit.get('transaction_hash')
+            )
+            message = 'Approval email resent' if sent else 'Failed to send'
+        elif deposit['status'] == 'rejected':
+            sent = send_deposit_rejected_email(
+                user, deposit['amount'], deposit.get('crypto', 'USDT'), deposit.get('rejection_reason', 'Not specified')
+            )
+            message = 'Rejection email resent' if sent else 'Failed to send'
+        else:
+            return jsonify({'success': False, 'message': 'Deposit not processed'}), 400
+        
+        return jsonify({'success': sent, 'message': message})
+        
+    except Exception as e:
+        print(f"🔥 Resend email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
+# ==================== ADMIN - BULK RESEND DEPOSIT EMAILS ====================
 @app.route('/api/admin/resend-deposit-emails', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_resend_deposit_emails():
@@ -2618,7 +3250,45 @@ def admin_resend_deposit_emails():
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
         return response
-    return jsonify({'success': False, 'message': 'Bulk email resend temporarily disabled'}), 503
+    
+    try:
+        if veloxtrades_deposits is None:
+            return jsonify({'success': False, 'message': 'Database error'}), 500
+        
+        data = request.get_json() or {}
+        status_filter = data.get('status', 'approved')
+        
+        if status_filter != 'all':
+            query = {'status': status_filter}
+        else:
+            query = {'status': {'$in': ['approved', 'rejected']}}
+        
+        deposits = list(veloxtrades_deposits.find(query).limit(100))
+        sent = 0
+        failed = 0
+        
+        for deposit in deposits:
+            user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+            if not user:
+                failed += 1
+                continue
+            
+            if deposit['status'] == 'approved':
+                if send_deposit_approved_email(user, deposit['amount'], deposit.get('crypto', 'USDT'), deposit.get('transaction_hash')):
+                    sent += 1
+                else:
+                    failed += 1
+            elif deposit['status'] == 'rejected':
+                if send_deposit_rejected_email(user, deposit['amount'], deposit.get('crypto', 'USDT'), deposit.get('rejection_reason', 'Not specified')):
+                    sent += 1
+                else:
+                    failed += 1
+        
+        return jsonify({'success': True, 'message': f'Resent {sent} emails, {failed} failed', 'data': {'sent': sent, 'failed': failed}})
+        
+    except Exception as e:
+        print(f"🔥 Bulk resend error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # ============================================================================
 # ADMIN - INVESTMENT ENDPOINTS
@@ -2714,14 +3384,190 @@ def admin_get_investments():
         return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}})), 200
 
 
+# ==================== ADMIN - INVESTMENT PROCESSING ====================
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_investment(investment_id):
     if request.method == "OPTIONS":
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
-    return jsonify({'success': False, 'message': 'Investment processing temporarily disabled'}), 503
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
+        
+        action = data.get('action')
+        reason = data.get('reason', '')
+        
+        print(f"🔵 Processing investment {investment_id}, action: {action}")
+        
+        # Find investment
+        investment = None
+        investment_collection_used = None
+        
+        if veloxtrades_investments is not None:
+            try:
+                investment = veloxtrades_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = veloxtrades_investments
+                    print(f"✅ Found investment in veloxtrades_investments")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if investment is None and investment_investments is not None:
+            try:
+                investment = investment_investments.find_one({'_id': ObjectId(investment_id)})
+                if investment:
+                    investment_collection_used = investment_investments
+                    print(f"✅ Found investment in investment_investments")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not investment:
+            return jsonify({'success': False, 'message': 'Investment not found'}), 404
+        
+        print(f"📝 Investment: Amount=${investment.get('amount')}, Plan={investment.get('plan_name')}")
+        
+        # Find user
+        user = None
+        user_id = investment.get('user_id')
+        
+        if veloxtrades_users is not None:
+            try:
+                user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user: {user.get('username')}")
+                    print(f"📧 Email: {user.get('email')}")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if user is None and investment_users is not None:
+            try:
+                user = investment_users.find_one({'_id': ObjectId(user_id)})
+                if user:
+                    print(f"✅ Found user in investment_users: {user.get('username')}")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if action == 'approve':
+            print(f"💰 APPROVING INVESTMENT for {user.get('username')}")
+            
+            # Update investment status
+            if investment_collection_used is not None:
+                try:
+                    investment_collection_used.update_one(
+                        {'_id': ObjectId(investment_id)},
+                        {'$set': {'status': 'active', 'approved_at': datetime.now(timezone.utc)}}
+                    )
+                    print(f"✅ Investment status updated to active")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Update user's total invested
+            if veloxtrades_users is not None:
+                try:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.total_invested': investment['amount']}}
+                    )
+                    print(f"✅ Updated total_invested")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Create notification
+            try:
+                create_notification(
+                    user_id,
+                    'Investment Approved! 🎉',
+                    f'Your investment of ${investment["amount"]:,.2f} in {investment["plan_name"]} has been approved!',
+                    'success'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            # Send email
+            try:
+                send_investment_confirmation_email(
+                    user,
+                    investment['amount'],
+                    investment['plan_name'],
+                    investment['roi'],
+                    investment['expected_profit']
+                )
+                print(f"✅ Confirmation email sent")
+            except Exception as e:
+                print(f"Error sending email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment approved successfully!',
+                'data': {'amount': investment['amount'], 'user': user.get('username')}
+            })
+            
+        elif action == 'reject':
+            print(f"❌ REJECTING INVESTMENT for {user.get('username')}")
+            
+            # Refund user balance
+            if veloxtrades_users is not None:
+                try:
+                    veloxtrades_users.update_one(
+                        {'_id': ObjectId(user_id)},
+                        {'$inc': {'wallet.balance': investment['amount']}}
+                    )
+                    print(f"✅ Refunded ${investment['amount']} to user")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Update investment status
+            if investment_collection_used is not None:
+                try:
+                    investment_collection_used.update_one(
+                        {'_id': ObjectId(investment_id)},
+                        {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}}
+                    )
+                    print(f"✅ Investment status updated to rejected")
+                except Exception as e:
+                    print(f"Error: {e}")
+            
+            # Create notification
+            try:
+                create_notification(
+                    user_id,
+                    'Investment Rejected ❌',
+                    f'Your investment request of ${investment["amount"]:,.2f} was rejected. Reason: {reason}. Funds have been refunded.',
+                    'error'
+                )
+                print(f"✅ Notification created")
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            # Send rejection email
+            try:
+                send_investment_rejected_email(user, investment['amount'], investment['plan_name'], reason)
+                print(f"✅ Rejection email sent")
+            except Exception as e:
+                print(f"Error sending email: {e}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Investment rejected and refunded!',
+                'data': {'amount': investment['amount'], 'user': user.get('username')}
+            })
+            
+    except Exception as e:
+        print(f"🔥 Investment processing error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # ==================== ADMIN - WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
