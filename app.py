@@ -2630,7 +2630,88 @@ def admin_get_investments():
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
         return response
-    return jsonify({'success': True, 'data': {'investments': [], 'total': 0}}), 200
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'all')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        investments = []
+        total = 0
+        
+        # Fetch from veloxtrades_investments
+        if veloxtrades_investments is not None:
+            try:
+                total = veloxtrades_investments.count_documents(query)
+                cursor = veloxtrades_investments.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                veloxtrades_inv = list(cursor)
+                investments.extend(veloxtrades_inv)
+                print(f"📊 Found {len(veloxtrades_inv)} investments in veloxtrades_db, total: {total}")
+            except Exception as e:
+                print(f"Error fetching from veloxtrades_investments: {e}")
+        
+        # Fetch from investment_investments
+        if investment_investments is not None:
+            try:
+                cursor = investment_investments.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                investment_inv = list(cursor)
+                existing_ids = {str(inv.get('_id')) for inv in investments}
+                for inv in investment_inv:
+                    if str(inv.get('_id')) not in existing_ids:
+                        investments.append(inv)
+                print(f"📊 Found {len(investment_inv)} investments in investment_db")
+            except Exception as e:
+                print(f"Error fetching from investment_investments: {e}")
+        
+        # Format investments
+        formatted = []
+        for inv in investments:
+            try:
+                inv['_id'] = str(inv['_id'])
+                if inv.get('created_at'):
+                    inv['created_at'] = inv['created_at'].isoformat()
+                if inv.get('start_date'):
+                    inv['start_date'] = inv['start_date'].isoformat()
+                if inv.get('end_date'):
+                    inv['end_date'] = inv['end_date'].isoformat()
+                if inv.get('approved_at'):
+                    inv['approved_at'] = inv['approved_at'].isoformat()
+                
+                # Get user info
+                if inv.get('user_id') and not inv.get('username'):
+                    try:
+                        user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
+                        if user:
+                            inv['username'] = user.get('username', 'Unknown')
+                            inv['user_email'] = user.get('email', '')
+                    except:
+                        inv['username'] = 'Unknown'
+                formatted.append(inv)
+            except Exception as e:
+                print(f"Error formatting investment: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'investments': formatted,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 Investments error: {e}")
+        import traceback
+        traceback.print_exc()
+        return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}})), 200
 
 
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
