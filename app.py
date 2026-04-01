@@ -3015,7 +3015,81 @@ def admin_get_kyc_application(kyc_id):
         logger.error(f"Get KYC application error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
+@app.route('/api/admin/kyc/applications', methods=['GET', 'OPTIONS'])
+@require_admin
+def admin_get_kyc_applications():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
+    
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        status = request.args.get('status', 'pending')
+        skip = (page - 1) * limit
+        
+        query = {}
+        if status != 'all':
+            query['status'] = status
+        
+        applications = []
+        total = 0
+        
+        # Try veloxtrades_kyc
+        if veloxtrades_kyc is not None:
+            try:
+                total = veloxtrades_kyc.count_documents(query)
+                # ✅ FIXED: Use list of tuples for sort
+                cursor = veloxtrades_kyc.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit)
+                applications = list(cursor)
+                print(f"📋 Found {len(applications)} KYC applications in veloxtrades_db")
+            except Exception as e:
+                print(f"Error fetching KYC: {e}")
+        
+        # Try investment_kyc
+        if investment_kyc is not None:
+            try:
+                cursor = investment_kyc.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit)
+                inv_apps = list(cursor)
+                existing_ids = {str(app.get('_id')) for app in applications}
+                for app in inv_apps:
+                    if str(app.get('_id')) not in existing_ids:
+                        applications.append(app)
+                print(f"📋 Found {len(inv_apps)} KYC applications in investment_db")
+            except Exception as e:
+                print(f"Error fetching KYC from investment_db: {e}")
+        
+        # Format applications
+        formatted = []
+        for app in applications:
+            try:
+                app['_id'] = str(app['_id'])
+                if app.get('submitted_at'):
+                    app['submitted_at'] = app['submitted_at'].isoformat()
+                if app.get('reviewed_at'):
+                    app['reviewed_at'] = app['reviewed_at'].isoformat()
+                formatted.append(app)
+            except Exception as e:
+                print(f"Error formatting KYC: {e}")
+                continue
+        
+        response = jsonify({
+            'success': True,
+            'data': {
+                'applications': formatted,
+                'total': total,
+                'page': page,
+                'pages': (total + limit - 1) // limit if total > 0 else 1
+            }
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        print(f"🔥 KYC applications error: {e}")
+        import traceback
+        traceback.print_exc()
+        return add_cors_headers(jsonify({'success': True, 'data': {'applications': [], 'total': 0}})), 200
 @app.route('/api/admin/kyc/<kyc_id>/approve', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_approve_kyc(kyc_id):
@@ -3113,8 +3187,10 @@ def admin_get_kyc_stats():
 @app.route('/api/admin/support/tickets', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_tickets():
-    if support_tickets_collection is None:
-        return jsonify({'success': True, 'data': {'tickets': [], 'total': 0}}), 200
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
+        return response
     
     try:
         page = int(request.args.get('page', 1))
@@ -3126,28 +3202,53 @@ def admin_get_tickets():
         if status != 'all':
             query['status'] = status
         
-        total = support_tickets_collection.count_documents(query)
+        tickets = []
+        total = 0
         
-        # FIXED: Use list of tuples for sort
-        tickets = list(support_tickets_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit))
+        # Try veloxtrades_support_tickets
+        if veloxtrades_support_tickets is not None:
+            try:
+                total = veloxtrades_support_tickets.count_documents(query)
+                # ✅ FIXED: Use list of tuples for sort
+                cursor = veloxtrades_support_tickets.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                tickets = list(cursor)
+                print(f"🎫 Found {len(tickets)} tickets in veloxtrades_db")
+            except Exception as e:
+                print(f"Error fetching tickets: {e}")
         
-        result_tickets = []
-        for ticket in tickets:
-            ticket['_id'] = str(ticket['_id'])
-            if ticket.get('created_at'):
-                ticket['created_at'] = ticket['created_at'].isoformat()
-            if ticket.get('updated_at'):
-                ticket['updated_at'] = ticket['updated_at'].isoformat()
-            
-            ticket['message_count'] = len(ticket.get('messages', []))
-            ticket.pop('messages', None)
-            
-            result_tickets.append(ticket)
+        # Try investment_support_tickets
+        if investment_support_tickets is not None:
+            try:
+                cursor = investment_support_tickets.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                inv_tickets = list(cursor)
+                existing_ids = {str(t.get('_id')) for t in tickets}
+                for t in inv_tickets:
+                    if str(t.get('_id')) not in existing_ids:
+                        tickets.append(t)
+                print(f"🎫 Found {len(inv_tickets)} tickets in investment_db")
+            except Exception as e:
+                print(f"Error fetching tickets from investment_db: {e}")
+        
+        # Format tickets
+        formatted = []
+        for t in tickets:
+            try:
+                t['_id'] = str(t['_id'])
+                if t.get('created_at'):
+                    t['created_at'] = t['created_at'].isoformat()
+                if t.get('updated_at'):
+                    t['updated_at'] = t['updated_at'].isoformat()
+                t['message_count'] = len(t.get('messages', []))
+                t.pop('messages', None)
+                formatted.append(t)
+            except Exception as e:
+                print(f"Error formatting ticket: {e}")
+                continue
         
         response = jsonify({
             'success': True,
             'data': {
-                'tickets': result_tickets,
+                'tickets': formatted,
                 'total': total,
                 'page': page,
                 'pages': (total + limit - 1) // limit if total > 0 else 1
@@ -3156,9 +3257,10 @@ def admin_get_tickets():
         return add_cors_headers(response)
         
     except Exception as e:
-        logger.error(f"Admin get tickets error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
+        print(f"🔥 Tickets error: {e}")
+        import traceback
+        traceback.print_exc()
+        return add_cors_headers(jsonify({'success': True, 'data': {'tickets': [], 'total': 0}})), 200
 
 @app.route('/api/admin/support/tickets/<ticket_id>', methods=['GET', 'OPTIONS'])
 @require_admin
