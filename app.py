@@ -14,6 +14,7 @@ import atexit
 import html
 import time
 import re
+import requests
 import sys
 import json
 import csv
@@ -420,74 +421,7 @@ def get_user_from_request():
         logger.error(f"Error getting user: {e}")
         return None
 # ==================== EMAIL CONFIGURATION ====================
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USER = os.getenv('EMAIL_USER', '')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
-EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
-EMAIL_CONFIGURED = bool(EMAIL_USER and EMAIL_PASSWORD and EMAIL_HOST)
 
-
-def send_email(to_email, subject, body, html_body=None, max_retries=3):
-    if not EMAIL_CONFIGURED:
-        logger.error("❌ Email not configured")
-        return False
-    if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
-        return False
-    for attempt in range(max_retries):
-        try:
-            msg = MIMEMultipart('alternative')
-            msg['From'] = f"{EMAIL_FROM} <{EMAIL_USER}>"
-            msg['To'] = to_email
-            msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain'))
-            if html_body:
-                msg.attach(MIMEText(html_body, 'html'))
-            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=30) as server:
-                server.starttls()
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-                server.send_message(msg)
-            logger.info(f"✅ Email sent to {to_email}")
-            return True
-        except Exception as e:
-            logger.error(f"Email error (attempt {attempt+1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-    return False
-
-
-def check_email_configuration():
-    if not EMAIL_CONFIGURED:
-        return False, "Email credentials not configured"
-    try:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-        return True, "Email configuration is valid"
-    except Exception as e:
-        return False, f"Email error: {str(e)}"
-
-def send_investment_rejected_email(user, amount, plan_name, reason):
-    try:
-        subject = f"❌ Investment Request Rejected - ${amount:,.2f}"
-        user_name = user.get('full_name', user.get('username', 'User'))
-        user_email = user.get('email')
-        
-        plain_body = f"""Dear {user_name},
-
-Your investment request of ${amount:,.2f} in {plan_name} was REJECTED.
-
-Reason: {reason}
-
-The amount of ${amount:,.2f} has been refunded to your balance.
-
-Best regards,
-Veloxtrades Team"""
-        
-        content = f'<p>Dear {user_name},</p><div style="background:#fee2e2;padding:15px;"><p><strong>❌ INVESTMENT REJECTED</strong></p><p>Amount: ${amount:,.2f}<br>Plan: {plan_name}<br>Reason: {reason}</p><p>Your funds have been refunded.</p></div>'
-        html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html')
-        
-        return send_email(user_email, subject, plain_body, html_body)
     except Exception as e:
         print(f"❌ Error in send_investment_rejected_email: {e}")
         return False
@@ -684,6 +618,131 @@ def add_referral_commission(user_id, deposit_amount):
 
 
 # ==================== EMAIL TEMPLATES ====================
+# ==================== EMAIL CONFIGURATION ====================
+import smtplib
+import re
+import time
+import requests
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# SMTP Configuration (fallback)
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
+EMAIL_USER = os.getenv('EMAIL_USER', '')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
+EMAIL_CONFIGURED = bool(EMAIL_USER and EMAIL_PASSWORD and EMAIL_HOST)
+
+# Brevo Configuration (primary)
+BREVO_API_KEY = os.getenv('BREVO_API_KEY', '')
+BREVO_FROM_NAME = os.getenv('BREVO_FROM_NAME', 'Veloxtrades.com')
+BREVO_FROM_EMAIL = os.getenv('BREVO_FROM_EMAIL', 'support@veloxtrades.com')
+BREVO_REPLY_TO = os.getenv('BREVO_REPLY_TO', '')
+BREVO_CONFIGURED = bool(BREVO_API_KEY)
+
+
+def send_email_via_brevo(to_email, subject, plain_body, html_body=None):
+    """Send email using Brevo API"""
+    try:
+        url = "https://api.brevo.com/v3/smtp/email"
+        
+        payload = {
+            "sender": {
+                "name": BREVO_FROM_NAME,
+                "email": BREVO_FROM_EMAIL
+            },
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_body or plain_body.replace('\n', '<br>'),
+            "textContent": plain_body
+        }
+        
+        # Add reply-to if configured
+        if BREVO_REPLY_TO:
+            payload["replyTo"] = {
+                "email": BREVO_REPLY_TO,
+                "name": "Veloxtrades Support"
+            }
+        
+        headers = {
+            "accept": "application/json",
+            "api-key": BREVO_API_KEY,
+            "content-type": "application/json"
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        if response.status_code in [200, 201]:
+            print(f"✅ Email sent via Brevo to {to_email}")
+            return True
+        else:
+            print(f"❌ Brevo error: {response.status_code}")
+            print(f"   Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Brevo exception: {e}")
+        return False
+
+
+def send_email_via_smtp(to_email, subject, body, html_body=None, max_retries=3):
+    """Send email using SMTP (fallback)"""
+    if not EMAIL_CONFIGURED:
+        print("❌ Email not configured")
+        return False
+    
+    if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
+        return False
+    
+    for attempt in range(max_retries):
+        try:
+            msg = MIMEMultipart('alternative')
+            msg['From'] = f"{EMAIL_FROM} <{EMAIL_USER}>"
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+            if html_body:
+                msg.attach(MIMEText(html_body, 'html'))
+            
+            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=30) as server:
+                server.starttls()
+                server.login(EMAIL_USER, EMAIL_PASSWORD)
+                server.send_message(msg)
+            
+            print(f"✅ Email sent via SMTP to {to_email}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Email error (attempt {attempt+1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+    
+    return False
+
+
+def send_email(to_email, subject, plain_body, html_body=None):
+    """Main email function - tries Brevo first, falls back to SMTP"""
+    # Try Brevo first if configured
+    if BREVO_CONFIGURED:
+        result = send_email_via_brevo(to_email, subject, plain_body, html_body)
+        if result:
+            return True
+        print("⚠️ Brevo failed, trying SMTP fallback...")
+    
+    # Fallback to SMTP
+    return send_email_via_smtp(to_email, subject, plain_body, html_body)
+
+
+def check_email_configuration():
+    """Check if email is configured"""
+    if BREVO_CONFIGURED:
+        return True, "Brevo API configured"
+    if EMAIL_CONFIGURED:
+        return True, "SMTP configured"
+    return False, "No email configuration found"
+
+
 def get_email_template(title, content, button_text=None, button_link=None, transaction_details=None):
     """Generate HTML email template with optional transaction details"""
     button_html = ''
@@ -738,9 +797,12 @@ def send_deposit_approved_email(user, amount, crypto, transaction_hash):
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
         
+        if not user_email:
+            print(f"❌ No email for user {user_name}")
+            return False
+        
         print(f"📧 Sending approval email to: {user_email}")
         
-        # Format date and time
         from datetime import datetime
         current_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
         
@@ -804,6 +866,7 @@ https://www.veloxtrades.com.ng"""
         result = send_email(user_email, subject, plain_body, html_body)
         print(f"📧 Email send result: {result}")
         return result
+        
     except Exception as e:
         print(f"❌ Error in send_deposit_approved_email: {e}")
         import traceback
@@ -817,6 +880,10 @@ def send_deposit_rejected_email(user, amount, crypto, reason):
         subject = f"❌ Deposit Update - ${amount:,.2f} (Action Required)"
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
+        
+        if not user_email:
+            print(f"❌ No email for user {user_name}")
+            return False
         
         print(f"📧 Sending rejection email to: {user_email}")
         
@@ -885,6 +952,7 @@ https://www.veloxtrades.com.ng"""
         html_body = get_email_template(subject, content, 'Try Again', f'{FRONTEND_URL}/deposit.html', transaction_details)
         
         return send_email(user_email, subject, plain_body, html_body)
+        
     except Exception as e:
         print(f"❌ Error in send_deposit_rejected_email: {e}")
         return False
@@ -897,6 +965,10 @@ def send_investment_confirmation_email(user, amount, plan_name, roi, expected_pr
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
         
+        if not user_email:
+            print(f"❌ No email for user {user_name}")
+            return False
+        
         print(f"📧 Sending investment confirmation email to: {user_email}")
         
         from datetime import datetime, timedelta
@@ -904,10 +976,10 @@ def send_investment_confirmation_email(user, amount, plan_name, roi, expected_pr
         
         # Calculate end date based on plan
         duration_map = {
-            'Standard Plan': 20,  # hours
-            'Advanced Plan': 48,   # hours (2 days)
-            'Professional Plan': 96,  # hours (4 days)
-            'Classic Plan': 144   # hours (6 days)
+            'Standard Plan': 20,
+            'Advanced Plan': 48,
+            'Professional Plan': 96,
+            'Classic Plan': 144
         }
         duration_hours = duration_map.get(plan_name, 24)
         end_date = (datetime.now() + timedelta(hours=duration_hours)).strftime("%B %d, %Y at %I:%M %p")
@@ -975,6 +1047,7 @@ https://www.veloxtrades.com.ng"""
         html_body = get_email_template(subject, content, 'View Investment', f'{FRONTEND_URL}/investments.html', transaction_details)
         
         return send_email(user_email, subject, plain_body, html_body)
+        
     except Exception as e:
         print(f"❌ Error in send_investment_confirmation_email: {e}")
         return False
@@ -986,6 +1059,10 @@ def send_investment_rejected_email(user, amount, plan_name, reason):
         subject = f"❌ Investment Request Update - ${amount:,.2f} (Refunded)"
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
+        
+        if not user_email:
+            print(f"❌ No email for user {user_name}")
+            return False
         
         print(f"📧 Sending investment rejection email to: {user_email}")
         
@@ -1064,6 +1141,7 @@ https://www.veloxtrades.com.ng"""
         html_body = get_email_template(subject, content, 'View Balance', f'{FRONTEND_URL}/dashboard.html', transaction_details)
         
         return send_email(user_email, subject, plain_body, html_body)
+        
     except Exception as e:
         print(f"❌ Error in send_investment_rejected_email: {e}")
         return False
@@ -1075,6 +1153,10 @@ def send_investment_completed_email(user, amount, plan_name, profit):
         subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
+        
+        if not user_email:
+            print(f"❌ No email for user {user_name}")
+            return False
         
         print(f"📧 Sending investment completion email to: {user_email}")
         
@@ -1151,6 +1233,7 @@ https://www.veloxtrades.com.ng"""
         html_body = get_email_template(subject, content, 'View Dashboard', f'{FRONTEND_URL}/dashboard.html', transaction_details)
         
         return send_email(user_email, subject, plain_body, html_body)
+        
     except Exception as e:
         print(f"❌ Error in send_investment_completed_email: {e}")
         return False
