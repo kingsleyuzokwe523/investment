@@ -3142,17 +3142,14 @@ def admin_get_kyc_applications():
         applications = []
         total = 0
         
-        # Try veloxtrades_kyc
         if veloxtrades_kyc is not None:
             try:
                 total = veloxtrades_kyc.count_documents(query)
                 cursor = veloxtrades_kyc.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit)
                 applications = list(cursor)
-                print(f"📋 Found {len(applications)} KYC applications in veloxtrades_db")
             except Exception as e:
                 print(f"Error fetching KYC: {e}")
         
-        # Try investment_kyc
         if investment_kyc is not None:
             try:
                 cursor = investment_kyc.find(query).sort([('submitted_at', -1)]).skip(skip).limit(limit)
@@ -3161,7 +3158,6 @@ def admin_get_kyc_applications():
                 for app in inv_apps:
                     if str(app.get('_id')) not in existing_ids:
                         applications.append(app)
-                print(f"📋 Found {len(inv_apps)} KYC applications in investment_db")
             except Exception as e:
                 print(f"Error fetching KYC from investment_db: {e}")
         
