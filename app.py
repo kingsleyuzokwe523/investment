@@ -623,26 +623,27 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-# ==================== RESEND EMAIL CONFIGURATION ====================
-import resend
+# ==================== BREVO EMAIL CONFIGURATION ====================
 import os
 from datetime import datetime
 import logging
+import requests
+import json
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Resend Configuration
-RESEND_API_KEY = "re_EJKY7NRT_CwvCXuEyRqpmVKX16vdE8j4S"
-RESEND_FROM_EMAIL = "kingsleyuzokwe523@gmail.com"  # Your Gmail
-RESEND_FROM_NAME = "Veloxtrades"
+# Brevo Configuration
+BREVO_API_KEY = [BREVO_API_KEY ]
+BREVO_FROM_EMAIL = "a6eeec001@smtp-brevo.com"  # Your Brevo SMTP login (must use this)
+BREVO_FROM_NAME = "Veloxtrades"
 
-# Configure Resend
-resend.api_key = RESEND_API_KEY
+# Brevo API endpoint
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Resend API"""
+    """Send email using Brevo API"""
     try:
         if not to_email:
             logger.error("❌ No recipient email provided")
@@ -651,28 +652,50 @@ def send_email(to_email, subject, plain_body, html_body=None):
         # Use HTML body if provided, otherwise convert plain text to HTML
         final_html = html_body or plain_body.replace('\n', '<br>')
         
-        # Send via Resend
-        response = resend.Emails.send({
-            "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
-            "to": to_email,
+        # Prepare the email data
+        data = {
+            "sender": {
+                "name": BREVO_FROM_NAME,
+                "email": BREVO_FROM_EMAIL
+            },
+            "to": [
+                {
+                    "email": to_email,
+                    "name": to_email.split('@')[0]
+                }
+            ],
             "subject": subject,
-            "html": final_html,
-            "text": plain_body
-        })
+            "htmlContent": final_html,
+            "textContent": plain_body
+        }
         
-        logger.info(f"✅ Email sent via Resend to {to_email}")
-        logger.info(f"   Response: {response}")
-        return True
+        # Set up headers
+        headers = {
+            "api-key": BREVO_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        
+        # Send the request
+        response = requests.post(BREVO_API_URL, json=data, headers=headers)
+        
+        if response.status_code in [200, 201]:
+            logger.info(f"✅ Email sent via Brevo to {to_email}")
+            logger.info(f"   Response: {response.json()}")
+            return True
+        else:
+            logger.error(f"❌ Brevo error: {response.status_code} - {response.text}")
+            return False
         
     except Exception as e:
-        logger.error(f"❌ Resend error: {e}")
+        logger.error(f"❌ Brevo error: {e}")
         return False
 
 
 def check_email_configuration():
     """Check if email is configured"""
-    if RESEND_API_KEY:
-        return True, "Resend API configured"
+    if BREVO_API_KEY and BREVO_API_KEY.startswith('xkeysib'):
+        return True, "Brevo API configured"
     return False, "No email configuration found"
 
 
@@ -707,12 +730,11 @@ def send_test_email():
     return result
 
 
-# ==================== ALL EMAIL FUNCTIONS (keep same as before) ====================
+# ==================== ALL EMAIL FUNCTIONS ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
     """Send deposit approval email - uses database user info"""
     try:
-        # Get user info from database
         user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
