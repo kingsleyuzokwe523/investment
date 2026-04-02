@@ -623,12 +623,16 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-
-
 # ==================== SENDPULSE EMAIL CONFIGURATION ====================
 import requests
 import base64
 import time
+import os
+from datetime import datetime
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # SendPulse Configuration
 SENDPULSE_API_KEY = os.getenv('SENDPULSE_API_KEY', '')
@@ -642,7 +646,7 @@ _token_expiry = 0
 
 
 def get_sendpulse_token():
-    """Get SendPulse access token"""
+    """Get SendPulse access token with caching"""
     global _sendpulse_token, _token_expiry
     
     if _sendpulse_token and time.time() < _token_expiry:
@@ -666,21 +670,21 @@ def get_sendpulse_token():
             token_data = response.json()
             _sendpulse_token = token_data.get('access_token')
             _token_expiry = time.time() + token_data.get('expires_in', 3600) - 300
-            print("✅ SendPulse token obtained")
+            logger.info("✅ SendPulse token obtained")
             return _sendpulse_token
         else:
-            print(f"❌ Failed to get token: {response.status_code}")
+            logger.error(f"❌ Failed to get token: {response.status_code}")
             return None
             
     except Exception as e:
-        print(f"❌ Token error: {e}")
+        logger.error(f"❌ Token error: {e}")
         return None
 
 
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using SendPulse API"""
     if not SENDPULSE_CONFIGURED:
-        print("❌ SendPulse API key not configured")
+        logger.error("❌ SendPulse API key not configured")
         return False
     
     try:
@@ -716,15 +720,15 @@ def send_email(to_email, subject, plain_body, html_body=None):
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         
         if response.status_code == 200:
-            print(f"✅ Email sent via SendPulse to {to_email}")
+            logger.info(f"✅ Email sent via SendPulse to {to_email}")
             return True
         else:
-            print(f"❌ SendPulse error: {response.status_code}")
-            print(f"   Response: {response.text}")
+            logger.error(f"❌ SendPulse error: {response.status_code}")
+            logger.error(f"   Response: {response.text}")
             return False
             
     except Exception as e:
-        print(f"❌ SendPulse exception: {e}")
+        logger.error(f"❌ SendPulse exception: {e}")
         return False
 
 
@@ -735,30 +739,35 @@ def check_email_configuration():
     return False, "No email configuration found"
 
 
-# ==================== EMAIL FUNCTIONS (NO LINKS, SAFE) ====================
+# ==================== SAFE EMAIL FUNCTIONS (NO SUSPICIOUS LINKS) ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
-    """Send deposit approval email - simple, no links"""
+    """Send deposit approval email - uses database user info"""
     try:
-        user_name = user.get('full_name', user.get('username', 'User'))
+        # Get user info from database
+        user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
         if not user_email:
-            print(f"❌ No email for user {user_name}")
+            logger.error(f"❌ No email for user {user_name}")
             return False
         
-        from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         
-        subject = f"Deposit Approved - ${amount:,.2f}"
+        subject = f"Deposit Confirmed - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your deposit of ${amount:,.2f} has been approved.
+Your deposit of ${amount:,.2f} has been confirmed.
 
+━━━━━━━━━━━━━━━━━━━━━
+📋 TRANSACTION DETAILS
+━━━━━━━━━━━━━━━━━━━━━
 Amount: ${amount:,.2f}
 Method: {crypto.upper()}
+Reference: {transaction_hash or 'N/A'}
 Date: {current_date}
+━━━━━━━━━━━━━━━━━━━━━
 
 Thank you for using Veloxtrades.
 
@@ -767,18 +776,22 @@ Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Transaction Confirmed</p>
             </div>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your deposit of <strong>${amount:,.2f}</strong> has been approved.</p>
-                <table style="width: 100%; margin: 15px 0;">
-                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
-                    <tr><td>Method:</td><td><strong>{crypto.upper()}</strong></td></tr>
-                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
-                </table>
-                <p>Thank you for using Veloxtrades.</p>
+                <p>Your deposit has been confirmed and processed successfully.</p>
+                
+                <div style="background: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #10b981;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {crypto.upper()}</p>
+                    <p style="margin: 5px 0;"><strong>🆔 Reference:</strong> {transaction_hash or 'N/A'}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>Thank you for choosing Veloxtrades.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
@@ -787,54 +800,58 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        print(f"❌ Error in send_deposit_approved_email: {e}")
+        logger.error(f"❌ Error in send_deposit_approved_email: {e}")
         return False
 
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
-    """Send deposit rejection email - simple, no links"""
+    """Send deposit rejection email - uses database user info"""
     try:
-        user_name = user.get('full_name', user.get('username', 'User'))
+        user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
         if not user_email:
-            print(f"❌ No email for user {user_name}")
+            logger.error(f"❌ No email for user {user_name}")
             return False
         
-        from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         
-        subject = f"Deposit Update - ${amount:,.2f}"
+        subject = f"Deposit Status Update - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your deposit of ${amount:,.2f} was not approved.
+Regarding your deposit of ${amount:,.2f}:
 
+Status: Not Confirmed
 Amount: ${amount:,.2f}
 Method: {crypto.upper()}
 Reason: {reason}
 Date: {current_date}
 
-If you have questions, please contact support.
+Please contact support if you have questions.
 
 Best regards,
 Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Transaction Update</p>
             </div>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your deposit of <strong>${amount:,.2f}</strong> was not approved.</p>
-                <table style="width: 100%; margin: 15px 0;">
-                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
-                    <tr><td>Method:</td><td><strong>{crypto.upper()}</strong></td></tr>
-                    <tr><td>Reason:</td><td><strong>{reason}</strong></td></tr>
-                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
-                </table>
-                <p>If you have questions, please contact support.</p>
+                <p>Regarding your deposit transaction:</p>
+                
+                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #ef4444;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {crypto.upper()}</p>
+                    <p style="margin: 5px 0;"><strong>ℹ️ Status:</strong> Not Confirmed</p>
+                    <p style="margin: 5px 0;"><strong>📝 Note:</strong> {reason}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>Please contact support for assistance.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
@@ -843,55 +860,61 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        print(f"❌ Error in send_deposit_rejected_email: {e}")
+        logger.error(f"❌ Error in send_deposit_rejected_email: {e}")
         return False
 
 
 def send_investment_confirmation_email(user, amount, plan_name, roi, expected_profit):
-    """Send investment confirmation email - simple, no links"""
+    """Send investment confirmation email - uses database user info"""
     try:
-        user_name = user.get('full_name', user.get('username', 'User'))
+        user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
         if not user_email:
-            print(f"❌ No email for user {user_name}")
+            logger.error(f"❌ No email for user {user_name}")
             return False
         
-        from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         
-        subject = f"Investment Confirmed - ${amount:,.2f}"
+        subject = f"Investment Approved - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your investment of ${amount:,.2f} in {plan_name} has been confirmed.
+Your investment request has been approved and activated.
 
+━━━━━━━━━━━━━━━━━━━━━
+📋 INVESTMENT DETAILS
+━━━━━━━━━━━━━━━━━━━━━
 Amount: ${amount:,.2f}
 Plan: {plan_name}
 ROI: {roi}%
 Expected Profit: ${expected_profit:,.2f}
 Date: {current_date}
+━━━━━━━━━━━━━━━━━━━━━
 
-Thank you for investing with Veloxtrades.
+Your investment is now active.
 
 Best regards,
 Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Investment Approved</p>
             </div>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your investment of <strong>${amount:,.2f}</strong> in <strong>{plan_name}</strong> has been confirmed.</p>
-                <table style="width: 100%; margin: 15px 0;">
-                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
-                    <tr><td>Plan:</td><td><strong>{plan_name}</strong></td></tr>
-                    <tr><td>ROI:</td><td><strong>{roi}%</strong></td></tr>
-                    <tr><td>Expected Profit:</td><td><strong>${expected_profit:,.2f}</strong></td></tr>
-                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
-                </table>
+                <p>Your investment request has been approved and is now active.</p>
+                
+                <div style="background: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #10b981;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>📊 Plan:</strong> {plan_name}</p>
+                    <p style="margin: 5px 0;"><strong>📈 ROI:</strong> {roi}%</p>
+                    <p style="margin: 5px 0;"><strong>💵 Expected Profit:</strong> ${expected_profit:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
                 <p>Thank you for investing with Veloxtrades.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
@@ -901,54 +924,58 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        print(f"❌ Error in send_investment_confirmation_email: {e}")
+        logger.error(f"❌ Error in send_investment_confirmation_email: {e}")
         return False
 
 
 def send_investment_rejected_email(user, amount, plan_name, reason):
-    """Send investment rejection email - simple, no links"""
+    """Send investment rejection email - uses database user info"""
     try:
-        user_name = user.get('full_name', user.get('username', 'User'))
+        user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
         if not user_email:
-            print(f"❌ No email for user {user_name}")
+            logger.error(f"❌ No email for user {user_name}")
             return False
         
-        from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         
-        subject = f"Investment Update - ${amount:,.2f}"
+        subject = f"Investment Status Update - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your investment request of ${amount:,.2f} in {plan_name} was not approved.
+Your investment request of ${amount:,.2f} in {plan_name}:
 
+Status: Not Approved
 Amount: ${amount:,.2f}
 Plan: {plan_name}
 Reason: {reason}
 Date: {current_date}
 
-The amount has been refunded to your balance.
+The amount has been returned to your balance.
 
 Best regards,
 Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Investment Update</p>
             </div>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your investment request of <strong>${amount:,.2f}</strong> in <strong>{plan_name}</strong> was not approved.</p>
-                <table style="width: 100%; margin: 15px 0;">
-                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
-                    <tr><td>Plan:</td><td><strong>{plan_name}</strong></td></tr>
-                    <tr><td>Reason:</td><td><strong>{reason}</strong></td></tr>
-                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
-                </table>
-                <p>The amount has been refunded to your balance.</p>
+                <p>Regarding your investment request:</p>
+                
+                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #ef4444;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>📊 Plan:</strong> {plan_name}</p>
+                    <p style="margin: 5px 0;"><strong>ℹ️ Status:</strong> Not Approved</p>
+                    <p style="margin: 5px 0;"><strong>📝 Reason:</strong> {reason}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>The amount has been returned to your balance.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
@@ -957,34 +984,37 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        print(f"❌ Error in send_investment_rejected_email: {e}")
+        logger.error(f"❌ Error in send_investment_rejected_email: {e}")
         return False
 
 
 def send_investment_completed_email(user, amount, plan_name, profit):
-    """Send investment completion email - simple, no links"""
+    """Send investment completion email - uses database user info"""
     try:
-        user_name = user.get('full_name', user.get('username', 'User'))
+        user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
         
         if not user_email:
-            print(f"❌ No email for user {user_name}")
+            logger.error(f"❌ No email for user {user_name}")
             return False
         
-        from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         total_return = amount + profit
         
-        subject = f"Investment Completed - ${profit:,.2f} Earned"
+        subject = f"Investment Completed - ${profit:,.2f} Return"
         
         plain_body = f"""Dear {user_name},
 
-Your investment in {plan_name} has completed.
+Your investment in {plan_name} has completed its cycle.
 
+━━━━━━━━━━━━━━━━━━━━━
+📋 COMPLETION DETAILS
+━━━━━━━━━━━━━━━━━━━━━
 Initial Investment: ${amount:,.2f}
 Profit Earned: ${profit:,.2f}
 Total Return: ${total_return:,.2f}
 Date: {current_date}
+━━━━━━━━━━━━━━━━━━━━━
 
 The total amount has been added to your balance.
 
@@ -993,18 +1023,21 @@ Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Investment Completed</p>
             </div>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your investment in <strong>{plan_name}</strong> has completed.</p>
-                <table style="width: 100%; margin: 15px 0;">
-                    <tr><td>Initial Investment:</td><td><strong>${amount:,.2f}</strong></td></tr>
-                    <tr><td>Profit Earned:</td><td><strong>+${profit:,.2f}</strong></td></tr>
-                    <tr><td>Total Return:</td><td><strong>${total_return:,.2f}</strong></td></tr>
-                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
-                </table>
+                <p>Your investment in <strong>{plan_name}</strong> has completed its cycle.</p>
+                
+                <div style="background: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #10b981;">
+                    <p style="margin: 5px 0;"><strong>💰 Initial Investment:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>📈 Profit Earned:</strong> +${profit:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💵 Total Return:</strong> ${total_return:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
                 <p>The total amount has been added to your balance.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
@@ -1014,8 +1047,196 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        print(f"❌ Error in send_investment_completed_email: {e}")
+        logger.error(f"❌ Error in send_investment_completed_email: {e}")
         return False
+
+
+def send_withdrawal_approved_email(user, amount, method, wallet_address, transaction_id):
+    """Send withdrawal approval email - uses database user info"""
+    try:
+        user_name = user.get('full_name') or user.get('username', 'User')
+        user_email = user.get('email')
+        
+        if not user_email:
+            logger.error(f"❌ No email for user {user_name}")
+            return False
+        
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Withdrawal Approved - ${amount:,.2f}"
+        
+        plain_body = f"""Dear {user_name},
+
+Your withdrawal request has been approved and processed.
+
+━━━━━━━━━━━━━━━━━━━━━
+📋 WITHDRAWAL DETAILS
+━━━━━━━━━━━━━━━━━━━━━
+Amount: ${amount:,.2f}
+Method: {method}
+Wallet Address: {wallet_address}
+Transaction ID: {transaction_id}
+Date: {current_date}
+━━━━━━━━━━━━━━━━━━━━━
+
+Funds have been sent to your wallet.
+
+Best regards,
+Veloxtrades Team"""
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Approved</p>
+            </div>
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <p>Dear <strong>{user_name}</strong>,</p>
+                <p>Your withdrawal request has been approved and processed.</p>
+                
+                <div style="background: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #10b981;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
+                    <p style="margin: 5px 0;"><strong>🏦 Wallet:</strong> {wallet_address}</p>
+                    <p style="margin: 5px 0;"><strong>🆔 Transaction ID:</strong> {transaction_id}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>Funds have been sent to your wallet.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
+            </div>
+        </div>
+        """
+        
+        return send_email(user_email, subject, plain_body, html_body)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in send_withdrawal_approved_email: {e}")
+        return False
+
+
+def send_withdrawal_rejected_email(user, amount, method, reason):
+    """Send withdrawal rejection email - uses database user info"""
+    try:
+        user_name = user.get('full_name') or user.get('username', 'User')
+        user_email = user.get('email')
+        
+        if not user_email:
+            logger.error(f"❌ No email for user {user_name}")
+            return False
+        
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Withdrawal Status Update - ${amount:,.2f}"
+        
+        plain_body = f"""Dear {user_name},
+
+Your withdrawal request of ${amount:,.2f}:
+
+Status: Not Approved
+Amount: ${amount:,.2f}
+Method: {method}
+Reason: {reason}
+Date: {current_date}
+
+The amount has been returned to your balance.
+
+Best regards,
+Veloxtrades Team"""
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Update</p>
+            </div>
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <p>Dear <strong>{user_name}</strong>,</p>
+                <p>Regarding your withdrawal request:</p>
+                
+                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #ef4444;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
+                    <p style="margin: 5px 0;"><strong>ℹ️ Status:</strong> Not Approved</p>
+                    <p style="margin: 5px 0;"><strong>📝 Reason:</strong> {reason}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>The amount has been returned to your balance.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
+            </div>
+        </div>
+        """
+        
+        return send_email(user_email, subject, plain_body, html_body)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in send_withdrawal_rejected_email: {e}")
+        return False
+
+
+def send_withdrawal_processing_email(user, amount, method):
+    """Send withdrawal processing notification - uses database user info"""
+    try:
+        user_name = user.get('full_name') or user.get('username', 'User')
+        user_email = user.get('email')
+        
+        if not user_email:
+            logger.error(f"❌ No email for user {user_name}")
+            return False
+        
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Withdrawal Request Received - ${amount:,.2f}"
+        
+        plain_body = f"""Dear {user_name},
+
+Your withdrawal request is being processed.
+
+━━━━━━━━━━━━━━━━━━━━━
+📋 WITHDRAWAL DETAILS
+━━━━━━━━━━━━━━━━━━━━━
+Amount: ${amount:,.2f}
+Method: {method}
+Date: {current_date}
+Status: Processing
+━━━━━━━━━━━━━━━━━━━━━
+
+You will receive confirmation once completed.
+
+Best regards,
+Veloxtrades Team"""
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Request</p>
+            </div>
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <p>Dear <strong>{user_name}</strong>,</p>
+                <p>Your withdrawal request is being processed.</p>
+                
+                <div style="background: #fef3c7; padding: 15px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
+                    <p style="margin: 5px 0;"><strong>⏳ Status:</strong> Processing</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>You will receive confirmation once completed.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
+            </div>
+        </div>
+        """
+        
+        return send_email(user_email, subject, plain_body, html_body)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in send_withdrawal_processing_email: {e}")
+        return False
+
+
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
     'standard': {
