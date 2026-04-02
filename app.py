@@ -634,7 +634,7 @@ import json
 logger = logging.getLogger(__name__)
 
 # Brevo Configuration
-BREVO_API_KEY = [BREVO_API_KEY ]
+BREVO_API_KEY = os.getenv('BREVO_API_KEY')
 BREVO_FROM_EMAIL = "a6eeec001@smtp-brevo.com"  # Your Brevo SMTP login (must use this)
 BREVO_FROM_NAME = "Veloxtrades"
 
