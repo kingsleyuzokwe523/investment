@@ -623,126 +623,122 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-# ==================== EMAIL TEMPLATES ====================
-# ==================== EMAIL CONFIGURATION ====================
-# ==================== EMAIL CONFIGURATION ====================
-import smtplib
-import re
-import time
+
+
+# ==================== SENDPULSE EMAIL CONFIGURATION ====================
 import requests
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import base64
+import time
 
-# SMTP Configuration (fallback)
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USER = os.getenv('EMAIL_USER', '')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
-EMAIL_FROM = os.getenv('EMAIL_FROM', 'Veloxtrades')
-EMAIL_CONFIGURED = bool(EMAIL_USER and EMAIL_PASSWORD and EMAIL_HOST)
+# SendPulse Configuration
+SENDPULSE_API_KEY = os.getenv('SENDPULSE_API_KEY', '')
+SENDPULSE_FROM_EMAIL = os.getenv('SENDPULSE_FROM_EMAIL', 'kingsleyuzokwe523@gmail.com')
+SENDPULSE_FROM_NAME = os.getenv('SENDPULSE_FROM_NAME', 'Veloxtrades')
+SENDPULSE_CONFIGURED = bool(SENDPULSE_API_KEY)
 
+# Cache for access token
+_sendpulse_token = None
+_token_expiry = 0
+
+
+def get_sendpulse_token():
+    """Get SendPulse access token"""
+    global _sendpulse_token, _token_expiry
+    
+    if _sendpulse_token and time.time() < _token_expiry:
+        return _sendpulse_token
+    
+    try:
+        url = "https://api.sendpulse.com/oauth/access_token"
+        
+        auth_string = base64.b64encode(f"{SENDPULSE_API_KEY}:".encode()).decode()
+        
+        headers = {
+            "Authorization": f"Basic {auth_string}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
+        data = {"grant_type": "client_credentials"}
+        
+        response = requests.post(url, headers=headers, data=data, timeout=30)
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            _sendpulse_token = token_data.get('access_token')
+            _token_expiry = time.time() + token_data.get('expires_in', 3600) - 300
+            print("✅ SendPulse token obtained")
+            return _sendpulse_token
+        else:
+            print(f"❌ Failed to get token: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Token error: {e}")
+        return None
 
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Main email function - uses SMTP directly"""
-    return send_email_via_smtp(to_email, subject, plain_body, html_body)
-
-
-def send_email_via_smtp(to_email, subject, body, html_body=None, max_retries=3):
-    """Send email using SMTP (fallback)"""
-    if not EMAIL_CONFIGURED:
-        print("❌ Email not configured")
+    """Send email using SendPulse API"""
+    if not SENDPULSE_CONFIGURED:
+        print("❌ SendPulse API key not configured")
         return False
     
-    if not to_email or not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', to_email):
-        print(f"❌ Invalid email address: {to_email}")
-        return False
-    
-    for attempt in range(max_retries):
-        try:
-            msg = MIMEMultipart('alternative')
-            msg['From'] = f"{EMAIL_FROM} <{EMAIL_USER}>"
-            msg['To'] = to_email
-            msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain'))
-            if html_body:
-                msg.attach(MIMEText(html_body, 'html'))
-            
-            with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=30) as server:
-                server.starttls()
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-                server.send_message(msg)
-            
-            print(f"✅ Email sent via SMTP to {to_email}")
+    try:
+        token = get_sendpulse_token()
+        if not token:
+            return False
+        
+        url = "https://api.sendpulse.com/smtp/emails"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "email": {
+                "html": html_body or plain_body.replace('\n', '<br>'),
+                "text": plain_body,
+                "subject": subject,
+                "from": {
+                    "name": SENDPULSE_FROM_NAME,
+                    "email": SENDPULSE_FROM_EMAIL
+                },
+                "to": [
+                    {
+                        "name": to_email.split('@')[0],
+                        "email": to_email
+                    }
+                ]
+            }
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            print(f"✅ Email sent via SendPulse to {to_email}")
             return True
+        else:
+            print(f"❌ SendPulse error: {response.status_code}")
+            print(f"   Response: {response.text}")
+            return False
             
-        except Exception as e:
-            print(f"❌ Email error (attempt {attempt+1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-    
-    return False
-
+    except Exception as e:
+        print(f"❌ SendPulse exception: {e}")
+        return False
 
 
 def check_email_configuration():
     """Check if email is configured"""
-    if BREVO_CONFIGURED:
-        return True, "Brevo API configured"
-    if EMAIL_CONFIGURED:
-        return True, "SMTP configured"
+    if SENDPULSE_CONFIGURED:
+        return True, "SendPulse API configured"
     return False, "No email configuration found"
 
 
-def get_email_template(title, content, button_text=None, button_link=None, transaction_details=None):
-    """Generate HTML email template with optional transaction details"""
-    button_html = ''
-    if button_text and button_link:
-        button_html = f'<div style="text-align:center;margin:30px 0;"><a href="{button_link}" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;display:inline-block;">{button_text}</a></div>'
-    
-    details_html = ''
-    if transaction_details:
-        details_html = '<div style="background:#f8fafc;border-radius:10px;padding:15px;margin:20px 0;"><h3 style="margin:0 0 10px 0;color:#1e293b;">📋 Transaction Details</h3>'
-        for key, value in transaction_details.items():
-            details_html += f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e2e8f0;"><span style="color:#64748b;">{key}:</span><span style="font-weight:500;color:#1e293b;">{value}</span></div>'
-        details_html += '</div>'
-    
-    return f'''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>{title}</title>
-    <style>
-        body{{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0;}}
-        .container{{max-width:600px;margin:0 auto;padding:20px;}}
-        .header{{background:linear-gradient(135deg,#10b981,#059669);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0;}}
-        .content{{background:white;padding:30px;border-radius:0 0 10px 10px;}}
-        .footer{{text-align:center;padding:20px;font-size:12px;color:#666;}}
-        .highlight{{background:#d1fae5;padding:15px;border-radius:8px;margin:15px 0;}}
-        .warning{{background:#fee2e2;padding:15px;border-radius:8px;margin:15px 0;}}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>VELOXTRADES</h1>
-        </div>
-        <div class="content">
-            <h2>{title}</h2>
-            {content}
-            {details_html}
-            {button_html}
-        </div>
-        <div class="footer">
-            <p>© 2025 Veloxtrades | <a href="{FRONTEND_URL}/support.html" style="color:#10b981;">Contact Support</a></p>
-        </div>
-    </div>
-</body>
-</html>'''
-
+# ==================== EMAIL FUNCTIONS (NO LINKS, SAFE) ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
-    """Send deposit approval email"""
+    """Send deposit approval email - simple, no links"""
     try:
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
@@ -751,38 +747,42 @@ def send_deposit_approved_email(user, amount, crypto, transaction_hash):
             print(f"❌ No email for user {user_name}")
             return False
         
-        subject = f"✅ Deposit Approved - ${amount:,.2f} added"
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Deposit Approved - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your deposit of ${amount:,.2f} has been APPROVED!
+Your deposit of ${amount:,.2f} has been approved.
 
 Amount: ${amount:,.2f}
 Method: {crypto.upper()}
-Transaction ID: {transaction_hash or 'N/A'}
+Date: {current_date}
 
-Your balance has been updated.
+Thank you for using Veloxtrades.
 
 Best regards,
-Veloxtrades Team
-https://www.veloxtrades.com.ng"""
+Veloxtrades Team"""
         
-        html_body = f'''
-        <div style="font-family:Arial;max-width:600px;margin:0 auto;">
-            <div style="background:#10b981;padding:20px;text-align:center;color:white;"><h1>VELOXTRADES</h1></div>
-            <div style="padding:20px;">
-                <h2>✅ Deposit Approved!</h2>
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+            </div>
+            <div style="padding: 20px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <div style="background:#e8f5e9;padding:15px;margin:15px 0;">
-                    <p><strong>Amount:</strong> ${amount:,.2f}</p>
-                    <p><strong>Method:</strong> {crypto.upper()}</p>
-                </div>
-                <div style="text-align:center;margin:30px 0;">
-                    <a href="{FRONTEND_URL}/dashboard.html" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">Go to Dashboard</a>
-                </div>
+                <p>Your deposit of <strong>${amount:,.2f}</strong> has been approved.</p>
+                <table style="width: 100%; margin: 15px 0;">
+                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
+                    <tr><td>Method:</td><td><strong>{crypto.upper()}</strong></td></tr>
+                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
+                </table>
+                <p>Thank you for using Veloxtrades.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
-        '''
+        """
         
         return send_email(user_email, subject, plain_body, html_body)
         
@@ -792,7 +792,7 @@ https://www.veloxtrades.com.ng"""
 
 
 def send_deposit_rejected_email(user, amount, crypto, reason):
-    """Send deposit rejection email"""
+    """Send deposit rejection email - simple, no links"""
     try:
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
@@ -801,35 +801,44 @@ def send_deposit_rejected_email(user, amount, crypto, reason):
             print(f"❌ No email for user {user_name}")
             return False
         
-        subject = f"❌ Deposit Rejected - ${amount:,.2f}"
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Deposit Update - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your deposit of ${amount:,.2f} was REJECTED.
+Your deposit of ${amount:,.2f} was not approved.
 
+Amount: ${amount:,.2f}
+Method: {crypto.upper()}
 Reason: {reason}
+Date: {current_date}
 
-Please contact support if you have questions.
+If you have questions, please contact support.
 
 Best regards,
 Veloxtrades Team"""
         
-        html_body = f'''
-        <div style="font-family:Arial;max-width:600px;margin:0 auto;">
-            <div style="background:#10b981;padding:20px;text-align:center;color:white;"><h1>VELOXTRADES</h1></div>
-            <div style="padding:20px;">
-                <h2>❌ Deposit Rejected</h2>
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+            </div>
+            <div style="padding: 20px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <div style="background:#fee2e2;padding:15px;margin:15px 0;">
-                    <p><strong>Amount:</strong> ${amount:,.2f}</p>
-                    <p><strong>Reason:</strong> {reason}</p>
-                </div>
-                <div style="text-align:center;margin:30px 0;">
-                    <a href="{FRONTEND_URL}/support.html" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">Contact Support</a>
-                </div>
+                <p>Your deposit of <strong>${amount:,.2f}</strong> was not approved.</p>
+                <table style="width: 100%; margin: 15px 0;">
+                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
+                    <tr><td>Method:</td><td><strong>{crypto.upper()}</strong></td></tr>
+                    <tr><td>Reason:</td><td><strong>{reason}</strong></td></tr>
+                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
+                </table>
+                <p>If you have questions, please contact support.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
-        '''
+        """
         
         return send_email(user_email, subject, plain_body, html_body)
         
@@ -839,7 +848,7 @@ Veloxtrades Team"""
 
 
 def send_investment_confirmation_email(user, amount, plan_name, roi, expected_profit):
-    """Send investment confirmation email"""
+    """Send investment confirmation email - simple, no links"""
     try:
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
@@ -848,40 +857,46 @@ def send_investment_confirmation_email(user, amount, plan_name, roi, expected_pr
             print(f"❌ No email for user {user_name}")
             return False
         
-        subject = f"🚀 Investment Confirmed - ${amount:,.2f} in {plan_name}"
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Investment Confirmed - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your investment of ${amount:,.2f} in {plan_name} has been APPROVED and is now ACTIVE!
+Your investment of ${amount:,.2f} in {plan_name} has been confirmed.
 
-Investment Amount: ${amount:,.2f}
+Amount: ${amount:,.2f}
 Plan: {plan_name}
 ROI: {roi}%
 Expected Profit: ${expected_profit:,.2f}
+Date: {current_date}
 
-Your investment is now growing!
+Thank you for investing with Veloxtrades.
 
 Best regards,
 Veloxtrades Team"""
         
-        html_body = f'''
-        <div style="font-family:Arial;max-width:600px;margin:0 auto;">
-            <div style="background:#10b981;padding:20px;text-align:center;color:white;"><h1>VELOXTRADES</h1></div>
-            <div style="padding:20px;">
-                <h2>🚀 Investment Confirmed!</h2>
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+            </div>
+            <div style="padding: 20px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <div style="background:#e8f5e9;padding:15px;margin:15px 0;">
-                    <p><strong>Amount:</strong> ${amount:,.2f}</p>
-                    <p><strong>Plan:</strong> {plan_name}</p>
-                    <p><strong>ROI:</strong> {roi}%</p>
-                    <p><strong>Expected Profit:</strong> ${expected_profit:,.2f}</p>
-                </div>
-                <div style="text-align:center;margin:30px 0;">
-                    <a href="{FRONTEND_URL}/investments.html" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">View Investments</a>
-                </div>
+                <p>Your investment of <strong>${amount:,.2f}</strong> in <strong>{plan_name}</strong> has been confirmed.</p>
+                <table style="width: 100%; margin: 15px 0;">
+                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
+                    <tr><td>Plan:</td><td><strong>{plan_name}</strong></td></tr>
+                    <tr><td>ROI:</td><td><strong>{roi}%</strong></td></tr>
+                    <tr><td>Expected Profit:</td><td><strong>${expected_profit:,.2f}</strong></td></tr>
+                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
+                </table>
+                <p>Thank you for investing with Veloxtrades.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
-        '''
+        """
         
         return send_email(user_email, subject, plain_body, html_body)
         
@@ -891,7 +906,7 @@ Veloxtrades Team"""
 
 
 def send_investment_rejected_email(user, amount, plan_name, reason):
-    """Send investment rejection email"""
+    """Send investment rejection email - simple, no links"""
     try:
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
@@ -900,36 +915,44 @@ def send_investment_rejected_email(user, amount, plan_name, reason):
             print(f"❌ No email for user {user_name}")
             return False
         
-        subject = f"❌ Investment Request Rejected - ${amount:,.2f}"
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subject = f"Investment Update - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your investment request of ${amount:,.2f} in {plan_name} was REJECTED.
+Your investment request of ${amount:,.2f} in {plan_name} was not approved.
 
+Amount: ${amount:,.2f}
+Plan: {plan_name}
 Reason: {reason}
+Date: {current_date}
 
-The amount of ${amount:,.2f} has been refunded to your balance.
+The amount has been refunded to your balance.
 
 Best regards,
 Veloxtrades Team"""
         
-        html_body = f'''
-        <div style="font-family:Arial;max-width:600px;margin:0 auto;">
-            <div style="background:#10b981;padding:20px;text-align:center;color:white;"><h1>VELOXTRADES</h1></div>
-            <div style="padding:20px;">
-                <h2>❌ Investment Rejected</h2>
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+            </div>
+            <div style="padding: 20px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <div style="background:#fee2e2;padding:15px;margin:15px 0;">
-                    <p><strong>Amount:</strong> ${amount:,.2f}</p>
-                    <p><strong>Plan:</strong> {plan_name}</p>
-                    <p><strong>Reason:</strong> {reason}</p>
-                </div>
-                <div style="text-align:center;margin:30px 0;">
-                    <a href="{FRONTEND_URL}/dashboard.html" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">View Dashboard</a>
-                </div>
+                <p>Your investment request of <strong>${amount:,.2f}</strong> in <strong>{plan_name}</strong> was not approved.</p>
+                <table style="width: 100%; margin: 15px 0;">
+                    <tr><td>Amount:</td><td><strong>${amount:,.2f}</strong></td></tr>
+                    <tr><td>Plan:</td><td><strong>{plan_name}</strong></td></tr>
+                    <tr><td>Reason:</td><td><strong>{reason}</strong></td></tr>
+                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
+                </table>
+                <p>The amount has been refunded to your balance.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
-        '''
+        """
         
         return send_email(user_email, subject, plain_body, html_body)
         
@@ -939,7 +962,7 @@ Veloxtrades Team"""
 
 
 def send_investment_completed_email(user, amount, plan_name, profit):
-    """Send investment completion email"""
+    """Send investment completion email - simple, no links"""
     try:
         user_name = user.get('full_name', user.get('username', 'User'))
         user_email = user.get('email')
@@ -948,39 +971,45 @@ def send_investment_completed_email(user, amount, plan_name, profit):
             print(f"❌ No email for user {user_name}")
             return False
         
-        subject = f"✅ Investment Completed - You earned ${profit:,.2f}!"
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        total_return = amount + profit
+        
+        subject = f"Investment Completed - ${profit:,.2f} Earned"
         
         plain_body = f"""Dear {user_name},
 
-🎉 CONGRATULATIONS! Your investment has been COMPLETED!
+Your investment in {plan_name} has completed.
 
 Initial Investment: ${amount:,.2f}
-Plan: {plan_name}
-Profit Earned: +${profit:,.2f}
-Total Return: ${amount + profit:,.2f}
+Profit Earned: ${profit:,.2f}
+Total Return: ${total_return:,.2f}
+Date: {current_date}
 
 The total amount has been added to your balance.
 
 Best regards,
 Veloxtrades Team"""
         
-        html_body = f'''
-        <div style="font-family:Arial;max-width:600px;margin:0 auto;">
-            <div style="background:#10b981;padding:20px;text-align:center;color:white;"><h1>VELOXTRADES</h1></div>
-            <div style="padding:20px;">
-                <h2>✅ Investment Completed!</h2>
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: #10b981; padding: 20px; text-align: center;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+            </div>
+            <div style="padding: 20px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <div style="background:#e8f5e9;padding:15px;margin:15px 0;">
-                    <p><strong>Initial Investment:</strong> ${amount:,.2f}</p>
-                    <p><strong>Profit Earned:</strong> +${profit:,.2f}</p>
-                    <p><strong>Total Returned:</strong> ${amount + profit:,.2f}</p>
-                </div>
-                <div style="text-align:center;margin:30px 0;">
-                    <a href="{FRONTEND_URL}/dashboard.html" style="background:#10b981;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;">View Dashboard</a>
-                </div>
+                <p>Your investment in <strong>{plan_name}</strong> has completed.</p>
+                <table style="width: 100%; margin: 15px 0;">
+                    <tr><td>Initial Investment:</td><td><strong>${amount:,.2f}</strong></td></tr>
+                    <tr><td>Profit Earned:</td><td><strong>+${profit:,.2f}</strong></td></tr>
+                    <tr><td>Total Return:</td><td><strong>${total_return:,.2f}</strong></td></tr>
+                    <tr><td>Date:</td><td><strong>{current_date}</strong></td></tr>
+                </table>
+                <p>The total amount has been added to your balance.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
-        '''
+        """
         
         return send_email(user_email, subject, plain_body, html_body)
         
