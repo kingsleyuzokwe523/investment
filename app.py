@@ -635,10 +635,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 # SendPulse Configuration
-SENDPULSE_API_KEY = os.getenv('SENDPULSE_API_KEY', '')
+SENDPULSE_API_ID = os.getenv('SENDPULSE_API_ID', '')  # This is your Client ID
+SENDPULSE_API_SECRET = os.getenv('SENDPULSE_API_SECRET', '')  # This is your Client Secret
 SENDPULSE_FROM_EMAIL = os.getenv('SENDPULSE_FROM_EMAIL', 'kingsleyuzokwe523@gmail.com')
 SENDPULSE_FROM_NAME = os.getenv('SENDPULSE_FROM_NAME', 'Veloxtrades')
-SENDPULSE_CONFIGURED = bool(SENDPULSE_API_KEY)
+SENDPULSE_CONFIGURED = bool(SENDPULSE_API_ID and SENDPULSE_API_SECRET)
 
 # Cache for access token
 _sendpulse_token = None
@@ -646,25 +647,28 @@ _token_expiry = 0
 
 
 def get_sendpulse_token():
-    """Get SendPulse access token with caching"""
+    """Get SendPulse access token"""
     global _sendpulse_token, _token_expiry
     
     if _sendpulse_token and time.time() < _token_expiry:
         return _sendpulse_token
     
     try:
+        # SendPulse requires Client ID and Client Secret for OAuth
         url = "https://api.sendpulse.com/oauth/access_token"
         
-        auth_string = base64.b64encode(f"{SENDPULSE_API_KEY}:".encode()).decode()
+        # The correct way: send client_id and client_secret in the request body
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": SENDPULSE_API_ID,
+            "client_secret": SENDPULSE_API_SECRET
+        }
         
         headers = {
-            "Authorization": f"Basic {auth_string}",
             "Content-Type": "application/x-www-form-urlencoded"
         }
         
-        data = {"grant_type": "client_credentials"}
-        
-        response = requests.post(url, headers=headers, data=data, timeout=30)
+        response = requests.post(url, data=data, headers=headers, timeout=30)
         
         if response.status_code == 200:
             token_data = response.json()
@@ -674,6 +678,7 @@ def get_sendpulse_token():
             return _sendpulse_token
         else:
             logger.error(f"❌ Failed to get token: {response.status_code}")
+            logger.error(f"   Response: {response.text}")
             return None
             
     except Exception as e:
@@ -684,12 +689,15 @@ def get_sendpulse_token():
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using SendPulse API"""
     if not SENDPULSE_CONFIGURED:
-        logger.error("❌ SendPulse API key not configured")
-        return False
+        logger.warning("⚠️ SendPulse API not configured - email not sent")
+        logger.warning(f"   Would have sent to: {to_email}")
+        logger.warning(f"   Subject: {subject}")
+        return True  # Return True to not block the process, but log it
     
     try:
         token = get_sendpulse_token()
         if not token:
+            logger.error("❌ No token available - email not sent")
             return False
         
         url = "https://api.sendpulse.com/smtp/emails"
@@ -736,7 +744,7 @@ def check_email_configuration():
     """Check if email is configured"""
     if SENDPULSE_CONFIGURED:
         return True, "SendPulse API configured"
-    return False, "No email configuration found"
+    return False, "No email configuration found - emails will be logged only"
 
 
 # ==================== SAFE EMAIL FUNCTIONS (NO SUSPICIOUS LINKS) ====================
@@ -1235,8 +1243,6 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_withdrawal_processing_email: {e}")
         return False
-
-
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
     'standard': {
