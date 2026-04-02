@@ -623,10 +623,8 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-# ==================== SENDPULSE EMAIL CONFIGURATION ====================
-import requests
-import base64
-import time
+# ==================== RESEND EMAIL CONFIGURATION ====================
+import resend
 import os
 from datetime import datetime
 import logging
@@ -634,120 +632,82 @@ import logging
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# SendPulse Configuration
-SENDPULSE_API_ID = os.getenv('SENDPULSE_API_ID', '')  # This is your Client ID
-SENDPULSE_API_SECRET = os.getenv('SENDPULSE_API_SECRET', '')  # This is your Client Secret
-SENDPULSE_FROM_EMAIL = os.getenv('SENDPULSE_FROM_EMAIL', 'kingsleyuzokwe523@gmail.com')
-SENDPULSE_FROM_NAME = os.getenv('SENDPULSE_FROM_NAME', 'Veloxtrades')
-SENDPULSE_CONFIGURED = bool(SENDPULSE_API_ID and SENDPULSE_API_SECRET)
+# Resend Configuration
+RESEND_API_KEY = "re_EJKY7NRT_CwvCXuEyRqpmVKX16vdE8j4S"
+RESEND_FROM_EMAIL = "kingsleyuzokwe523@gmail.com"  # Your Gmail
+RESEND_FROM_NAME = "Veloxtrades"
 
-# Cache for access token
-_sendpulse_token = None
-_token_expiry = 0
-
-
-def get_sendpulse_token():
-    """Get SendPulse access token"""
-    global _sendpulse_token, _token_expiry
-    
-    if _sendpulse_token and time.time() < _token_expiry:
-        return _sendpulse_token
-    
-    try:
-        # SendPulse requires Client ID and Client Secret for OAuth
-        url = "https://api.sendpulse.com/oauth/access_token"
-        
-        # The correct way: send client_id and client_secret in the request body
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": SENDPULSE_API_ID,
-            "client_secret": SENDPULSE_API_SECRET
-        }
-        
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        
-        response = requests.post(url, data=data, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            token_data = response.json()
-            _sendpulse_token = token_data.get('access_token')
-            _token_expiry = time.time() + token_data.get('expires_in', 3600) - 300
-            logger.info("✅ SendPulse token obtained")
-            return _sendpulse_token
-        else:
-            logger.error(f"❌ Failed to get token: {response.status_code}")
-            logger.error(f"   Response: {response.text}")
-            return None
-            
-    except Exception as e:
-        logger.error(f"❌ Token error: {e}")
-        return None
+# Configure Resend
+resend.api_key = RESEND_API_KEY
 
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using SendPulse API"""
-    if not SENDPULSE_CONFIGURED:
-        logger.warning("⚠️ SendPulse API not configured - email not sent")
-        logger.warning(f"   Would have sent to: {to_email}")
-        logger.warning(f"   Subject: {subject}")
-        return True  # Return True to not block the process, but log it
-    
+    """Send email using Resend API"""
     try:
-        token = get_sendpulse_token()
-        if not token:
-            logger.error("❌ No token available - email not sent")
+        if not to_email:
+            logger.error("❌ No recipient email provided")
             return False
         
-        url = "https://api.sendpulse.com/smtp/emails"
+        # Use HTML body if provided, otherwise convert plain text to HTML
+        final_html = html_body or plain_body.replace('\n', '<br>')
         
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
+        # Send via Resend
+        response = resend.Emails.send({
+            "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
+            "to": to_email,
+            "subject": subject,
+            "html": final_html,
+            "text": plain_body
+        })
         
-        payload = {
-            "email": {
-                "html": html_body or plain_body.replace('\n', '<br>'),
-                "text": plain_body,
-                "subject": subject,
-                "from": {
-                    "name": SENDPULSE_FROM_NAME,
-                    "email": SENDPULSE_FROM_EMAIL
-                },
-                "to": [
-                    {
-                        "name": to_email.split('@')[0],
-                        "email": to_email
-                    }
-                ]
-            }
-        }
+        logger.info(f"✅ Email sent via Resend to {to_email}")
+        logger.info(f"   Response: {response}")
+        return True
         
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            logger.info(f"✅ Email sent via SendPulse to {to_email}")
-            return True
-        else:
-            logger.error(f"❌ SendPulse error: {response.status_code}")
-            logger.error(f"   Response: {response.text}")
-            return False
-            
     except Exception as e:
-        logger.error(f"❌ SendPulse exception: {e}")
+        logger.error(f"❌ Resend error: {e}")
         return False
 
 
 def check_email_configuration():
     """Check if email is configured"""
-    if SENDPULSE_CONFIGURED:
-        return True, "SendPulse API configured"
-    return False, "No email configuration found - emails will be logged only"
+    if RESEND_API_KEY:
+        return True, "Resend API configured"
+    return False, "No email configuration found"
 
 
-# ==================== SAFE EMAIL FUNCTIONS (NO SUSPICIOUS LINKS) ====================
+# ==================== TEST FUNCTION ====================
+
+def send_test_email():
+    """Send a test email to verify everything works"""
+    result = send_email(
+        to_email="kingsleyuzokwe523@gmail.com",
+        subject="✅ Veloxtrades Email Test",
+        plain_body="Hello! This is a test email from Veloxtrades. Your email system is working perfectly!",
+        html_body="""
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #10b981;">✅ Email System Working!</h2>
+            <p>Your Veloxtrades email notifications are now configured correctly.</p>
+            <p>You will now receive:</p>
+            <ul>
+                <li>Deposit confirmations</li>
+                <li>Investment approvals</li>
+                <li>Withdrawal updates</li>
+            </ul>
+            <p style="color: #666; font-size: 12px;">Veloxtrades Team</p>
+        </div>
+        """
+    )
+    
+    if result:
+        print("✅ Test email sent successfully to kingsleyuzokwe523@gmail.com")
+    else:
+        print("❌ Failed to send test email")
+    
+    return result
+
+
+# ==================== ALL EMAIL FUNCTIONS (keep same as before) ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
     """Send deposit approval email - uses database user info"""
