@@ -630,17 +630,19 @@ import logging
 import requests
 import json
 
-# Set up logging
+
 logger = logging.getLogger(__name__)
 
-# Brevo Configuration
+# Get API key from environment
 BREVO_API_KEY = os.getenv('BREVO_API_KEY')
-BREVO_FROM_EMAIL = "a6eeec001@smtp-brevo.com"  # Your Brevo SMTP login (must use this)
-BREVO_FROM_NAME = "Veloxtrades"
+BREVO_FROM_EMAIL = os.getenv('BREVO_FROM_EMAIL', 'a6eeec001@smtp-brevo.com')
+BREVO_FROM_NAME = os.getenv('BREVO_FROM_NAME', 'Veloxtrades')
 
-# Brevo API endpoint
-BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
-
+# Debug: Check if API key exists (don't print full key in production)
+if BREVO_API_KEY:
+    logger.info(f"✅ Brevo API key found (starts with: {BREVO_API_KEY[:15]}...)")
+else:
+    logger.error("❌ BREVO_API_KEY environment variable is NOT set!")
 
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using Brevo API"""
@@ -649,48 +651,45 @@ def send_email(to_email, subject, plain_body, html_body=None):
             logger.error("❌ No recipient email provided")
             return False
         
-        # Use HTML body if provided, otherwise convert plain text to HTML
+        if not BREVO_API_KEY:
+            logger.error("❌ No Brevo API key configured")
+            return False
+        
         final_html = html_body or plain_body.replace('\n', '<br>')
         
-        # Prepare the email data
         data = {
             "sender": {
                 "name": BREVO_FROM_NAME,
                 "email": BREVO_FROM_EMAIL
             },
-            "to": [
-                {
-                    "email": to_email,
-                    "name": to_email.split('@')[0]
-                }
-            ],
+            "to": [{"email": to_email}],
             "subject": subject,
             "htmlContent": final_html,
             "textContent": plain_body
         }
         
-        # Set up headers
         headers = {
-            "api-key": BREVO_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+            "accept": "application/json",
+            "api-key": BREVO_API_KEY,  # ✅ Make sure this is correct
+            "content-type": "application/json"
         }
         
-        # Send the request
-        response = requests.post(BREVO_API_URL, json=data, headers=headers)
+        response = requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            json=data,
+            headers=headers
+        )
         
         if response.status_code in [200, 201]:
-            logger.info(f"✅ Email sent via Brevo to {to_email}")
-            logger.info(f"   Response: {response.json()}")
+            logger.info(f"✅ Email sent to {to_email}")
             return True
         else:
             logger.error(f"❌ Brevo error: {response.status_code} - {response.text}")
             return False
-        
+            
     except Exception as e:
-        logger.error(f"❌ Brevo error: {e}")
+        logger.error(f"❌ Email error: {e}")
         return False
-
 
 def check_email_configuration():
     """Check if email is configured"""
