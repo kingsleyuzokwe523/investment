@@ -623,78 +623,69 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-# ==================== RESEND EMAIL CONFIGURATION ====================
+# ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import logging
 
-# Import Resend
-try:
-    import resend
-    RESEND_AVAILABLE = True
-except ImportError:
-    RESEND_AVAILABLE = False
-    print("⚠️ Resend not installed. Run: pip install resend")
-
 logger = logging.getLogger(__name__)
 
-# Resend Configuration - Get from environment variables
-RESEND_API_KEY = os.getenv('RESEND_API_KEY')
-RESEND_FROM_EMAIL = os.getenv('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
-RESEND_FROM_NAME = os.getenv('RESEND_FROM_NAME', 'Veloxtrades')
+# SMTP Configuration - Get from environment variables
+SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+SMTP_USER = os.getenv('SMTP_USER')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL')
+SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
 
-# Configure Resend if API key exists
-if RESEND_API_KEY and RESEND_AVAILABLE:
-    resend.api_key = RESEND_API_KEY
-    logger.info(f"✅ Resend API configured - From: {RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>")
-elif not RESEND_API_KEY:
-    logger.error("❌ RESEND_API_KEY environment variable is NOT set!")
-elif not RESEND_AVAILABLE:
-    logger.error("❌ Resend package not installed! Add 'resend' to requirements.txt")
-
+# Check configuration
+if SMTP_USER and SMTP_PASSWORD:
+    logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
+else:
+    logger.error("❌ SMTP credentials not set!")
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Resend API"""
+    """Send email using Gmail SMTP"""
     try:
         if not to_email:
             logger.error("❌ No recipient email provided")
             return False
         
-        if not RESEND_API_KEY:
-            logger.error("❌ No Resend API key configured")
+        if not SMTP_USER or not SMTP_PASSWORD:
+            logger.error("❌ SMTP credentials not configured")
             return False
         
-        if not RESEND_AVAILABLE:
-            logger.error("❌ Resend package not available")
-            return False
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        msg['To'] = to_email
+        msg['Subject'] = subject
         
-        # Use HTML body if provided, otherwise convert plain text to HTML
+        # Use HTML body or convert plain text
         final_html = html_body or plain_body.replace('\n', '<br>')
+        msg.attach(MIMEText(final_html, 'html'))
         
-        # Send via Resend
-        response = resend.Emails.send({
-            "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
-            "to": [to_email],
-            "subject": subject,
-            "html": final_html,
-            "text": plain_body
-        })
+        # Send email
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
         
         logger.info(f"✅ Email sent to {to_email}")
-        logger.info(f"   Response: {response}")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Resend error: {e}")
+        logger.error(f"❌ SMTP error: {e}")
         return False
-
 
 def check_email_configuration():
     """Check if email is configured"""
-    if RESEND_API_KEY and RESEND_AVAILABLE:
-        return True, "Resend API configured"
+    if SMTP_USER and SMTP_PASSWORD:
+        return True, "SMTP configured"
     return False, "No email configuration found"
-
 
 # ==================== TEST FUNCTION ====================
 
@@ -725,7 +716,6 @@ def send_test_email():
         print("❌ Failed to send test email")
     
     return result
-
 
 # ==================== ALL EMAIL FUNCTIONS ====================
 
@@ -1133,23 +1123,10 @@ Veloxtrades Team"""
         
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
-                <p style="color: white; margin: 5px 0 0;">Withdrawal Update</p>
-            </div>
-            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
-                <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Regarding your withdrawal request:</p>
-                
-                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #ef4444;">
-                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
-                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
-                    <p style="margin: 5px 0;"><strong>ℹ️ Status:</strong> Not Approved</p>
-                    <p style="margin: 5px 0;"><strong>📝 Reason:</strong> {reason}</p>
-                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+            <div style="background: #10b981; padding: 20;"><strong>📅 Date:</strong> {current_date}</p>
                 </div>
                 
-                <p>The amount has been returned to your balance.</p>
+                <p>Funds have been sent to your wallet.</p>
                 <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
             </div>
         </div>
@@ -1158,12 +1135,12 @@ Veloxtrades Team"""
         return send_email(user_email, subject, plain_body, html_body)
         
     except Exception as e:
-        logger.error(f"❌ Error in send_withdrawal_rejected_email: {e}")
+        logger.error(f"❌ Error in send_withdrawal_approved_email: {e}")
         return False
 
 
-def send_withdrawal_processing_email(user, amount, method):
-    """Send withdrawal processing notification - uses database user info"""
+def send_withdrawal_rejected_email(user, amount, method, reason):
+    """Send withdrawal rejection email - uses database user info"""
     try:
         user_name = user.get('full_name') or user.get('username', 'User')
         user_email = user.get('email')
@@ -1174,22 +1151,19 @@ def send_withdrawal_processing_email(user, amount, method):
         
         current_date = datetime.now().strftime("%B %d, %Y")
         
-        subject = f"Withdrawal Request Received - ${amount:,.2f}"
+        subject = f"Withdrawal Status Update - ${amount:,.2f}"
         
         plain_body = f"""Dear {user_name},
 
-Your withdrawal request is being processed.
+Your withdrawal request of ${amount:,.2f}:
 
-━━━━━━━━━━━━━━━━━━━━━
-📋 WITHDRAWAL DETAILS
-━━━━━━━━━━━━━━━━━━━━━
+Status: Not Approved
 Amount: ${amount:,.2f}
 Method: {method}
+Reason: {reason}
 Date: {current_date}
-Status: Processing
-━━━━━━━━━━━━━━━━━━━━━
 
-You will receive confirmation once completed.
+The amount has been returned to your balance.
 
 Best regards,
 Veloxtrades Team"""
@@ -1197,30 +1171,180 @@ Veloxtrades Team"""
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
             <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: white; margin: 0;">px; text-align: center; border-radius: 10px 10px 0 0;">
                 <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
-                <p style="color: white; margin: 5px 0 0;">Withdrawal Request</p>
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Update</p>
+            </div>
+            <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <p>Dear <strong>{user_nameVELOXTRADES</h1>
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Update</p>
             </div>
             <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
                 <p>Dear <strong>{user_name}</strong>,</p>
-                <p>Your withdrawal request is being processed.</p>
+                <p>Regarding your withdrawal request:</p>
                 
-                <div style="background: #fef3c7; padding: 15px; margin: 20px 0; border-left: 4px solid #f59e0b;">
-                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
-                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
-                    <p style="margin: 5px 0;"><strong>⏳ Status:</strong> Processing</p>
-                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: }</strong>,</p>
+                <p>Regarding your withdrawal request:</p>
+                
+                <div style="background: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #ef4444;">
+                    <p style4px solid #ef4444;">
+                    <p style="margin: 5px 0;"><strong="margin: 5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin:>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method 5px 0;"><strong>💳 Method:</strong> {method}</p>
+                    <p style="margin: 5px}</p>
+                    <p style="margin: 5px 0;">< 0;"><strong>ℹ️ Statusstrong>ℹ️ Status:</strong> Not Approved</:</strong> Not Approved</p>
+                    <p>
+                    <p style="margin: 5px p style="margin: 5px 0;"><strong>📝 Reason:</strong> {0;"><strong>📝 Reason:</strong> {reason}</p>
+                    <p style="margin: 5px 0;"><strongreason}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Date:</strong> {current_date}</p>📅 Date:</strong> {current_date}</p>
+                </div>
                 </div>
                 
-                <p>You will receive confirmation once completed.</p>
-                <p style="color: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
+                <p>The amount has been returned to your>
+                
+                <p>The amount has been returned to your balance.</p>
+                <p style="color balance.</p>
+                <p style="color: #666; font-size: 12px: #666; font-size: 12px; margin-top: 30px;">Veloxtrades Team</p>
+            </; margin-top: 30px;">Veloxtrades Team</p>
+div>
+        </div>
+        """
             </div>
         </div>
         """
         
         return send_email(user_email, subject, plain_body, html_body)
         
+           
+        return send_email(user_email, subject, plain_body, html_body)
+        
     except Exception as e:
-        logger.error(f"❌ Error in send_withdrawal_processing_email: {e}")
+        logger.error(f"❌ Error in send_withdrawal_re except Exception as e:
+        logger.error(f"❌ Error injected_email: {e}")
+        return False
+
+
+def send_withdrawal_processing_email(user send_withdrawal_rejected_email: {e}")
+        return False
+
+
+def send_withdrawal_processing_email(user, amount, method):
+    """Send withdrawal processing, amount, method):
+    """Send withdrawal processing notification - uses database user info notification - uses database user info"""
+    try:
+        user_name = user.get('full"""
+    try:
+        user_name = user.get('full_name') or user_name') or user.get('username', 'User')
+        user_email = user.get('email')
+        
+        if not user_email:
+           .get('username', 'User')
+        user_email = user.get('email')
+        
+        if not user_email logger.error(f"❌ No email for user {user_name}")
+            return False
+        
+:
+            logger.error(f"❌ No email for user {user_name}")
+            return False
+        
+        current_date = datetime.now().strftime("%        current_date = datetime.now().strftime("%B %d, %Y")
+        
+        subjectB %d, %Y")
+        
+        subject = f"Withdrawal Request Received - ${amount:,.2f}"
+        
+        plain_body = = f"Withdrawal Request Received - ${amount:,.2f}"
+        
+        plain_body = f""" f"""Dear {user_name},
+
+Your withdrawal request is being processed.
+
+Dear {user_name},
+
+Your withdrawal request is being processed.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 WITHDRAWAL DETAILS
+━━━━━━━━━━━━━━━━━━━━━
+Amount: ${amount━━━━━━━━━
+📋 WITHDRAWAL DETAILS
+━━━━━━━━━━━━━━━━━━━━━
+Amount: ${amount:,.2f}
+Method: {method}
+Date: {current_date}
+Status: Processing
+:,.2f}
+Method: {method}
+Date: {current_date}
+Status:━━━━━━━━━━━━━━━━━━━━━
+
+You will receive confirmation Processing
+━━━━━━━━━━━━━━━━━━━━━
+
+You will receive confirmation once completed.
+
+Best once completed.
+
+Best regards,
+Veloxtrades Team"""
+        
+        html_body = f"""
+        <div style="font-family regards,
+Veloxtrades Team"""
+        
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <div style="background: # auto;">
+            <div style="background: #10b10b981; padding: 20px; text-align: center981; padding: 20px; text-align: center; border-radius: 10px 10px 0; border-radius: 10px 10px 0 0;">
+                <h1 style 0;">
+                <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                <p="color: white; margin: 0;">VELOXTRADES</h1 style="color: white; margin: 5px >
+                <p style="color: white; margin: 5px 0 0;">Withdrawal Request</p>
+0 0;">Withdrawal Request</p>
+            </div>
+            <div style="padding            </div>
+            <div style="padding: 20px; background: #: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; border-radiusffffff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <: 0 0 10px 10px;">
+p>Dear <strong>{user_name}</strong>,</p>
+                <                <p>Dear <strong>{user_name}</strong>,</p>
+                <p>Your withdrawal request isp>Your withdrawal request is being processed.</p>
+                
+                <div style="background: #fef3c7; padding: being processed.</p>
+                
+                <div style="background: #fef3c7; padding: 15px; margin: 20px 0; border-left:  15px; margin: 20px 0; border-left4px solid #f59e0: 4px solid #f59e0b;">
+                    <p style="margin: b;">
+                    <p style="margin: 5px 0;"><strong>💰 Amount:</strong>5px 0;"><strong>💰 Amount:</strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong> ${amount:,.2f}</p>
+                    <p style="margin: 5px 0;"><strong>💳 Method:</strong> {method}</p>
+                   💳 Method:</strong> {method}</p>
+                    <p style="margin: 5px 0;">< <p style="margin: 5px 0;"><strong>⏳ Status:</strong> Processing</p>
+                   strong>⏳ Status:</strong> Processing</p>
+                    <p style="margin: 5 <p style="margin: 5px 0;"><px 0;"><strong>📅 Date:</strong> {current_date}</p>
+                </strong>📅 Date:</strong> {current_date}</p>
+                </div>
+                
+                <p>You will receivediv>
+                
+                <p>You will receive confirmation once confirmation once completed.</p>
+                <p style="color completed.</p>
+                <p style="color: #666; font-size: 12px; margin: #666; font-size: 12px; margin-top: 30px;">Veloxtrades-top: 30px;">Veloxtrades Team</ Team</p>
+            </div>
+        </div>
+        """
+        
+        return send_email(userp>
+            </div>
+        </div>
+        """
+        
+        return send_email(user_email, subject,_email, subject, plain_body, html_body)
+        
+    plain_body, html_body)
+        
+    except Exception as e:
+        logger.error except Exception as e:
+        logger.error(f"❌ Error in(f"❌ Error in send_withdrawal_processing_email: {e}")
         return False
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
