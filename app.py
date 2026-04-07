@@ -515,20 +515,47 @@ def require_admin(f):
 
 
 def create_notification(user_id, title, message, type='info'):
-    notification_data = {
-        'user_id': str(user_id), 'title': title, 'message': message,
-        'type': type, 'read': False, 'created_at': datetime.now(timezone.utc)
-    }
-    if veloxtrades_notifications is not None:
-        try:
-            veloxtrades_notifications.insert_one(notification_data)
-        except Exception as e:
-            logger.error(f"Failed to create notification in veloxtrades_db: {e}")
-    if investment_notifications is not None:
-        try:
-            investment_notifications.insert_one(notification_data)
-        except Exception as e:
-            logger.error(f"Failed to create notification in investment_db: {e}")
+    """Create a notification for user in both databases"""
+    try:
+        notification_data = {
+            'user_id': str(user_id),
+            'title': title,
+            'message': message,
+            'type': type,
+            'is_read': False,
+            'read': False,  # For backward compatibility
+            'created_at': datetime.now(timezone.utc)
+        }
+        
+        notification_sent = False
+        
+        # Insert into veloxtrades_db notifications
+        if veloxtrades_notifications is not None:
+            try:
+                veloxtrades_notifications.insert_one(notification_data.copy())
+                logger.info(f"✅ Notification created in veloxtrades_db for user {user_id}")
+                notification_sent = True
+            except Exception as e:
+                logger.error(f"Failed to create notification in veloxtrades_db: {e}")
+        else:
+            logger.warning("veloxtrades_notifications collection is None")
+        
+        # Insert into investment_db notifications
+        if investment_notifications is not None:
+            try:
+                investment_notifications.insert_one(notification_data.copy())
+                logger.info(f"✅ Notification created in investment_db for user {user_id}")
+                notification_sent = True
+            except Exception as e:
+                logger.error(f"Failed to create notification in investment_db: {e}")
+        else:
+            logger.warning("investment_notifications collection is None")
+        
+        return notification_sent
+        
+    except Exception as e:
+        logger.error(f"Error in create_notification: {e}")
+        return False
 
 
 def log_admin_action(admin_id, action, details):
@@ -1022,6 +1049,7 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_investment_completed_email: {e}")
         return False
+# ==================== WITHDRAWAL EMAIL FUNCTIONS ====================
 
 def send_withdrawal_approved_email(user, amount, method, wallet_address, transaction_id):
     """Send withdrawal approval email - uses database user info"""
@@ -1086,6 +1114,7 @@ Veloxtrades Team"""
         logger.error(f"❌ Error in send_withdrawal_approved_email: {e}")
         return False
 
+
 def send_withdrawal_rejected_email(user, amount, method, reason):
     """Send withdrawal rejection email - uses database user info"""
     try:
@@ -1144,6 +1173,7 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_withdrawal_rejected_email: {e}")
         return False
+
 
 def send_withdrawal_processing_email(user, amount, method):
     """Send withdrawal processing notification - uses database user info"""
@@ -1205,6 +1235,8 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_withdrawal_processing_email: {e}")
         return False
+
+
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
     'standard': {
@@ -4166,6 +4198,7 @@ def test_email():
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_withdrawal(withdrawal_id):
+    """Admin approves or rejects a withdrawal request - sends email, notification, updates balance"""
     try:
         if withdrawals_collection is None:
             return jsonify({'success': False, 'message': 'Database connection error'}), 500
@@ -4174,10 +4207,16 @@ def admin_process_withdrawal(withdrawal_id):
         action = data.get('action')
         reason = data.get('reason', '')
         
+        # 1. FIND THE WITHDRAWAL
         withdrawal = withdrawals_collection.find_one({'_id': ObjectId(withdrawal_id)})
         if not withdrawal:
             return jsonify({'success': False, 'message': 'Withdrawal not found'}), 404
         
+        # Check if already processed
+        if withdrawal.get('status') != 'pending':
+            return jsonify({'success': False, 'message': f'Withdrawal already {withdrawal.get("status")}'}), 400
+        
+        # 2. FIND THE USER
         if users_collection is None:
             return jsonify({'success': False, 'message': 'Database connection error'}), 500
         
@@ -4185,29 +4224,117 @@ def admin_process_withdrawal(withdrawal_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # Generate transaction ID
+        transaction_id = f"WD-{withdrawal_id[-8:].upper()}"
+        
         if action == 'approve':
-            withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'approved', 'approved_at': datetime.now(timezone.utc)}})
+            # ========== APPROVE WITHDRAWAL ==========
+            
+            # 3. UPDATE WITHDRAWAL STATUS
+            withdrawals_collection.update_one(
+                {'_id': ObjectId(withdrawal_id)}, 
+                {
+                    '$set': {
+                        'status': 'approved', 
+                        'approved_at': datetime.now(timezone.utc),
+                        'transaction_id': transaction_id
+                    }
+                }
+            )
+            
+            # 4. UPDATE TRANSACTION RECORD (if exists)
             if transactions_collection is not None:
-                transactions_collection.update_one({'withdrawal_id': withdrawal['withdrawal_id'], 'type': 'withdrawal', 'status': 'pending'}, {'$set': {'status': 'completed'}})
-            create_notification(withdrawal['user_id'], 'Withdrawal Approved! ✅', f'Withdrawal of ${withdrawal["amount"]:,.2f} approved!', 'success')
-            send_withdrawal_approved_email(user, withdrawal['amount'], withdrawal['currency'], withdrawal['wallet_address'])
+                transactions_collection.update_one(
+                    {'withdrawal_id': withdrawal.get('withdrawal_id'), 'type': 'withdrawal', 'status': 'pending'}, 
+                    {'$set': {'status': 'completed', 'transaction_id': transaction_id}}
+                )
+            
+            # 5. CREATE NOTIFICATION
+            create_notification(
+                withdrawal['user_id'], 
+                'Withdrawal Approved! ✅', 
+                f'Your withdrawal of ${withdrawal["amount"]:,.2f} has been approved and sent to your wallet. Transaction ID: {transaction_id}', 
+                'success'
+            )
+            
+            # 6. SEND APPROVAL EMAIL
+            send_withdrawal_approved_email(
+                user=user,
+                amount=withdrawal['amount'],
+                method=withdrawal.get('currency', 'USDT'),
+                wallet_address=withdrawal.get('wallet_address', 'N/A'),
+                transaction_id=transaction_id
+            )
+            
+            message = f'Withdrawal of ${withdrawal["amount"]:,.2f} approved successfully'
+            
         elif action == 'reject':
-            withdrawals_collection.update_one({'_id': ObjectId(withdrawal_id)}, {'$set': {'status': 'rejected', 'rejection_reason': reason, 'rejected_at': datetime.now(timezone.utc)}})
+            # ========== REJECT WITHDRAWAL ==========
+            
+            # 3. UPDATE WITHDRAWAL STATUS
+            withdrawals_collection.update_one(
+                {'_id': ObjectId(withdrawal_id)}, 
+                {
+                    '$set': {
+                        'status': 'rejected', 
+                        'rejection_reason': reason, 
+                        'rejected_at': datetime.now(timezone.utc)
+                    }
+                }
+            )
+            
+            # 4. RETURN MONEY TO USER BALANCE (since it was deducted when request was made)
             if veloxtrades_users is not None:
-                veloxtrades_users.update_one({'_id': ObjectId(withdrawal['user_id'])}, {'$inc': {'wallet.balance': withdrawal['amount']}})
+                veloxtrades_users.update_one(
+                    {'_id': ObjectId(withdrawal['user_id'])}, 
+                    {'$inc': {'balance': withdrawal['amount']}}
+                )
+            
             if investment_users is not None:
-                investment_users.update_one({'_id': ObjectId(withdrawal['user_id'])}, {'$inc': {'wallet.balance': withdrawal['amount']}})
+                investment_users.update_one(
+                    {'_id': ObjectId(withdrawal['user_id'])}, 
+                    {'$inc': {'balance': withdrawal['amount']}}
+                )
+            
+            # 5. UPDATE TRANSACTION RECORD
             if transactions_collection is not None:
-                transactions_collection.update_one({'withdrawal_id': withdrawal['withdrawal_id'], 'type': 'withdrawal', 'status': 'pending'}, {'$set': {'status': 'failed'}})
-            create_notification(withdrawal['user_id'], 'Withdrawal Rejected ❌', f'Withdrawal of ${withdrawal["amount"]:,.2f} rejected. Reason: {reason}', 'error')
-            send_withdrawal_rejected_email(user, withdrawal['amount'], withdrawal['currency'], reason)
+                transactions_collection.update_one(
+                    {'withdrawal_id': withdrawal.get('withdrawal_id'), 'type': 'withdrawal', 'status': 'pending'}, 
+                    {'$set': {'status': 'failed', 'failure_reason': reason}}
+                )
+            
+            # 6. CREATE NOTIFICATION
+            create_notification(
+                withdrawal['user_id'], 
+                'Withdrawal Rejected ❌', 
+                f'Your withdrawal of ${withdrawal["amount"]:,.2f} was rejected. Reason: {reason}. Funds have been returned to your balance.', 
+                'error'
+            )
+            
+            # 7. SEND REJECTION EMAIL
+            send_withdrawal_rejected_email(
+                user=user,
+                amount=withdrawal['amount'],
+                method=withdrawal.get('currency', 'USDT'),
+                reason=reason
+            )
+            
+            message = f'Withdrawal of ${withdrawal["amount"]:,.2f} rejected and funds returned'
+            
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
-        return add_cors_headers(jsonify({'success': True, 'message': f'Withdrawal {action}d successfully'}))
+        # 7. UPDATE DASHBOARD STATS
+        update_dashboard_stats()
+        
+        return add_cors_headers(jsonify({'success': True, 'message': message}))
+        
     except Exception as e:
         logger.error(f"Process withdrawal error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+
 
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
