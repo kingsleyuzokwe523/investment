@@ -672,6 +672,7 @@ def add_referral_commission(user_id, deposit_amount):
 # ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
 import os
 import smtplib
+import socket
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -681,17 +682,16 @@ logger = logging.getLogger(__name__)
 
 # SMTP Configuration - Get from environment variables
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+SMTP_PORT = int(os.getenv('SMTP_PORT', 465))  # CHANGED: 465 instead of 587
 SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
-SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', SMTP_USER)  # Fallback to SMTP_USER
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', SMTP_USER)
 SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
 EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
     logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>")
-    # Mask password for security
     masked_pass = '*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'Not set'
     logger.info(f"   Host: {SMTP_HOST}:{SMTP_PORT}")
     logger.info(f"   User: {SMTP_USER}")
@@ -700,44 +700,39 @@ else:
     logger.error("❌ SMTP credentials not set! Email notifications will not work.")
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Gmail SMTP with improved error handling"""
+    """Send email using Gmail SMTP with SSL (port 465)"""
     try:
         if not to_email:
             logger.error("❌ No recipient email provided")
             return False
         
         if not SMTP_USER or not SMTP_PASSWORD:
-            logger.error("❌ SMTP credentials not configured - Email will not send")
-            logger.error(f"   SMTP_USER: {'Set' if SMTP_USER else 'Missing'}")
-            logger.error(f"   SMTP_PASSWORD: {'Set' if SMTP_PASSWORD else 'Missing'}")
+            logger.error("❌ SMTP credentials not configured")
             return False
         
         logger.info(f"📧 Attempting to send email to: {to_email}")
         logger.info(f"   Subject: {subject}")
         
         # Create message
-        msg = MIMEMultipart('alternative')  # 'alternative' is better for HTML+plain
+        msg = MIMEMultipart('alternative')
         msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>"
         msg['To'] = to_email
         msg['Subject'] = subject
         msg['Date'] = datetime.now().strftime('%a, %d %b %Y %H:%M:%S %z')
         
-        # Attach plain text version (for email clients that don't support HTML)
+        # Attach plain text version
         msg.attach(MIMEText(plain_body, 'plain'))
         
-        # Attach HTML version if provided, otherwise convert plain to HTML
+        # Attach HTML version if provided
         if html_body:
             msg.attach(MIMEText(html_body, 'html'))
         else:
-            # Convert plain text to simple HTML
             simple_html = f"<pre style='font-family: Arial, sans-serif;'>{plain_body}</pre>"
             msg.attach(MIMEText(simple_html, 'html'))
         
-        # Send email with timeout
-        logger.info(f"📧 Connecting to {SMTP_HOST}:{SMTP_PORT}...")
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.set_debuglevel(0)  # Set to 1 for debugging
-            server.starttls()
+        # FIXED: Use SMTP_SSL on port 465 instead of STARTTLS on 587
+        logger.info(f"📧 Connecting to {SMTP_HOST}:{SMTP_PORT} with SSL...")
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
             logger.info(f"📧 Logging in as {SMTP_USER}...")
             server.login(SMTP_USER, SMTP_PASSWORD)
             logger.info(f"📧 Sending message...")
@@ -747,27 +742,13 @@ def send_email(to_email, subject, plain_body, html_body=None):
         return True
         
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"❌ SMTP Authentication Failed! Check your Gmail password/App Password: {e}")
-        logger.error(f"   Username: {SMTP_USER}")
-        logger.error(f"   Solution: Use App Password if 2FA is enabled, or enable 'Less secure app access'")
+        logger.error(f"❌ SMTP Authentication Failed: {e}")
         return False
     except smtplib.SMTPConnectError as e:
         logger.error(f"❌ Cannot connect to SMTP server {SMTP_HOST}:{SMTP_PORT}: {e}")
-        logger.error(f"   Check if the server is reachable and port is open")
-        return False
-    except smtplib.SMTPServerDisconnected as e:
-        logger.error(f"❌ SMTP server disconnected: {e}")
-        return False
-    except smtplib.SMTPException as e:
-        logger.error(f"❌ SMTP Error: {e}")
-        return False
-    except socket.timeout:
-        logger.error(f"❌ Connection timeout to {SMTP_HOST}:{SMTP_PORT}")
         return False
     except Exception as e:
-        logger.error(f"❌ Unexpected email error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Email error: {e}")
         return False
 
 def check_email_configuration():
@@ -775,18 +756,12 @@ def check_email_configuration():
     if not SMTP_USER or not SMTP_PASSWORD:
         return False, "SMTP credentials not configured"
     
-    # Test SMTP connection
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
             server.login(SMTP_USER, SMTP_PASSWORD)
             return True, "SMTP connection successful"
     except Exception as e:
         return False, f"SMTP connection failed: {str(e)}"
-
-# Add missing socket import
-import socket
-
 # ==================== TEST FUNCTION ====================
 
 def send_test_email():
