@@ -669,7 +669,6 @@ def add_referral_commission(user_id, deposit_amount):
         logger.error(f"Error adding referral commission: {e}", exc_info=True)
         return False
 
-
 # ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
 import os
 import smtplib
@@ -685,55 +684,108 @@ SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
-SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL')
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', SMTP_USER)  # Fallback to SMTP_USER
 SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
 EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
-    logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
+    logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>")
+    # Mask password for security
+    masked_pass = '*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'Not set'
+    logger.info(f"   Host: {SMTP_HOST}:{SMTP_PORT}")
+    logger.info(f"   User: {SMTP_USER}")
+    logger.info(f"   Password: {masked_pass[:4]}...")
 else:
-    logger.error("❌ SMTP credentials not set!")
+    logger.error("❌ SMTP credentials not set! Email notifications will not work.")
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Gmail SMTP"""
+    """Send email using Gmail SMTP with improved error handling"""
     try:
         if not to_email:
             logger.error("❌ No recipient email provided")
             return False
         
         if not SMTP_USER or not SMTP_PASSWORD:
-            logger.error("❌ SMTP credentials not configured")
+            logger.error("❌ SMTP credentials not configured - Email will not send")
+            logger.error(f"   SMTP_USER: {'Set' if SMTP_USER else 'Missing'}")
+            logger.error(f"   SMTP_PASSWORD: {'Set' if SMTP_PASSWORD else 'Missing'}")
             return False
         
+        logger.info(f"📧 Attempting to send email to: {to_email}")
+        logger.info(f"   Subject: {subject}")
+        
         # Create message
-        msg = MIMEMultipart()
-        msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        msg = MIMEMultipart('alternative')  # 'alternative' is better for HTML+plain
+        msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>"
         msg['To'] = to_email
         msg['Subject'] = subject
+        msg['Date'] = datetime.now().strftime('%a, %d %b %Y %H:%M:%S %z')
         
-        # Use HTML body or convert plain text
-        final_html = html_body or plain_body.replace('\n', '<br>')
-        msg.attach(MIMEText(final_html, 'html'))
+        # Attach plain text version (for email clients that don't support HTML)
+        msg.attach(MIMEText(plain_body, 'plain'))
         
-        # Send email
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        # Attach HTML version if provided, otherwise convert plain to HTML
+        if html_body:
+            msg.attach(MIMEText(html_body, 'html'))
+        else:
+            # Convert plain text to simple HTML
+            simple_html = f"<pre style='font-family: Arial, sans-serif;'>{plain_body}</pre>"
+            msg.attach(MIMEText(simple_html, 'html'))
+        
+        # Send email with timeout
+        logger.info(f"📧 Connecting to {SMTP_HOST}:{SMTP_PORT}...")
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.set_debuglevel(0)  # Set to 1 for debugging
             server.starttls()
+            logger.info(f"📧 Logging in as {SMTP_USER}...")
             server.login(SMTP_USER, SMTP_PASSWORD)
+            logger.info(f"📧 Sending message...")
             server.send_message(msg)
         
-        logger.info(f"✅ Email sent to {to_email}")
+        logger.info(f"✅ Email sent successfully to {to_email}")
         return True
         
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"❌ SMTP Authentication Failed! Check your Gmail password/App Password: {e}")
+        logger.error(f"   Username: {SMTP_USER}")
+        logger.error(f"   Solution: Use App Password if 2FA is enabled, or enable 'Less secure app access'")
+        return False
+    except smtplib.SMTPConnectError as e:
+        logger.error(f"❌ Cannot connect to SMTP server {SMTP_HOST}:{SMTP_PORT}: {e}")
+        logger.error(f"   Check if the server is reachable and port is open")
+        return False
+    except smtplib.SMTPServerDisconnected as e:
+        logger.error(f"❌ SMTP server disconnected: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        logger.error(f"❌ SMTP Error: {e}")
+        return False
+    except socket.timeout:
+        logger.error(f"❌ Connection timeout to {SMTP_HOST}:{SMTP_PORT}")
+        return False
     except Exception as e:
-        logger.error(f"❌ SMTP error: {e}")
+        logger.error(f"❌ Unexpected email error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def check_email_configuration():
-    """Check if email is configured"""
-    if SMTP_USER and SMTP_PASSWORD:
-        return True, "SMTP configured"
-    return False, "No email configuration found"
+    """Check if email is configured and working"""
+    if not SMTP_USER or not SMTP_PASSWORD:
+        return False, "SMTP credentials not configured"
+    
+    # Test SMTP connection
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            return True, "SMTP connection successful"
+    except Exception as e:
+        return False, f"SMTP connection failed: {str(e)}"
+
+# Add missing socket import
+import socket
 
 # ==================== TEST FUNCTION ====================
 
@@ -4265,18 +4317,22 @@ def admin_process_withdrawal(withdrawal_id):
                 }
             )
             
-            # 4. RETURN MONEY TO USER BALANCE (since it was deducted when request was made)
+            # 4. RETURN MONEY TO USER BALANCE - FIXED!
+            amount_to_refund = withdrawal['amount']
+            
             if veloxtrades_users is not None:
-                veloxtrades_users.update_one(
+                result = veloxtrades_users.update_one(
                     {'_id': ObjectId(withdrawal['user_id'])}, 
-                    {'$inc': {'balance': withdrawal['amount']}}
+                    {'$inc': {'wallet.balance': amount_to_refund}}  # ✅ FIXED: 'wallet.balance' not 'balance'
                 )
+                print(f"✅ Refunded ${amount_to_refund} to user in veloxtrades_users, modified: {result.modified_count}")
             
             if investment_users is not None:
-                investment_users.update_one(
+                result = investment_users.update_one(
                     {'_id': ObjectId(withdrawal['user_id'])}, 
-                    {'$inc': {'balance': withdrawal['amount']}}
+                    {'$inc': {'wallet.balance': amount_to_refund}}  # ✅ FIXED: 'wallet.balance' not 'balance'
                 )
+                print(f"✅ Refunded ${amount_to_refund} to user in investment_users, modified: {result.modified_count}")
             
             # 5. UPDATE TRANSACTION RECORD
             if transactions_collection is not None:
@@ -4306,18 +4362,16 @@ def admin_process_withdrawal(withdrawal_id):
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
-        # 7. UPDATE DASHBOARD STATS
-        update_dashboard_stats()
+        # Remove this line if update_dashboard_stats() doesn't exist:
+        # update_dashboard_stats()  # ❌ COMMENT THIS OUT - function doesn't exist!
         
         return add_cors_headers(jsonify({'success': True, 'message': message}))
         
     except Exception as e:
         logger.error(f"Process withdrawal error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
-
-
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
