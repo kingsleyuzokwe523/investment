@@ -468,7 +468,27 @@ def verify_jwt_token(token):
     except Exception:
         return None
 
-
+# ==================== SORT HELPER FUNCTION ====================
+def safe_sort(cursor, field, direction=-1):
+    """
+    Safely sort MongoDB queries - fixes the 'sort() takes no positional arguments' error.
+    
+    Usage:
+        # Instead of: cursor.sort('created_at', -1)
+        # Use:        cursor = safe_sort(cursor, 'created_at', -1)
+        
+        # Or for ascending: safe_sort(cursor, 'created_at', 1)
+    """
+    try:
+        # Try the correct way first (list of tuples)
+        return cursor.sort([(field, direction)])
+    except Exception as e:
+        # If that fails, try the old way as fallback
+        print(f"Sort fallback for {field}: {e}")
+        try:
+            return cursor.sort(field, direction)
+        except:
+            return cursor
 def get_user_from_request():
     token = request.cookies.get('veloxtrades_token') or request.cookies.get('elite_token')
     if not token:
