@@ -670,6 +670,7 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 # ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
+# ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
 import os
 import smtplib
 import socket
@@ -682,7 +683,7 @@ logger = logging.getLogger(__name__)
 
 # SMTP Configuration - Get from environment variables
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-SMTP_PORT = int(os.getenv('SMTP_PORT', 465))  # CHANGED: 465 instead of 587
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
 SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', SMTP_USER)
@@ -692,15 +693,13 @@ EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
     logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>")
-    masked_pass = '*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'Not set'
     logger.info(f"   Host: {SMTP_HOST}:{SMTP_PORT}")
     logger.info(f"   User: {SMTP_USER}")
-    logger.info(f"   Password: {masked_pass[:4]}...")
 else:
-    logger.error("❌ SMTP credentials not set! Email notifications will not work.")
+    logger.error("❌ SMTP credentials not set!")
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Gmail SMTP with SSL (port 465)"""
+    """Send email using Gmail SMTP on port 587"""
     try:
         if not to_email:
             logger.error("❌ No recipient email provided")
@@ -710,7 +709,7 @@ def send_email(to_email, subject, plain_body, html_body=None):
             logger.error("❌ SMTP credentials not configured")
             return False
         
-        logger.info(f"📧 Attempting to send email to: {to_email}")
+        logger.info(f"📧 Sending email to: {to_email}")
         logger.info(f"   Subject: {subject}")
         
         # Create message
@@ -718,50 +717,34 @@ def send_email(to_email, subject, plain_body, html_body=None):
         msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or SMTP_USER}>"
         msg['To'] = to_email
         msg['Subject'] = subject
-        msg['Date'] = datetime.now().strftime('%a, %d %b %Y %H:%M:%S %z')
         
-        # Attach plain text version
+        # Attach plain text
         msg.attach(MIMEText(plain_body, 'plain'))
         
-        # Attach HTML version if provided
+        # Attach HTML if provided
         if html_body:
             msg.attach(MIMEText(html_body, 'html'))
         else:
-            simple_html = f"<pre style='font-family: Arial, sans-serif;'>{plain_body}</pre>"
-            msg.attach(MIMEText(simple_html, 'html'))
+            msg.attach(MIMEText(plain_body.replace('\n', '<br>'), 'html'))
         
-        # FIXED: Use SMTP_SSL on port 465 instead of STARTTLS on 587
-        logger.info(f"📧 Connecting to {SMTP_HOST}:{SMTP_PORT} with SSL...")
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            logger.info(f"📧 Logging in as {SMTP_USER}...")
+        # Send using port 587 with TLS
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
-            logger.info(f"📧 Sending message...")
             server.send_message(msg)
         
-        logger.info(f"✅ Email sent successfully to {to_email}")
+        logger.info(f"✅ Email sent to {to_email}")
         return True
         
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"❌ SMTP Authentication Failed: {e}")
-        return False
-    except smtplib.SMTPConnectError as e:
-        logger.error(f"❌ Cannot connect to SMTP server {SMTP_HOST}:{SMTP_PORT}: {e}")
-        return False
     except Exception as e:
         logger.error(f"❌ Email error: {e}")
         return False
 
 def check_email_configuration():
-    """Check if email is configured and working"""
+    """Check if email is configured"""
     if not SMTP_USER or not SMTP_PASSWORD:
         return False, "SMTP credentials not configured"
-    
-    try:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            return True, "SMTP connection successful"
-    except Exception as e:
-        return False, f"SMTP connection failed: {str(e)}"
+    return True, "SMTP configured"
 # ==================== TEST FUNCTION ====================
 
 def send_test_email():
