@@ -667,6 +667,7 @@ SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
 SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL')
 SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
+EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
@@ -1114,7 +1115,6 @@ Veloxtrades Team"""
         logger.error(f"❌ Error in send_withdrawal_approved_email: {e}")
         return False
 
-
 def send_withdrawal_rejected_email(user, amount, method, reason):
     """Send withdrawal rejection email - uses database user info"""
     try:
@@ -1173,6 +1173,7 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_withdrawal_rejected_email: {e}")
         return False
+
 
 
 def send_withdrawal_processing_email(user, amount, method):
