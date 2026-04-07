@@ -1272,45 +1272,6 @@ INVESTMENT_PLANS = {
 
 # ==================== AUTO-PROFIT SCHEDULER ====================
 
-def process_investment_profits():
-    if investments_collection is None:
-        return
-    try:
-        logger.info("🔄 Processing investment profits...")
-        cursor = investments_collection.find({'status': 'active', 'end_date': {'$lte': datetime.now(timezone.utc)}})
-        processed = 0
-        for inv in cursor:
-            try:
-                if users_collection is None:
-                    continue
-                user = users_collection.find_one({'_id': ObjectId(inv['user_id'])})
-                if not user:
-                    continue
-                profit = inv.get('expected_profit', 0)
-                if users_collection is not None:
-                    users_collection.update_one({'_id': ObjectId(inv['user_id'])}, {'$inc': {'wallet.balance': profit, 'wallet.total_profit': profit}})
-                if investments_collection is not None:
-                    investments_collection.update_one({'_id': inv['_id']}, {'$set': {'status': 'completed', 'completed_at': datetime.now(timezone.utc)}})
-                if transactions_collection is not None:
-                    transactions_collection.insert_one({
-                        'user_id': inv['user_id'], 'type': 'profit', 'amount': profit, 'status': 'completed',
-                        'description': f'Profit from {inv.get("plan_name", "Investment")}',
-                        'created_at': datetime.now(timezone.utc)
-                    })
-                create_notification(inv['user_id'], 'Investment Completed! 🎉', f'You earned ${profit:,.2f} profit!', 'success')
-                send_investment_completed_email(user, inv['amount'], inv.get('plan_name', 'Investment'), profit)
-                processed += 1
-            except Exception as e:
-                logger.error(f"Error processing investment: {e}")
-        logger.info(f"✅ Processed {processed} investments")
-    except Exception as e:
-        logger.error(f"Error in profit processing: {e}")
-
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=process_investment_profits, trigger="interval", hours=1, id="profit_processor", replace_existing=True)
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
 
 
 # ==================== AUTHENTICATION ENDPOINTS ====================
