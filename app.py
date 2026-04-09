@@ -347,19 +347,21 @@ def create_all_indexes():
     """Create all necessary indexes for faster queries"""
     logger.info("Creating database indexes...")
     
-    def safe_index(collection, keys, *args, **kwargs):
-        try:
-            if collection:
-                result = collection.create_index(keys, *args, **kwargs)
-                logger.info(f"✅ Created index {result}")
-                return True
-        except Exception as e:
-            # Ignore duplicate index errors (code 86)
-            if hasattr(e, 'details') and e.details.get('code') == 86:
-                logger.debug(f"Index already exists, skipping: {keys}")
-            else:
-                logger.warning(f"Could not create index {keys}: {e}")
-        return False
+   def safe_index(collection, keys, *args, **kwargs):
+    try:
+        if collection:
+            result = collection.create_index(keys, *args, **kwargs)
+            # Extract just the index name for logging
+            index_name = keys if isinstance(keys, str) else keys[0][0]
+            logger.info(f"✅ Created index {index_name}")
+            return True
+    except Exception as e:
+        # Ignore duplicate index errors (code 86)
+        if hasattr(e, 'details') and e.details.get('code') == 86:
+            pass  # Index already exists, skip logging
+        else:
+            logger.warning(f"Could not create index: {e}")
+    return False
 
     # Users collection
     if users_collection:
