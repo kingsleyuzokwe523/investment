@@ -17,3 +17,6 @@ setuptools==69.0.3
 wheel==0.42.0
 resend==0.8.0
 secure-smtplib==0.1.1
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
