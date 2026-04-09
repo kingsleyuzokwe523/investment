@@ -345,25 +345,26 @@ def connect_to_databases():
 # ==================== 6. INDEX CREATION FUNCTION ====================
 def create_all_indexes():
     """Create all necessary indexes for faster queries"""
+    
     logger.info("Creating database indexes...")
     
-   def safe_index(collection, keys, *args, **kwargs):
-    try:
-        if collection:
-            result = collection.create_index(keys, *args, **kwargs)
-            # Extract just the index name for logging
-            index_name = keys if isinstance(keys, str) else keys[0][0]
-            logger.info(f"✅ Created index {index_name}")
-            return True
-    except Exception as e:
-        # Ignore duplicate index errors (code 86)
-        if hasattr(e, 'details') and e.details.get('code') == 86:
-            pass  # Index already exists, skip logging
-        else:
-            logger.warning(f"Could not create index: {e}")
-    return False
-
-    # Users collection
+    def safe_index(collection, keys, *args, **kwargs):
+        try:
+            if collection:
+                result = collection.create_index(keys, *args, **kwargs)
+                # Extract just the index name for logging
+                index_name = keys if isinstance(keys, str) else keys[0][0]
+                logger.info(f"✅ Created index {index_name}")
+                return True
+        except Exception as e:
+            # Ignore duplicate index errors (code 86)
+            if hasattr(e, 'details') and e.details.get('code') == 86:
+                pass  # Index already exists, skip logging
+            else:
+                logger.warning(f"Could not create index: {e}")
+        return False
+    
+    # Create indexes on users collection
     if users_collection:
         safe_index(users_collection, 'email')
         safe_index(users_collection, 'username')
@@ -373,7 +374,7 @@ def create_all_indexes():
         safe_index(users_collection, 'referred_by')
         safe_index(users_collection, [('email', 1), ('username', 1)])
     
-    # Transactions collection
+    # Create indexes on transactions collection
     if transactions_collection:
         safe_index(transactions_collection, 'user_id')
         safe_index(transactions_collection, 'created_at')
@@ -381,21 +382,21 @@ def create_all_indexes():
         safe_index(transactions_collection, 'type')
         safe_index(transactions_collection, [('user_id', 1), ('created_at', -1)])
     
-    # Deposits collection
+    # Create indexes on deposits collection
     if deposits_collection:
         safe_index(deposits_collection, 'user_id')
         safe_index(deposits_collection, 'status')
         safe_index(deposits_collection, 'created_at')
         safe_index(deposits_collection, [('status', 1), ('created_at', -1)])
     
-    # Withdrawals collection
+    # Create indexes on withdrawals collection
     if withdrawals_collection:
         safe_index(withdrawals_collection, 'user_id')
         safe_index(withdrawals_collection, 'status')
         safe_index(withdrawals_collection, 'created_at')
         safe_index(withdrawals_collection, [('status', 1), ('created_at', -1)])
     
-    # Investments collection
+    # Create indexes on investments collection
     if investments_collection:
         safe_index(investments_collection, 'user_id')
         safe_index(investments_collection, 'status')
@@ -404,20 +405,20 @@ def create_all_indexes():
         safe_index(investments_collection, [('status', 1), ('end_date', 1)])
         safe_index(investments_collection, [('user_id', 1), ('status', 1)])
     
-    # Notifications collection
+    # Create indexes on notifications collection
     if notifications_collection:
         safe_index(notifications_collection, 'user_id')
         safe_index(notifications_collection, 'read')
         safe_index(notifications_collection, 'created_at')
         safe_index(notifications_collection, [('user_id', 1), ('read', 1), ('created_at', -1)])
     
-    # KYC collection
+    # Create indexes on KYC collection
     if kyc_collection:
         safe_index(kyc_collection, 'user_id')
         safe_index(kyc_collection, 'status')
         safe_index(kyc_collection, 'submitted_at')
     
-    # Support tickets collection
+    # Create indexes on support tickets
     if support_tickets_collection:
         safe_index(support_tickets_collection, 'user_id')
         safe_index(support_tickets_collection, 'status')
@@ -425,11 +426,6 @@ def create_all_indexes():
         safe_index(support_tickets_collection, 'created_at')
     
     logger.info("✅ All database indexes created successfully")
-
-# ==================== 7. CONNECT TO DATABASES AND CREATE INDEXES ====================
-db_connected = connect_to_databases()
-if db_connected:
-    create_all_indexes()
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
