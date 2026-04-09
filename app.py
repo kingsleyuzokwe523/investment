@@ -755,6 +755,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -776,6 +777,25 @@ if SMTP_USER and SMTP_PASSWORD:
     logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
 else:
     logger.error("❌ SMTP credentials not set!")
+
+# ==================== ASYNC EMAIL WRAPPER ====================
+
+def send_email_async(email_func, *args, **kwargs):
+    """Send any email in background thread - prevents worker timeout"""
+    def send():
+        try:
+            print(f"📧 Async email started: {email_func.__name__}")
+            result = email_func(*args, **kwargs)
+            print(f"📧 Async email completed: {email_func.__name__} - {'Success' if result else 'Failed'}")
+        except Exception as e:
+            print(f"❌ Async email error in {email_func.__name__}: {e}")
+            logger.error(f"Async email error: {e}")
+    
+    # Start email in background thread (daemon=True so it doesn't block shutdown)
+    thread = threading.Thread(target=send, daemon=True)
+    thread.start()
+    print(f"📧 Email queued in background: {email_func.__name__}")
+    return True
 
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using Gmail SMTP"""
@@ -1356,6 +1376,10 @@ Veloxtrades Team"""
     except Exception as e:
         logger.error(f"❌ Error in send_withdrawal_processing_email: {e}")
         return False
+
+
+
+
 # ==================== INVESTMENT PLANS ====================
 INVESTMENT_PLANS = {
     'standard': {
@@ -3268,7 +3292,6 @@ def admin_delete_user(user_id):
 # ADMIN - DEPOSIT PROCESSING
 # ============================================================================
 # ==================== ADMIN - DEPOSIT PROCESSING ====================
-# ==================== ADMIN - DEPOSIT PROCESSING ====================
 @app.route('/api/admin/deposits/<deposit_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_deposit(deposit_id):
@@ -3341,6 +3364,7 @@ def admin_process_deposit(deposit_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # ==================== APPROVE ACTION ====================
         if action == 'approve':
             print(f"💰 APPROVING DEPOSIT for {user.get('username')}")
             
@@ -3402,30 +3426,32 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send email
-            email_sent = False
+            # ✅ SEND EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_deposit_approved_email(
+                send_email_async(
+                    send_deposit_approved_email,
                     user,
                     deposit['amount'],
                     deposit.get('crypto', 'USDT'),
                     deposit.get('transaction_hash')
                 )
-                print(f"✅ Approval email sent: {email_sent}")
+                print(f"📧 Approval email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Deposit approved successfully!',
+                'message': f'Deposit approved successfully! Email will be sent shortly.',
                 'data': {
                     'amount': deposit['amount'],
                     'user': user.get('username'),
                     'new_balance': new_balance,
-                    'email_sent': email_sent
+                    'email_queued': True
                 }
             })
-            
+        
+        # ==================== REJECT ACTION ====================
         elif action == 'reject':
             print(f"❌ REJECTING DEPOSIT for {user.get('username')}")
             
@@ -3463,35 +3489,38 @@ def admin_process_deposit(deposit_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send email
-            email_sent = False
+            # ✅ SEND REJECTION EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_deposit_rejected_email(
+                send_email_async(
+                    send_deposit_rejected_email,
                     user,
                     deposit['amount'],
                     deposit.get('crypto', 'USDT'),
                     reason
                 )
-                print(f"✅ Rejection email sent: {email_sent}")
+                print(f"📧 Rejection email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Deposit rejected!',
+                'message': f'Deposit rejected! Email will be sent shortly.',
                 'data': {
                     'amount': deposit['amount'],
-                    'email_sent': email_sent
+                    'user': user.get('username'),
+                    'email_queued': True
                 }
             })
+        
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
             
     except Exception as e:
         print(f"🔥 Deposit processing error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
 # ==================== ADMIN - DEPOSIT EMAIL RESEND ====================
 @app.route('/api/admin/deposits/<deposit_id>/resend-email', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -3508,43 +3537,64 @@ def admin_resend_single_deposit_email(deposit_id):
         if veloxtrades_deposits is None:
             return jsonify({'success': False, 'message': 'Database error'}), 500
         
-        deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+        # Search in both databases
+        deposit = None
+        if veloxtrades_deposits is not None:
+            deposit = veloxtrades_deposits.find_one({'_id': ObjectId(deposit_id)})
+        
+        if deposit is None and investment_deposits is not None:
+            deposit = investment_deposits.find_one({'_id': ObjectId(deposit_id)})
+        
         if not deposit:
             return jsonify({'success': False, 'message': 'Deposit not found'}), 404
         
-        user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        # Find user in both databases
+        user = None
+        if veloxtrades_users is not None:
+            user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        
+        if user is None and investment_users is not None:
+            user = investment_users.find_one({'_id': ObjectId(deposit['user_id'])})
+        
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
-        email_sent = False
-        
         if deposit['status'] == 'approved':
-            email_sent = send_deposit_approved_email(
+            # ✅ Send async email
+            send_email_async(
+                send_deposit_approved_email,
                 user, 
                 deposit['amount'], 
                 deposit.get('crypto', 'USDT'), 
                 deposit.get('transaction_hash')
             )
-            message = 'Approval email resent' if email_sent else 'Failed to send approval email'
+            message = 'Approval email queued for sending'
+            email_queued = True
+            
         elif deposit['status'] == 'rejected':
-            email_sent = send_deposit_rejected_email(
+            # ✅ Send async email
+            send_email_async(
+                send_deposit_rejected_email,
                 user, 
                 deposit['amount'], 
                 deposit.get('crypto', 'USDT'), 
                 deposit.get('rejection_reason', 'Not specified')
             )
-            message = 'Rejection email resent' if email_sent else 'Failed to send rejection email'
+            message = 'Rejection email queued for sending'
+            email_queued = True
+            
         else:
             return jsonify({'success': False, 'message': 'Deposit not processed (pending)'}), 400
         
         return jsonify({
-            'success': email_sent, 
+            'success': True, 
             'message': message,
             'data': {
                 'deposit_id': deposit_id,
                 'user_email': user.get('email'),
                 'amount': deposit['amount'],
-                'status': deposit['status']
+                'status': deposit['status'],
+                'email_queued': email_queued
             }
         })
         
@@ -3579,7 +3629,21 @@ def admin_resend_deposit_emails():
         else:
             query = {'status': {'$in': ['approved', 'rejected']}}
         
-        deposits = list(veloxtrades_deposits.find(query).limit(100))
+        # Get deposits from both databases
+        deposits = []
+        
+        if veloxtrades_deposits is not None:
+            veloxtrades_deposits_list = list(veloxtrades_deposits.find(query).limit(100))
+            deposits.extend(veloxtrades_deposits_list)
+        
+        if investment_deposits is not None:
+            investment_deposits_list = list(investment_deposits.find(query).limit(100))
+            # Avoid duplicates
+            existing_ids = {str(d.get('_id')) for d in deposits}
+            for d in investment_deposits_list:
+                if str(d.get('_id')) not in existing_ids:
+                    deposits.append(d)
+        
         sent = 0
         failed = 0
         skipped = 0
@@ -3587,51 +3651,52 @@ def admin_resend_deposit_emails():
         print(f"📧 Bulk resend - Found {len(deposits)} deposits with status: {status_filter}")
         
         for deposit in deposits:
-            user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+            # Find user in both databases
+            user = None
+            if veloxtrades_users is not None:
+                user = veloxtrades_users.find_one({'_id': ObjectId(deposit['user_id'])})
+            
+            if user is None and investment_users is not None:
+                user = investment_users.find_one({'_id': ObjectId(deposit['user_id'])})
+            
             if not user:
                 print(f"❌ User not found for deposit {deposit.get('deposit_id')}")
                 failed += 1
                 continue
             
-            email_sent = False
-            
             if deposit['status'] == 'approved':
-                email_sent = send_deposit_approved_email(
+                # ✅ Send async email
+                send_email_async(
+                    send_deposit_approved_email,
                     user, 
                     deposit['amount'], 
                     deposit.get('crypto', 'USDT'), 
                     deposit.get('transaction_hash')
                 )
-                if email_sent:
-                    sent += 1
-                    print(f"✅ Resent approval email to {user.get('email')} for ${deposit['amount']}")
-                else:
-                    failed += 1
-                    print(f"❌ Failed to send approval email to {user.get('email')}")
+                sent += 1
+                print(f"📧 Queued approval email to {user.get('email')} for ${deposit['amount']}")
                     
             elif deposit['status'] == 'rejected':
-                email_sent = send_deposit_rejected_email(
+                # ✅ Send async email
+                send_email_async(
+                    send_deposit_rejected_email,
                     user, 
                     deposit['amount'], 
                     deposit.get('crypto', 'USDT'), 
                     deposit.get('rejection_reason', 'Not specified')
                 )
-                if email_sent:
-                    sent += 1
-                    print(f"✅ Resent rejection email to {user.get('email')} for ${deposit['amount']}")
-                else:
-                    failed += 1
-                    print(f"❌ Failed to send rejection email to {user.get('email')}")
+                sent += 1
+                print(f"📧 Queued rejection email to {user.get('email')} for ${deposit['amount']}")
             else:
                 skipped += 1
                 print(f"⚠️ Skipping deposit with status: {deposit.get('status')}")
         
-        print(f"📧 Bulk resend complete: {sent} sent, {failed} failed, {skipped} skipped")
+        print(f"📧 Bulk resend complete: {sent} queued, {failed} failed, {skipped} skipped")
         
         return jsonify({
             'success': True, 
-            'message': f'Resent {sent} emails, {failed} failed, {skipped} skipped', 
-            'data': {'sent': sent, 'failed': failed, 'skipped': skipped}
+            'message': f'Queued {sent} emails for sending, {failed} failed, {skipped} skipped', 
+            'data': {'queued': sent, 'failed': failed, 'skipped': skipped}
         })
         
     except Exception as e:
@@ -3732,8 +3797,6 @@ def admin_get_investments():
         traceback.print_exc()
         return add_cors_headers(jsonify({'success': True, 'data': {'investments': [], 'total': 0}})), 200
 
-
-# ==================== ADMIN - INVESTMENT PROCESSING ====================
 # ==================== ADMIN - INVESTMENT PROCESSING ====================
 @app.route('/api/admin/investments/<investment_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
@@ -3807,6 +3870,7 @@ def admin_process_investment(investment_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # ==================== APPROVE ACTION ====================
         if action == 'approve':
             print(f"💰 APPROVING INVESTMENT for {user.get('username')}")
             
@@ -3889,32 +3953,34 @@ def admin_process_investment(investment_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send email
-            email_sent = False
+            # ✅ SEND EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_investment_confirmation_email(
+                send_email_async(
+                    send_investment_confirmation_email,
                     user,
                     investment['amount'],
                     investment['plan_name'],
                     investment['roi'],
                     investment['expected_profit']
                 )
-                print(f"✅ Confirmation email sent: {email_sent}")
+                print(f"📧 Investment confirmation email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Investment approved successfully!',
+                'message': f'Investment approved successfully! Email will be sent shortly.',
                 'data': {
                     'amount': investment['amount'],
                     'user': user.get('username'),
                     'total_invested': new_total_invested,
                     'expected_profit': investment['expected_profit'],
-                    'email_sent': email_sent
+                    'email_queued': True
                 }
             })
-            
+        
+        # ==================== REJECT ACTION ====================
         elif action == 'reject':
             print(f"❌ REJECTING INVESTMENT for {user.get('username')}")
             
@@ -3995,32 +4061,39 @@ def admin_process_investment(investment_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send rejection email
-            email_sent = False
+            # ✅ SEND REJECTION EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_investment_rejected_email(user, investment['amount'], investment['plan_name'], reason)
-                print(f"✅ Rejection email sent: {email_sent}")
+                send_email_async(
+                    send_investment_rejected_email,
+                    user,
+                    investment['amount'],
+                    investment['plan_name'],
+                    reason
+                )
+                print(f"📧 Investment rejection email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Investment rejected and ${investment["amount"]:,.2f} refunded to user!',
+                'message': f'Investment rejected and ${investment["amount"]:,.2f} refunded to user! Email will be sent shortly.',
                 'data': {
                     'amount': investment['amount'],
                     'user': user.get('username'),
-                    'email_sent': email_sent,
+                    'email_queued': True,
                     'refunded': True
                 }
             })
+        
+        else:
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
             
     except Exception as e:
         print(f"🔥 Investment processing error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
-
-
 
 # ==================== ADMIN - MANUAL TRANSACTION ====================
 @app.route('/api/admin/manual-transaction', methods=['POST', 'OPTIONS'])
@@ -4153,8 +4226,7 @@ def admin_manual_transaction():
         except Exception as e:
             print(f"Error creating notification: {e}")
         
-        # Send email notification
-        email_sent = False
+        # ✅ SEND EMAIL ASYNC - DOES NOT BLOCK!
         try:
             subject = f"{type_emoji} Balance Update - ${amount:,.2f} Added"
             plain_body = f"""Dear {user_name},
@@ -4175,10 +4247,11 @@ Your balance has been updated.
 Best regards,
 Veloxtrades Team"""
             
-            email_sent = send_email(user_email, subject, plain_body)
-            print(f"✅ Email sent: {email_sent}")
+            # Send email in background
+            send_email_async(send_email, user_email, subject, plain_body, plain_body.replace('\n', '<br>'))
+            print(f"📧 Balance update email queued for sending to {user_email}")
         except Exception as e:
-            print(f"Error sending email: {e}")
+            print(f"Error queuing email: {e}")
         
         # Get new balance
         new_balance = 0
@@ -4186,9 +4259,10 @@ Veloxtrades Team"""
             updated_user = veloxtrades_users.find_one({'_id': ObjectId(user_id)})
             new_balance = updated_user.get('wallet', {}).get('balance', 0)
         
+        # Return immediately - don't wait for email
         return jsonify({
             'success': True,
-            'message': f'${amount:,.2f} added to {username}\'s balance',
+            'message': f'${amount:,.2f} added to {username}\'s balance. Email will be sent shortly.',
             'data': {
                 'username': username,
                 'amount': amount,
@@ -4196,7 +4270,7 @@ Veloxtrades Team"""
                 'description': description,
                 'new_balance': new_balance,
                 'transaction_id': transaction_id,
-                'email_sent': email_sent
+                'email_queued': True
             }
         })
         
@@ -4314,6 +4388,7 @@ def test_email():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+# ==================== ADMIN - WITHDRAWAL PROCESSING ====================
 @app.route('/api/admin/withdrawals/<withdrawal_id>/process', methods=['POST', 'OPTIONS'])
 @require_admin
 def admin_process_withdrawal(withdrawal_id):
@@ -4387,6 +4462,7 @@ def admin_process_withdrawal(withdrawal_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         
+        # ==================== APPROVE ACTION ====================
         if action == 'approve':
             print(f"💰 APPROVING WITHDRAWAL for {user.get('username')}")
             
@@ -4428,31 +4504,33 @@ def admin_process_withdrawal(withdrawal_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send email
-            email_sent = False
+            # ✅ SEND EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_withdrawal_approved_email(
+                send_email_async(
+                    send_withdrawal_approved_email,
                     user,
                     withdrawal['amount'],
                     withdrawal.get('currency', 'USDT'),
                     withdrawal.get('wallet_address', ''),
                     transaction_id
                 )
-                print(f"✅ Approval email sent: {email_sent}")
+                print(f"📧 Withdrawal approval email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Withdrawal approved successfully!',
+                'message': f'Withdrawal approved successfully! Email will be sent shortly.',
                 'data': {
                     'amount': withdrawal['amount'],
                     'user': user.get('username'),
                     'transaction_id': transaction_id,
-                    'email_sent': email_sent
+                    'email_queued': True
                 }
             })
-            
+        
+        # ==================== REJECT ACTION ====================
         elif action == 'reject':
             print(f"❌ REJECTING WITHDRAWAL for {user.get('username')}")
             
@@ -4515,29 +4593,31 @@ def admin_process_withdrawal(withdrawal_id):
             except Exception as e:
                 print(f"Error creating notification: {e}")
             
-            # Send rejection email
-            email_sent = False
+            # ✅ SEND REJECTION EMAIL ASYNC - DOES NOT BLOCK!
             try:
-                email_sent = send_withdrawal_rejected_email(
+                send_email_async(
+                    send_withdrawal_rejected_email,
                     user,
                     withdrawal['amount'],
                     withdrawal.get('currency', 'USDT'),
                     reason
                 )
-                print(f"✅ Rejection email sent: {email_sent}")
+                print(f"📧 Withdrawal rejection email queued for sending")
             except Exception as e:
-                print(f"Error sending email: {e}")
+                print(f"Error queuing email: {e}")
             
+            # Return immediately - don't wait for email
             return jsonify({
                 'success': True,
-                'message': f'Withdrawal rejected and ${withdrawal["amount"]:,.2f} refunded!',
+                'message': f'Withdrawal rejected and ${withdrawal["amount"]:,.2f} refunded! Email will be sent shortly.',
                 'data': {
                     'amount': withdrawal['amount'],
                     'user': user.get('username'),
                     'refunded': True,
-                    'email_sent': email_sent
+                    'email_queued': True
                 }
             })
+        
         else:
             return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
@@ -4546,7 +4626,6 @@ def admin_process_withdrawal(withdrawal_id):
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
-
 @app.route('/api/admin/deposits', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_deposits():
