@@ -426,6 +426,18 @@ def create_all_indexes():
         safe_index(support_tickets_collection, 'created_at')
     
     logger.info("✅ All database indexes created successfully")
+
+
+# ==================== CONNECT TO DATABASES (ACTUALLY CALL THE FUNCTION!) ====================
+print("🔵 Connecting to MongoDB...")
+db_connected = connect_to_databases()
+
+if db_connected:
+    print("✅ MongoDB connected successfully!")
+    create_all_indexes()
+    print("📊 DUAL DATABASE MODE: Both databases ready")
+else:
+    print("❌ MongoDB connection failed! Check your MONGO_URI environment variable.")
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
