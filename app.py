@@ -1074,6 +1074,37 @@ def test_ports():
         'ports': results,
         'message': 'If ports show CLOSED, Render is blocking them'
     })
+
+@app.route('/api/test-gmail-2525', methods=['GET'])
+def test_gmail_2525():
+    import socket
+    import smtplib
+    
+    results = {}
+    
+    # Test if port 2525 is reachable to Gmail
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex(('smtp.gmail.com', 2525))
+        sock.close()
+        results['port_2525_reachable'] = 'OPEN' if result == 0 else 'CLOSED'
+    except Exception as e:
+        results['port_2525_reachable'] = f'ERROR: {str(e)[:50]}'
+    
+    # Try actual SMTP connection on port 2525
+    if results['port_2525_reachable'] == 'OPEN':
+        try:
+            server = smtplib.SMTP('smtp.gmail.com', 2525, timeout=10)
+            server.starttls()
+            results['smtp_connection'] = 'Connected successfully'
+            server.quit()
+        except Exception as e:
+            results['smtp_connection'] = f'Failed: {str(e)[:100]}'
+    else:
+        results['smtp_connection'] = 'Port not reachable'
+    
+    return jsonify(results)
 # ==================== ALL EMAIL FUNCTIONS ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
