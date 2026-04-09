@@ -875,7 +875,157 @@ def debug_email():
             if k.startswith('SMTP_') or k.startswith('EMAIL_')
         }
     })
+@app.route('/api/test-ports-extended', methods=['GET'])
+def test_ports_extended():
+    import socket
+    results = {}
     
+    # Test many more ports that might be open
+    ports_to_test = [
+        25,      # SMTP classic
+        465,     # SMTP SSL
+        587,     # SMTP TLS
+        2525,    # Alternate SMTP
+        8025,    # Alternate SMTP
+        5870,    # Alternate SMTP
+        26,      # Alternate SMTP
+        2526,    # Alternate SMTP
+        3535,    # Alternate SMTP
+        5555,    # Alternate SMTP
+        6667,    # Alternate SMTP
+        8080,    # HTTP alternate
+        8443,    # HTTPS alternate
+        443,     # HTTPS (should be open)
+        80,      # HTTP (should be open)
+        53,      # DNS
+        123,     # NTP
+        993,     # IMAP SSL
+        995,     # POP3 SSL
+    ]
+    
+    for port in ports_to_test:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('smtp.gmail.com', port))
+            sock.close()
+            results[port] = 'OPEN' if result == 0 else 'CLOSED'
+        except Exception as e:
+            results[port] = f'ERROR'
+    
+    # Also test other mail servers
+    other_servers = {
+        'mailgun.org': [25, 587, 465],
+        'sendgrid.net': [25, 587, 2525],
+        'sparkpostmail.com': [25, 587, 2525],
+        'smtp.mailgun.org': [25, 587, 465],
+    }
+    
+    server_results = {}
+    for server, ports in other_servers.items():
+        server_results[server] = {}
+        for port in ports:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex((server, port))
+                sock.close()
+                server_results[server][port] = 'OPEN' if result == 0 else 'CLOSED'
+            except:
+                server_results[server][port] = 'ERROR'
+    
+    # Test if ANY outbound connection works at all
+    common_websites = {
+        'google.com': 80,
+        'cloudflare.com': 80,
+        'github.com': 80,
+        'api.sendgrid.com': 443,
+    }
+    
+    web_results = {}
+    for site, port in common_websites.items():
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex((site, port))
+            sock.close()
+            web_results[site] = 'OPEN' if result == 0 else 'CLOSED'
+        except:
+            web_results[site] = 'ERROR'
+    
+    return jsonify({
+        'smtp_ports': results,
+        'other_mail_servers': server_results,
+        'general_web_connectivity': web_results,
+        'conclusion': {
+            'smtp_blocked': all(results.get(p) == 'CLOSED' for p in [25, 465, 587]),
+            'can_reach_web': any(web_results.get(site) == 'OPEN' for site in web_results),
+            'recommendation': 'Use SendGrid API - SMTP is blocked on all ports'
+        }
+    })
+@app.route('/api/test-alternative-smtp', methods=['GET'])
+def test_alternative_smtp():
+    import socket
+    results = {}
+    
+    # Try different SMTP servers (some might be allowed)
+    smtp_servers = {
+        'smtp-relay.gmail.com': [25, 587, 465],
+        'aspmx.l.google.com': [25],
+        'alt1.aspmx.l.google.com': [25],
+        'smtp.mailgun.org': [25, 587, 465],
+        'smtp.sendgrid.net': [25, 587, 2525],
+        'smtp.sparkpostmail.com': [25, 587, 2525],
+        'mail.smtp2go.com': [25, 587, 2525],
+        'smtp.brevo.com': [25, 587, 465],
+    }
+    
+    for server, ports in smtp_servers.items():
+        results[server] = {}
+        for port in ports:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                result = sock.connect_ex((server, port))
+                sock.close()
+                results[server][port] = 'OPEN' if result == 0 else 'CLOSED'
+            except:
+                results[server][port] = 'ERROR'
+    
+    return jsonify({
+        'alternative_smtp_servers': results,
+        'note': 'If all show CLOSED, Render blocks ALL outbound SMTP'
+    })
+
+@app.route('/api/test-basic-connectivity', methods=['GET'])
+def test_basic_connectivity():
+    import socket
+    import requests
+    
+    results = {}
+    
+    # Test basic internet connectivity
+    try:
+        response = requests.get('https://www.google.com', timeout=5)
+        results['google_https'] = f'OK (status {response.status_code})'
+    except Exception as e:
+        results['google_https'] = f'FAILED: {str(e)[:50]}'
+    
+    try:
+        response = requests.get('http://www.google.com', timeout=5)
+        results['google_http'] = f'OK (status {response.status_code})'
+    except Exception as e:
+        results['google_http'] = f'FAILED: {str(e)[:50]}'
+    
+    # Test DNS resolution
+    try:
+        import socket
+        ip = socket.gethostbyname('smtp.gmail.com')
+        results['dns_resolution'] = f'OK (smtp.gmail.com = {ip})'
+    except Exception as e:
+        results['dns_resolution'] = f'FAILED: {str(e)[:50]}'
+    
+    return jsonify(results)
 def send_test_email():
     """Send a test email to verify everything works"""
     result = send_email(
