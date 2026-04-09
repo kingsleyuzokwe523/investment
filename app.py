@@ -442,6 +442,7 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
 
+# Update ALLOWED_ORIGINS to include your frontend domain
 ALLOWED_ORIGINS = [
     "http://localhost:5000", 
     "http://127.0.0.1:5000", 
@@ -449,12 +450,27 @@ ALLOWED_ORIGINS = [
     "http://localhost:5500",
     "https://frontend-ugb2.onrender.com", 
     "https://elite-eky6.onrender.com",
-    "https://veloxtrades.com.ng", 
-    "https://www.veloxtrades.com.ng",
+    "https://veloxtrades.com.ng",           # ← Your main domain
+    "https://www.veloxtrades.com.ng",       # ← With www
     "https://velox-wnn4.onrender.com", 
-    "https://investment-gto3.onrender.com"
+    "https://investment-gto3.onrender.com",
+    # Add your specific frontend URL if different
+    "https://veloxtrades.com.ng:3000",      # If using port 3000
 ]
 
+# Make sure CORS headers are properly set
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin', '')
+    
+    # Allow your frontend domain
+    if 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, Origin'
+    
+    return response
 # ==================== SINGLE CORS CONFIGURATION ====================
 # Handle OPTIONS preflight requests
 @app.before_request
@@ -477,26 +493,7 @@ def handle_preflight():
         return response
 
 
-# Handle CORS headers for all responses
-@app.after_request
-def add_cors_headers(response):
-    # Skip if it's an OPTIONS request (already handled)
-    if request.method == "OPTIONS":
-        return response
-    
-    origin = request.headers.get('Origin', '')
-    
-    # Set allowed origin
-    if origin in ALLOWED_ORIGINS or 'veloxtrades.com.ng' in origin or 'onrender.com' in origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    else:
-        response.headers['Access-Control-Allow-Origin'] = 'https://www.veloxtrades.com.ng'
-    
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, X-Requested-With, X-CSRFToken, Origin'
-    
-    return response
+
 def get_user_from_request():
     token = request.cookies.get('veloxtrades_token') or request.cookies.get('elite_token')
     if not token:
