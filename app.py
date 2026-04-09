@@ -859,7 +859,23 @@ def send_email(to_email, subject, plain_body, html_body=None):
         return False
 
 # ==================== TEST FUNCTION ====================
-
+@app.route('/api/debug-email', methods=['GET'])
+def debug_email():
+    """Debug email configuration"""
+    return jsonify({
+        'SMTP_USER': 'SET' if SMTP_USER else 'NOT SET',
+        'SMTP_PASSWORD': 'SET' if SMTP_PASSWORD else 'NOT SET',
+        'SMTP_HOST': SMTP_HOST,
+        'SMTP_PORT': SMTP_PORT,
+        'SMTP_FROM_EMAIL': SMTP_FROM_EMAIL,
+        'EMAIL_CONFIGURED': EMAIL_CONFIGURED,
+        'file_exists': os.path.exists('.env'),
+        'env_vars': {
+            k: v for k, v in os.environ.items() 
+            if k.startswith('SMTP_') or k.startswith('EMAIL_')
+        }
+    })
+    
 def send_test_email():
     """Send a test email to verify everything works"""
     result = send_email(
