@@ -780,13 +780,22 @@ else:
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using Gmail SMTP"""
     try:
+        print(f"📧 ATTEMPTING TO SEND EMAIL to: {to_email}")
+        print(f"📧 Subject: {subject}")
+        
         if not to_email:
             logger.error("❌ No recipient email provided")
             return False
         
         if not SMTP_USER or not SMTP_PASSWORD:
             logger.error("❌ SMTP credentials not configured")
+            print(f"   SMTP_USER: {'SET' if SMTP_USER else 'NOT SET'}")
+            print(f"   SMTP_PASSWORD: {'SET' if SMTP_PASSWORD else 'NOT SET'}")
             return False
+        
+        print(f"📧 SMTP Host: {SMTP_HOST}")
+        print(f"📧 SMTP Port: {SMTP_PORT}")
+        print(f"📧 From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
         
         # Create message
         msg = MIMEMultipart()
@@ -798,24 +807,36 @@ def send_email(to_email, subject, plain_body, html_body=None):
         final_html = html_body or plain_body.replace('\n', '<br>')
         msg.attach(MIMEText(final_html, 'html'))
         
+        print(f"📧 Connecting to SMTP server...")
+        
         # Send email
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.set_debuglevel(1)  # Enable SMTP debug output
             server.starttls()
+            print(f"📧 Logging in as {SMTP_USER}...")
             server.login(SMTP_USER, SMTP_PASSWORD)
+            print(f"📧 Login successful!")
             server.send_message(msg)
+            print(f"📧 Message sent!")
         
         logger.info(f"✅ Email sent to {to_email}")
         return True
         
-    except Exception as e:
-        logger.error(f"❌ SMTP error: {e}")
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"❌ SMTP Authentication failed: {e}")
+        print(f"❌ AUTH ERROR: {e}")
+        print(f"   Check your Gmail password/App Password")
         return False
-
-def check_email_configuration():
-    """Check if email is configured"""
-    if SMTP_USER and SMTP_PASSWORD:
-        return True, "SMTP configured"
-    return False, "No email configuration found"
+    except smtplib.SMTPException as e:
+        logger.error(f"❌ SMTP error: {e}")
+        print(f"❌ SMTP ERROR: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Email error: {e}")
+        print(f"❌ GENERAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 # ==================== TEST FUNCTION ====================
 
