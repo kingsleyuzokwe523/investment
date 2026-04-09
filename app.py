@@ -903,7 +903,27 @@ def send_test_email():
         print("❌ Failed to send test email")
     
     return result
-
+@app.route('/api/test-ports', methods=['GET'])
+def test_ports():
+    import socket
+    results = {}
+    
+    ports_to_test = [25, 465, 587, 2525, 8025, 5870]
+    
+    for port in ports_to_test:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            result = sock.connect_ex(('smtp.gmail.com', port))
+            sock.close()
+            results[port] = 'OPEN' if result == 0 else 'CLOSED'
+        except Exception as e:
+            results[port] = f'ERROR: {str(e)[:50]}'
+    
+    return jsonify({
+        'ports': results,
+        'message': 'If ports show CLOSED, Render is blocking them'
+    })
 # ==================== ALL EMAIL FUNCTIONS ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
