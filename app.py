@@ -271,6 +271,77 @@ class DualDatabaseCollection:
                 logger.error(f"Error listing indexes in {self.name}: {e}")
                 continue
         return all_indexes
+
+
+def connect_to_databases():
+    global client, veloxtrades_db, investment_db
+    global veloxtrades_users, veloxtrades_transactions, veloxtrades_notifications, veloxtrades_kyc
+    global veloxtrades_support_tickets, veloxtrades_admin_logs, veloxtrades_settings, veloxtrades_email_logs
+    global veloxtrades_investments, veloxtrades_deposits, veloxtrades_withdrawals, veloxtrades_referral_stats
+    global investment_users, investment_transactions, investment_notifications, investment_kyc
+    global investment_support_tickets, investment_admin_logs, investment_settings, investment_email_logs
+    global investment_investments, investment_deposits, investment_withdrawals, investment_referral_stats
+    global users_collection, investments_collection, transactions_collection, deposits_collection
+    global withdrawals_collection, notifications_collection, kyc_collection, support_tickets_collection
+    global admin_logs_collection, settings_collection, email_logs_collection, referral_stats_collection
+
+    try:
+        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongo_uri, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')
+        logger.info("✅ MongoDB connection successful")
+
+        veloxtrades_db = client[DB_VELOXTRADES]
+        investment_db = client[DB_INVESTMENT]
+
+        # Initialize veloxtrades_db collections
+        veloxtrades_users = veloxtrades_db['users']
+        veloxtrades_transactions = veloxtrades_db['transactions']
+        veloxtrades_notifications = veloxtrades_db['notifications']
+        veloxtrades_kyc = veloxtrades_db['kyc']
+        veloxtrades_support_tickets = veloxtrades_db['support_tickets']
+        veloxtrades_admin_logs = veloxtrades_db['admin_logs']
+        veloxtrades_settings = veloxtrades_db['settings']
+        veloxtrades_email_logs = veloxtrades_db['email_logs']
+        veloxtrades_investments = veloxtrades_db['investments']
+        veloxtrades_deposits = veloxtrades_db['deposits']
+        veloxtrades_withdrawals = veloxtrades_db['withdrawals']
+        veloxtrades_referral_stats = veloxtrades_db['referral_stats']
+
+        # Initialize investment_db collections
+        investment_users = investment_db['users']
+        investment_transactions = investment_db['transactions']
+        investment_notifications = investment_db['notifications']
+        investment_kyc = investment_db['kyc']
+        investment_support_tickets = investment_db['support_tickets']
+        investment_admin_logs = investment_db['admin_logs']
+        investment_settings = investment_db['settings']
+        investment_email_logs = investment_db['email_logs']
+        investment_investments = investment_db['investments']
+        investment_deposits = investment_db['deposits']
+        investment_withdrawals = investment_db['withdrawals']
+        investment_referral_stats = investment_db['referral_stats']
+
+        # Create combined collections (search across both databases)
+        users_collection = DualDatabaseCollection([veloxtrades_users, investment_users], 'users')
+        investments_collection = DualDatabaseCollection([veloxtrades_investments, investment_investments], 'investments')
+        transactions_collection = DualDatabaseCollection([veloxtrades_transactions, investment_transactions], 'transactions')
+        deposits_collection = DualDatabaseCollection([veloxtrades_deposits, investment_deposits], 'deposits')
+        withdrawals_collection = DualDatabaseCollection([veloxtrades_withdrawals, investment_withdrawals], 'withdrawals')
+        notifications_collection = DualDatabaseCollection([veloxtrades_notifications, investment_notifications], 'notifications')
+        kyc_collection = DualDatabaseCollection([veloxtrades_kyc, investment_kyc], 'kyc')
+        support_tickets_collection = DualDatabaseCollection([veloxtrades_support_tickets, investment_support_tickets], 'support_tickets')
+        admin_logs_collection = DualDatabaseCollection([veloxtrades_admin_logs, investment_admin_logs], 'admin_logs')
+        settings_collection = DualDatabaseCollection([veloxtrades_settings, investment_settings], 'settings')
+        email_logs_collection = DualDatabaseCollection([veloxtrades_email_logs, investment_email_logs], 'email_logs')
+        referral_stats_collection = DualDatabaseCollection([veloxtrades_referral_stats, investment_referral_stats], 'referral_stats')
+
+        logger.info("✅ DUAL DATABASE CONFIGURATION: Both databases connected")
+        return True
+    except Exception as e:
+        logger.error(f"❌ MongoDB connection error: {e}")
+        return False
+
 def create_all_indexes():
     """Create all necessary indexes for faster queries"""
     
@@ -344,82 +415,7 @@ db_connected = connect_to_databases()
 if db_connected:
     create_all_indexes()
 
-        
 
-
-
-
-def connect_to_databases():
-    global client, veloxtrades_db, investment_db
-    global veloxtrades_users, veloxtrades_transactions, veloxtrades_notifications, veloxtrades_kyc
-    global veloxtrades_support_tickets, veloxtrades_admin_logs, veloxtrades_settings, veloxtrades_email_logs
-    global veloxtrades_investments, veloxtrades_deposits, veloxtrades_withdrawals, veloxtrades_referral_stats
-    global investment_users, investment_transactions, investment_notifications, investment_kyc
-    global investment_support_tickets, investment_admin_logs, investment_settings, investment_email_logs
-    global investment_investments, investment_deposits, investment_withdrawals, investment_referral_stats
-    global users_collection, investments_collection, transactions_collection, deposits_collection
-    global withdrawals_collection, notifications_collection, kyc_collection, support_tickets_collection
-    global admin_logs_collection, settings_collection, email_logs_collection, referral_stats_collection
-
-    try:
-        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
-        client = MongoClient(mongo_uri, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
-        client.admin.command('ping')
-        logger.info("✅ MongoDB connection successful")
-
-        veloxtrades_db = client[DB_VELOXTRADES]
-        investment_db = client[DB_INVESTMENT]
-
-        # Initialize veloxtrades_db collections
-        veloxtrades_users = veloxtrades_db['users']
-        veloxtrades_transactions = veloxtrades_db['transactions']
-        veloxtrades_notifications = veloxtrades_db['notifications']
-        veloxtrades_kyc = veloxtrades_db['kyc']
-        veloxtrades_support_tickets = veloxtrades_db['support_tickets']
-        veloxtrades_admin_logs = veloxtrades_db['admin_logs']
-        veloxtrades_settings = veloxtrades_db['settings']
-        veloxtrades_email_logs = veloxtrades_db['email_logs']
-        veloxtrades_investments = veloxtrades_db['investments']
-        veloxtrades_deposits = veloxtrades_db['deposits']
-        veloxtrades_withdrawals = veloxtrades_db['withdrawals']
-        veloxtrades_referral_stats = veloxtrades_db['referral_stats']
-
-        # Initialize investment_db collections
-        investment_users = investment_db['users']
-        investment_transactions = investment_db['transactions']
-        investment_notifications = investment_db['notifications']
-        investment_kyc = investment_db['kyc']
-        investment_support_tickets = investment_db['support_tickets']
-        investment_admin_logs = investment_db['admin_logs']
-        investment_settings = investment_db['settings']
-        investment_email_logs = investment_db['email_logs']
-        investment_investments = investment_db['investments']
-        investment_deposits = investment_db['deposits']
-        investment_withdrawals = investment_db['withdrawals']
-        investment_referral_stats = investment_db['referral_stats']
-
-        # Create combined collections (search across both databases)
-        users_collection = DualDatabaseCollection([veloxtrades_users, investment_users], 'users')
-        investments_collection = DualDatabaseCollection([veloxtrades_investments, investment_investments], 'investments')
-        transactions_collection = DualDatabaseCollection([veloxtrades_transactions, investment_transactions], 'transactions')
-        deposits_collection = DualDatabaseCollection([veloxtrades_deposits, investment_deposits], 'deposits')
-        withdrawals_collection = DualDatabaseCollection([veloxtrades_withdrawals, investment_withdrawals], 'withdrawals')
-        notifications_collection = DualDatabaseCollection([veloxtrades_notifications, investment_notifications], 'notifications')
-        kyc_collection = DualDatabaseCollection([veloxtrades_kyc, investment_kyc], 'kyc')
-        support_tickets_collection = DualDatabaseCollection([veloxtrades_support_tickets, investment_support_tickets], 'support_tickets')
-        admin_logs_collection = DualDatabaseCollection([veloxtrades_admin_logs, investment_admin_logs], 'admin_logs')
-        settings_collection = DualDatabaseCollection([veloxtrades_settings, investment_settings], 'settings')
-        email_logs_collection = DualDatabaseCollection([veloxtrades_email_logs, investment_email_logs], 'email_logs')
-        referral_stats_collection = DualDatabaseCollection([veloxtrades_referral_stats, investment_referral_stats], 'referral_stats')
-
-        logger.info("✅ DUAL DATABASE CONFIGURATION: Both databases connected")
-        return True
-    except Exception as e:
-        logger.error(f"❌ MongoDB connection error: {e}")
-        return False
-
-
-db_connected = connect_to_databases()
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
@@ -744,6 +740,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # SMTP Configuration - Get from environment variables
+EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
