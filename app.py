@@ -342,80 +342,92 @@ def connect_to_databases():
         logger.error(f"❌ MongoDB connection error: {e}")
         return False
 
+# ==================== 6. INDEX CREATION FUNCTION ====================
 def create_all_indexes():
     """Create all necessary indexes for faster queries"""
-    
     logger.info("Creating database indexes...")
     
-    # Create indexes on users collection
+    def safe_index(collection, keys, *args, **kwargs):
+        try:
+            if collection:
+                result = collection.create_index(keys, *args, **kwargs)
+                logger.info(f"✅ Created index {result}")
+                return True
+        except Exception as e:
+            # Ignore duplicate index errors (code 86)
+            if hasattr(e, 'details') and e.details.get('code') == 86:
+                logger.debug(f"Index already exists, skipping: {keys}")
+            else:
+                logger.warning(f"Could not create index {keys}: {e}")
+        return False
+
+    # Users collection
     if users_collection:
-        users_collection.create_index('email')
-        users_collection.create_index('username')
-        users_collection.create_index('created_at')
-        users_collection.create_index('is_admin')
-        users_collection.create_index('referral_code')
-        users_collection.create_index('referred_by')
-        users_collection.create_index([('email', 1), ('username', 1)])  # Compound index
+        safe_index(users_collection, 'email')
+        safe_index(users_collection, 'username')
+        safe_index(users_collection, 'created_at')
+        safe_index(users_collection, 'is_admin')
+        safe_index(users_collection, 'referral_code')
+        safe_index(users_collection, 'referred_by')
+        safe_index(users_collection, [('email', 1), ('username', 1)])
     
-    # Create indexes on transactions collection
+    # Transactions collection
     if transactions_collection:
-        transactions_collection.create_index('user_id')
-        transactions_collection.create_index('created_at')
-        transactions_collection.create_index('status')
-        transactions_collection.create_index('type')
-        transactions_collection.create_index([('user_id', 1), ('created_at', -1)])  # Compound for user transactions
+        safe_index(transactions_collection, 'user_id')
+        safe_index(transactions_collection, 'created_at')
+        safe_index(transactions_collection, 'status')
+        safe_index(transactions_collection, 'type')
+        safe_index(transactions_collection, [('user_id', 1), ('created_at', -1)])
     
-    # Create indexes on deposits collection
+    # Deposits collection
     if deposits_collection:
-        deposits_collection.create_index('user_id')
-        deposits_collection.create_index('status')
-        deposits_collection.create_index('created_at')
-        deposits_collection.create_index([('status', 1), ('created_at', -1)])  # For admin pending deposits
+        safe_index(deposits_collection, 'user_id')
+        safe_index(deposits_collection, 'status')
+        safe_index(deposits_collection, 'created_at')
+        safe_index(deposits_collection, [('status', 1), ('created_at', -1)])
     
-    # Create indexes on withdrawals collection
+    # Withdrawals collection
     if withdrawals_collection:
-        withdrawals_collection.create_index('user_id')
-        withdrawals_collection.create_index('status')
-        withdrawals_collection.create_index('created_at')
-        withdrawals_collection.create_index([('status', 1), ('created_at', -1)])
+        safe_index(withdrawals_collection, 'user_id')
+        safe_index(withdrawals_collection, 'status')
+        safe_index(withdrawals_collection, 'created_at')
+        safe_index(withdrawals_collection, [('status', 1), ('created_at', -1)])
     
-    # Create indexes on investments collection
+    # Investments collection
     if investments_collection:
-        investments_collection.create_index('user_id')
-        investments_collection.create_index('status')
-        investments_collection.create_index('end_date')
-        investments_collection.create_index('created_at')
-        investments_collection.create_index([('status', 1), ('end_date', 1)])  # For profit processor
-        investments_collection.create_index([('user_id', 1), ('status', 1)])  # For user active investments
+        safe_index(investments_collection, 'user_id')
+        safe_index(investments_collection, 'status')
+        safe_index(investments_collection, 'end_date')
+        safe_index(investments_collection, 'created_at')
+        safe_index(investments_collection, [('status', 1), ('end_date', 1)])
+        safe_index(investments_collection, [('user_id', 1), ('status', 1)])
     
-    # Create indexes on notifications collection
+    # Notifications collection
     if notifications_collection:
-        notifications_collection.create_index('user_id')
-        notifications_collection.create_index('read')
-        notifications_collection.create_index('created_at')
-        notifications_collection.create_index([('user_id', 1), ('read', 1), ('created_at', -1)])  # For unread count
+        safe_index(notifications_collection, 'user_id')
+        safe_index(notifications_collection, 'read')
+        safe_index(notifications_collection, 'created_at')
+        safe_index(notifications_collection, [('user_id', 1), ('read', 1), ('created_at', -1)])
     
-    # Create indexes on KYC collection
+    # KYC collection
     if kyc_collection:
-        kyc_collection.create_index('user_id')
-        kyc_collection.create_index('status')
-        kyc_collection.create_index('submitted_at')
+        safe_index(kyc_collection, 'user_id')
+        safe_index(kyc_collection, 'status')
+        safe_index(kyc_collection, 'submitted_at')
     
-    # Create indexes on support tickets
+    # Support tickets collection
     if support_tickets_collection:
-        support_tickets_collection.create_index('user_id')
-        support_tickets_collection.create_index('status')
-        support_tickets_collection.create_index('ticket_id')
-        support_tickets_collection.create_index('created_at')
+        safe_index(support_tickets_collection, 'user_id')
+        safe_index(support_tickets_collection, 'status')
+        safe_index(support_tickets_collection, 'ticket_id')
+        safe_index(support_tickets_collection, 'created_at')
     
     logger.info("✅ All database indexes created successfully")
 
-# Call this after connecting to databases:
+# ==================== 7. CONNECT TO DATABASES AND CREATE INDEXES ====================
 db_connected = connect_to_databases()
 if db_connected:
     create_all_indexes()
-
-
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://www.veloxtrades.com.ng')
 BACKEND_URL = os.getenv('BACKEND_URL', 'https://investment-gto3.onrender.com')
 ADMIN_RESET_SECRET = os.getenv('ADMIN_RESET_SECRET', 'veloxtrades-admin-reset-2025')
@@ -740,7 +752,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 # SMTP Configuration - Get from environment variables
-EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
@@ -748,6 +759,11 @@ SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
 SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL')
 SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
 
+EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
+EMAIL_HOST = SMTP_HOST
+EMAIL_PORT = SMTP_PORT
+EMAIL_FROM = SMTP_FROM_EMAIL
+EMAIL_USER = SMTP_USER
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
     logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
