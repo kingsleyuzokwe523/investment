@@ -113,6 +113,7 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
+
 class DualDatabaseCollection:
     def __init__(self, collections, name):
         # Filter out None collections
@@ -127,7 +128,6 @@ class DualDatabaseCollection:
         """Return number of underlying collections"""
         return len(self.collections)
     
-    # Rest of your methods remain the same...
     def find(self, query=None, *args, **kwargs):
         results = []
         for collection in self.collections:
@@ -163,7 +163,8 @@ class DualDatabaseCollection:
         for collection in self.collections:
             try:
                 if collection is not None:
-                    if collection.update_one(filter, update, *args, **kwargs).modified_count > 0:
+                    result = collection.update_one(filter, update, *args, **kwargs)
+                    if result.modified_count > 0:
                         updated = True
             except Exception as e:
                 logger.error(f"Error updating {self.name}: {e}")
@@ -231,12 +232,121 @@ class DualDatabaseCollection:
         return all_results
 
     def create_index(self, keys, *args, **kwargs):
+        """Create index across all collections in this dual database wrapper"""
+        results = []
         for collection in self.collections:
             try:
                 if collection is not None:
-                    collection.create_index(keys, *args, **kwargs)
-            except Exception:
+                    # Create index and store the result
+                    result = collection.create_index(keys, *args, **kwargs)
+                    results.append(result)
+                    logger.info(f"✅ Created index {result} in {self.name} collection")
+            except Exception as e:
+                logger.error(f"Error creating index in {self.name}: {e}")
                 continue
+        return results if results else None
+
+    def drop_index(self, name, *args, **kwargs):
+        """Drop index from all collections"""
+        results = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    result = collection.drop_index(name, *args, **kwargs)
+                    results.append(result)
+            except Exception as e:
+                logger.error(f"Error dropping index in {self.name}: {e}")
+                continue
+        return results if results else None
+
+    def list_indexes(self, *args, **kwargs):
+        """List all indexes from all collections"""
+        all_indexes = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    indexes = list(collection.list_indexes(*args, **kwargs))
+                    all_indexes.extend(indexes)
+            except Exception as e:
+                logger.error(f"Error listing indexes in {self.name}: {e}")
+                continue
+        return all_indexes
+def create_all_indexes():
+    """Create all necessary indexes for faster queries"""
+    
+    logger.info("Creating database indexes...")
+    
+    # Create indexes on users collection
+    if users_collection:
+        users_collection.create_index('email')
+        users_collection.create_index('username')
+        users_collection.create_index('created_at')
+        users_collection.create_index('is_admin')
+        users_collection.create_index('referral_code')
+        users_collection.create_index('referred_by')
+        users_collection.create_index([('email', 1), ('username', 1)])  # Compound index
+    
+    # Create indexes on transactions collection
+    if transactions_collection:
+        transactions_collection.create_index('user_id')
+        transactions_collection.create_index('created_at')
+        transactions_collection.create_index('status')
+        transactions_collection.create_index('type')
+        transactions_collection.create_index([('user_id', 1), ('created_at', -1)])  # Compound for user transactions
+    
+    # Create indexes on deposits collection
+    if deposits_collection:
+        deposits_collection.create_index('user_id')
+        deposits_collection.create_index('status')
+        deposits_collection.create_index('created_at')
+        deposits_collection.create_index([('status', 1), ('created_at', -1)])  # For admin pending deposits
+    
+    # Create indexes on withdrawals collection
+    if withdrawals_collection:
+        withdrawals_collection.create_index('user_id')
+        withdrawals_collection.create_index('status')
+        withdrawals_collection.create_index('created_at')
+        withdrawals_collection.create_index([('status', 1), ('created_at', -1)])
+    
+    # Create indexes on investments collection
+    if investments_collection:
+        investments_collection.create_index('user_id')
+        investments_collection.create_index('status')
+        investments_collection.create_index('end_date')
+        investments_collection.create_index('created_at')
+        investments_collection.create_index([('status', 1), ('end_date', 1)])  # For profit processor
+        investments_collection.create_index([('user_id', 1), ('status', 1)])  # For user active investments
+    
+    # Create indexes on notifications collection
+    if notifications_collection:
+        notifications_collection.create_index('user_id')
+        notifications_collection.create_index('read')
+        notifications_collection.create_index('created_at')
+        notifications_collection.create_index([('user_id', 1), ('read', 1), ('created_at', -1)])  # For unread count
+    
+    # Create indexes on KYC collection
+    if kyc_collection:
+        kyc_collection.create_index('user_id')
+        kyc_collection.create_index('status')
+        kyc_collection.create_index('submitted_at')
+    
+    # Create indexes on support tickets
+    if support_tickets_collection:
+        support_tickets_collection.create_index('user_id')
+        support_tickets_collection.create_index('status')
+        support_tickets_collection.create_index('ticket_id')
+        support_tickets_collection.create_index('created_at')
+    
+    logger.info("✅ All database indexes created successfully")
+
+# Call this after connecting to databases:
+db_connected = connect_to_databases()
+if db_connected:
+    create_all_indexes()
+
+        
+
+
 
 
 def connect_to_databases():
