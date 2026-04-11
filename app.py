@@ -780,84 +780,85 @@ else:
 
 # ==================== ASYNC EMAIL WRAPPER ====================
 
-def send_email_async(email_func, *args, **kwargs):
-    """Send any email in background thread - prevents worker timeout"""
-    def send():
-        try:
-            print(f"📧 Async email started: {email_func.__name__}")
-            result = email_func(*args, **kwargs)
-            print(f"📧 Async email completed: {email_func.__name__} - {'Success' if result else 'Failed'}")
-        except Exception as e:
-            print(f"❌ Async email error in {email_func.__name__}: {e}")
-            logger.error(f"Async email error: {e}")
-    
-    # Start email in background thread (daemon=True so it doesn't block shutdown)
-    thread = threading.Thread(target=send, daemon=True)
-    thread.start()
-    print(f"📧 Email queued in background: {email_func.__name__}")
-    return True
-
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Gmail SMTP"""
-    try:
-        print(f"📧 ATTEMPTING TO SEND EMAIL to: {to_email}")
-        print(f"📧 Subject: {subject}")
-        
-        if not to_email:
-            logger.error("❌ No recipient email provided")
-            return False
-        
-        if not SMTP_USER or not SMTP_PASSWORD:
-            logger.error("❌ SMTP credentials not configured")
-            print(f"   SMTP_USER: {'SET' if SMTP_USER else 'NOT SET'}")
-            print(f"   SMTP_PASSWORD: {'SET' if SMTP_PASSWORD else 'NOT SET'}")
-            return False
-        
-        print(f"📧 SMTP Host: {SMTP_HOST}")
-        print(f"📧 SMTP Port: {SMTP_PORT}")
-        print(f"📧 From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
-        
-        # Create message
-        msg = MIMEMultipart()
-        msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        
-        # Use HTML body or convert plain text
-        final_html = html_body or plain_body.replace('\n', '<br>')
-        msg.attach(MIMEText(final_html, 'html'))
-        
-        print(f"📧 Connecting to SMTP server...")
-        
-        # Send email
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.set_debuglevel(1)  # Enable SMTP debug output
-            server.starttls()
+    """Send email using Gmail SMTP with automatic port failover"""
+    
+    # Try different ports in order (587 TLS, 465 SSL, 25, 2525)
+    port_configs = [
+        {'host': 'smtp.gmail.com', 'port': 587, 'use_tls': True, 'use_ssl': False},
+        {'host': 'smtp.gmail.com', 'port': 465, 'use_tls': False, 'use_ssl': True},
+        {'host': 'smtp.gmail.com', 'port': 25, 'use_tls': True, 'use_ssl': False},
+        {'host': 'smtp-relay.gmail.com', 'port': 587, 'use_tls': True, 'use_ssl': False},
+        {'host': 'gmail-smtp-msa.l.google.com', 'port': 465, 'use_tls': False, 'use_ssl': True},
+        {'host': 'smtp.gmail.com', 'port': 2525, 'use_tls': True, 'use_ssl': False},
+    ]
+    
+    print(f"📧 ATTEMPTING TO SEND EMAIL to: {to_email}")
+    print(f"📧 Subject: {subject}")
+    
+    if not to_email:
+        logger.error("❌ No recipient email provided")
+        return False
+    
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.error("❌ SMTP credentials not configured")
+        print(f"   SMTP_USER: {'SET' if SMTP_USER else 'NOT SET'}")
+        print(f"   SMTP_PASSWORD: {'SET' if SMTP_PASSWORD else 'NOT SET'}")
+        return False
+    
+    # Create message once (same for all attempts)
+    msg = MIMEMultipart()
+    msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    
+    # Use HTML body or convert plain text
+    final_html = html_body or plain_body.replace('\n', '<br>')
+    msg.attach(MIMEText(final_html, 'html'))
+    
+    # Try each port configuration
+    for config in port_configs:
+        try:
+            print(f"📧 Trying {config['host']}:{config['port']}...")
+            
+            # Connect with SSL or regular SMTP
+            if config.get('use_ssl'):
+                server = smtplib.SMTP_SSL(config['host'], config['port'], timeout=15)
+            else:
+                server = smtplib.SMTP(config['host'], config['port'], timeout=15)
+            
+            # Start TLS if needed (not for SSL)
+            if config.get('use_tls'):
+                server.starttls()
+            
             print(f"📧 Logging in as {SMTP_USER}...")
             server.login(SMTP_USER, SMTP_PASSWORD)
-            print(f"📧 Login successful!")
+            print(f"📧 Login successful on {config['host']}:{config['port']}!")
+            
             server.send_message(msg)
-            print(f"📧 Message sent!")
-        
-        logger.info(f"✅ Email sent to {to_email}")
-        return True
-        
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"❌ SMTP Authentication failed: {e}")
-        print(f"❌ AUTH ERROR: {e}")
-        print(f"   Check your Gmail password/App Password")
-        return False
-    except smtplib.SMTPException as e:
-        logger.error(f"❌ SMTP error: {e}")
-        print(f"❌ SMTP ERROR: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ Email error: {e}")
-        print(f"❌ GENERAL ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
+            server.quit()
+            
+            logger.info(f"✅ Email sent to {to_email} via {config['host']}:{config['port']}")
+            print(f"📧 Message sent via {config['host']}:{config['port']}!")
+            return True
+            
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ SMTP Authentication failed: {e}")
+            print(f"❌ AUTH ERROR: {e}")
+            return False  # Wrong password - don't try other ports
+            
+        except smtplib.SMTPException as e:
+            print(f"❌ SMTP error on {config['host']}:{config['port']}: {str(e)[:50]}")
+            continue
+            
+        except Exception as e:
+            print(f"❌ Connection error on {config['host']}:{config['port']}: {str(e)[:50]}")
+            continue
+    
+    # All ports failed
+    logger.error(f"❌ All SMTP attempts failed for {to_email}")
+    print(f"❌ All connection attempts failed!")
+    return False
 # ==================== TEST FUNCTION ====================
 @app.route('/api/debug-email', methods=['GET'])
 def debug_email():
