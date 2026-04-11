@@ -772,13 +772,35 @@ EMAIL_HOST = SMTP_HOST
 EMAIL_PORT = SMTP_PORT
 EMAIL_FROM = SMTP_FROM_EMAIL
 EMAIL_USER = SMTP_USER
+
 # Check configuration
 if SMTP_USER and SMTP_PASSWORD:
     logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
 else:
     logger.error("❌ SMTP credentials not set!")
 
+
 # ==================== ASYNC EMAIL WRAPPER ====================
+
+def send_email_async(email_func, *args, **kwargs):
+    """Send any email in background thread - prevents worker timeout"""
+    def send():
+        try:
+            print(f"📧 Async email started: {email_func.__name__}")
+            result = email_func(*args, **kwargs)
+            print(f"📧 Async email completed: {email_func.__name__} - {'Success' if result else 'Failed'}")
+        except Exception as e:
+            print(f"❌ Async email error in {email_func.__name__}: {e}")
+            logger.error(f"Async email error: {e}")
+    
+    # Start email in background thread (daemon=True so it doesn't block shutdown)
+    thread = threading.Thread(target=send, daemon=True)
+    thread.start()
+    print(f"📧 Email queued in background: {email_func.__name__}")
+    return True
+
+
+# ==================== MAIN EMAIL FUNCTION ====================
 
 def send_email(to_email, subject, plain_body, html_body=None):
     """Send email using Gmail SMTP with automatic port failover"""
