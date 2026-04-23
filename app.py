@@ -2010,8 +2010,8 @@ def get_user_deposits():
     try:
         deposits = []
         if deposits_collection is not None:
-            # FIXED: Use proper sort syntax
-            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+            # FIXED: Use sort with list of tuples instead of positional arguments
+            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
         for d in deposits:
             d['_id'] = str(d['_id'])
             if d.get('created_at'):
@@ -2020,8 +2020,6 @@ def get_user_deposits():
     except Exception as e:
         logger.error(f"Get deposits error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
 # ==================== WITHDRAWAL ENDPOINTS ====================
 @app.route('/api/withdrawals', methods=['POST', 'OPTIONS'])
 def create_withdrawal():
