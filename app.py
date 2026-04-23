@@ -2094,8 +2094,8 @@ def get_user_withdrawals():
     try:
         withdrawals = []
         if withdrawals_collection is not None:
-            # FIXED: Use proper sort syntax
-            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
+            # FIXED: Use sort with list of tuples instead of positional arguments
+            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
         for w in withdrawals:
             w['_id'] = str(w['_id'])
             if w.get('created_at'):
@@ -2104,7 +2104,6 @@ def get_user_withdrawals():
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
 # ==================== INVESTMENT ENDPOINTS ====================
 @app.route('/api/invest', methods=['POST', 'OPTIONS'])
 def create_investment():
@@ -4538,8 +4537,8 @@ def admin_get_withdrawals():
         if veloxtrades_withdrawals is not None:
             try:
                 total = veloxtrades_withdrawals.count_documents(query)
-                # FIXED: Use proper sort syntax
-                cursor = veloxtrades_withdrawals.find(query).sort('created_at', -1).skip(skip).limit(limit)
+                # FIXED: Use sort with list of tuples instead of positional arguments
+                cursor = veloxtrades_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from veloxtrades_withdrawals, total: {total}")
             except Exception as e:
@@ -4549,8 +4548,8 @@ def admin_get_withdrawals():
         if len(withdrawals) == 0 and investment_withdrawals is not None:
             try:
                 total = investment_withdrawals.count_documents(query)
-                # FIXED: Use proper sort syntax
-                cursor = investment_withdrawals.find(query).sort('created_at', -1).skip(skip).limit(limit)
+                # FIXED: Use sort with list of tuples instead of positional arguments
+                cursor = investment_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from investment_withdrawals, total: {total}")
             except Exception as e:
@@ -4560,8 +4559,8 @@ def admin_get_withdrawals():
         if len(withdrawals) == 0 and withdrawals_collection is not None:
             try:
                 total = withdrawals_collection.count_documents(query)
-                # FIXED: Use proper sort syntax
-                cursor = withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)
+                # FIXED: Use sort with list of tuples instead of positional arguments
+                cursor = withdrawals_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from combined collection, total: {total}")
             except Exception as e:
@@ -4890,8 +4889,8 @@ def admin_get_deposits():
         if veloxtrades_deposits is not None:
             try:
                 total = veloxtrades_deposits.count_documents(query)
-                # FIXED: Use proper sort syntax
-                cursor = veloxtrades_deposits.find(query).sort('created_at', -1).skip(skip).limit(limit)
+                # FIXED: Use sort with list of tuples instead of positional arguments
+                cursor = veloxtrades_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 deposits = list(cursor)
                 print(f"💰 Found {len(deposits)} deposits in veloxtrades_db, total: {total}")
             except Exception as e:
@@ -4900,8 +4899,8 @@ def admin_get_deposits():
         # Try investment_deposits
         if investment_deposits is not None:
             try:
-                # FIXED: Use proper sort syntax
-                cursor = investment_deposits.find(query).sort('created_at', -1).skip(skip).limit(limit)
+                # FIXED: Use sort with list of tuples instead of positional arguments
+                cursor = investment_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
                 inv_deposits = list(cursor)
                 existing_ids = {str(d.get('_id')) for d in deposits}
                 for d in inv_deposits:
