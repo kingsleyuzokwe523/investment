@@ -4520,7 +4520,6 @@ Veloxtrades Team"""
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# ==================== ADMIN - WITHDRAWALS ====================
 @app.route('/api/admin/withdrawals', methods=['GET', 'OPTIONS'])
 @require_admin
 def admin_get_withdrawals():
@@ -4541,7 +4540,8 @@ def admin_get_withdrawals():
         if veloxtrades_withdrawals is not None:
             try:
                 total = veloxtrades_withdrawals.count_documents(query)
-                cursor = veloxtrades_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                # FIXED: Use proper sort syntax
+                cursor = veloxtrades_withdrawals.find(query).sort('created_at', -1).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from veloxtrades_withdrawals, total: {total}")
             except Exception as e:
@@ -4551,7 +4551,8 @@ def admin_get_withdrawals():
         if len(withdrawals) == 0 and investment_withdrawals is not None:
             try:
                 total = investment_withdrawals.count_documents(query)
-                cursor = investment_withdrawals.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                # FIXED: Use proper sort syntax
+                cursor = investment_withdrawals.find(query).sort('created_at', -1).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from investment_withdrawals, total: {total}")
             except Exception as e:
@@ -4561,7 +4562,8 @@ def admin_get_withdrawals():
         if len(withdrawals) == 0 and withdrawals_collection is not None:
             try:
                 total = withdrawals_collection.count_documents(query)
-                cursor = withdrawals_collection.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                # FIXED: Use proper sort syntax
+                cursor = withdrawals_collection.find(query).sort('created_at', -1).skip(skip).limit(limit)
                 withdrawals = list(cursor)
                 logger.info(f"Fetched {len(withdrawals)} withdrawals from combined collection, total: {total}")
             except Exception as e:
@@ -4607,7 +4609,6 @@ def admin_get_withdrawals():
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}", exc_info=True)
         return jsonify({'success': True, 'data': {'withdrawals': [], 'total': 0}}), 200
-
 @app.route('/api/admin/test-email', methods=['GET', 'OPTIONS'])
 @require_admin
 def test_email():
@@ -4891,7 +4892,8 @@ def admin_get_deposits():
         if veloxtrades_deposits is not None:
             try:
                 total = veloxtrades_deposits.count_documents(query)
-                cursor = veloxtrades_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                # FIXED: Use proper sort syntax
+                cursor = veloxtrades_deposits.find(query).sort('created_at', -1).skip(skip).limit(limit)
                 deposits = list(cursor)
                 print(f"💰 Found {len(deposits)} deposits in veloxtrades_db, total: {total}")
             except Exception as e:
@@ -4900,7 +4902,8 @@ def admin_get_deposits():
         # Try investment_deposits
         if investment_deposits is not None:
             try:
-                cursor = investment_deposits.find(query).sort([('created_at', -1)]).skip(skip).limit(limit)
+                # FIXED: Use proper sort syntax
+                cursor = investment_deposits.find(query).sort('created_at', -1).skip(skip).limit(limit)
                 inv_deposits = list(cursor)
                 existing_ids = {str(d.get('_id')) for d in deposits}
                 for d in inv_deposits:
