@@ -272,6 +272,176 @@ class DualDatabaseCollection:
                 continue
         return all_indexes
 
+class DualDatabaseCollection:
+    def __init__(self, collections, name):
+        # Filter out None collections
+        self.collections = [c for c in collections if c is not None]
+        self.name = name
+        self._sort_key = None
+        self._sort_direction = None
+
+    def __bool__(self):
+        return len(self.collections) > 0
+
+    def __len__(self):
+        return len(self.collections)
+    
+    def sort(self, key_or_list, direction=None):
+        """Store sort criteria for chaining"""
+        self._sort_key = key_or_list
+        self._sort_direction = direction
+        return self
+    
+    def find(self, query=None, *args, **kwargs):
+        results = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    cursor = collection.find(query or {}, *args, **kwargs)
+                    # Apply sort if specified
+                    if self._sort_key is not None:
+                        cursor = cursor.sort(self._sort_key, self._sort_direction)
+                    results.extend(list(cursor))
+            except Exception as e:
+                logger.error(f"Error searching {self.name}: {e}")
+        # Reset sort after use
+        self._sort_key = None
+        self._sort_direction = None
+        return results
+    def find_one(self, query=None, *args, **kwargs):
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    result = collection.find_one(query or {}, *args, **kwargs)
+                    if result:
+                        return result
+            except Exception:
+                continue
+        return None
+
+    def insert_one(self, document, *args, **kwargs):
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    return collection.insert_one(document, *args, **kwargs)
+            except Exception:
+                continue
+        raise Exception(f"Failed to insert into any {self.name} collection")
+
+    def update_one(self, filter, update, *args, **kwargs):
+        updated = False
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    result = collection.update_one(filter, update, *args, **kwargs)
+                    if result.modified_count > 0:
+                        updated = True
+            except Exception as e:
+                logger.error(f"Error updating {self.name}: {e}")
+        return updated
+
+    def update_many(self, filter, update, *args, **kwargs):
+        total = 0
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    total += collection.update_many(filter, update, *args, **kwargs).modified_count
+            except Exception as e:
+                logger.error(f"Error updating many {self.name}: {e}")
+        return total
+
+    def delete_one(self, filter, *args, **kwargs):
+        deleted = False
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    if collection.delete_one(filter, *args, **kwargs).deleted_count > 0:
+                        deleted = True
+            except Exception as e:
+                logger.error(f"Error deleting from {self.name}: {e}")
+        return deleted
+
+    def delete_many(self, filter, *args, **kwargs):
+        total = 0
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    total += collection.delete_many(filter, *args, **kwargs).deleted_count
+            except Exception as e:
+                logger.error(f"Error deleting many from {self.name}: {e}")
+        return total
+
+    def count_documents(self, filter=None, *args, **kwargs):
+        total = 0
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    total += collection.count_documents(filter or {}, *args, **kwargs)
+            except Exception:
+                continue
+        return total
+
+    def distinct(self, key, filter=None, *args, **kwargs):
+        all_values = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    all_values.extend(collection.distinct(key, filter or {}, *args, **kwargs))
+            except Exception:
+                continue
+        return list(dict.fromkeys(all_values))
+
+    def aggregate(self, pipeline, *args, **kwargs):
+        all_results = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    all_results.extend(list(collection.aggregate(pipeline, *args, **kwargs)))
+            except Exception as e:
+                logger.error(f"Error aggregating in {self.name}: {e}")
+        return all_results
+
+    def create_index(self, keys, *args, **kwargs):
+        """Create index across all collections in this dual database wrapper"""
+        results = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    # Create index and store the result
+                    result = collection.create_index(keys, *args, **kwargs)
+                    results.append(result)
+                    logger.info(f"✅ Created index {result} in {self.name} collection")
+            except Exception as e:
+                logger.error(f"Error creating index in {self.name}: {e}")
+                continue
+        return results if results else None
+
+    def drop_index(self, name, *args, **kwargs):
+        """Drop index from all collections"""
+        results = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    result = collection.drop_index(name, *args, **kwargs)
+                    results.append(result)
+            except Exception as e:
+                logger.error(f"Error dropping index in {self.name}: {e}")
+                continue
+        return results if results else None
+
+    def list_indexes(self, *args, **kwargs):
+        """List all indexes from all collections"""
+        all_indexes = []
+        for collection in self.collections:
+            try:
+                if collection is not None:
+                    indexes = list(collection.list_indexes(*args, **kwargs))
+                    all_indexes.extend(indexes)
+            except Exception as e:
+                logger.error(f"Error listing indexes in {self.name}: {e}")
+                continue
+        return all_indexes
+
 
 def connect_to_databases():
     global client, veloxtrades_db, investment_db
