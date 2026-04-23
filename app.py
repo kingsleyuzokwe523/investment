@@ -2010,7 +2010,8 @@ def get_user_deposits():
     try:
         deposits = []
         if deposits_collection is not None:
-            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
+            # FIXED: Use proper sort syntax
+            deposits = list(deposits_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         for d in deposits:
             d['_id'] = str(d['_id'])
             if d.get('created_at'):
@@ -2086,7 +2087,6 @@ def create_withdrawal():
         logger.error(f"Create withdrawal error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
 @app.route('/api/withdrawals', methods=['GET', 'OPTIONS'])
 def get_user_withdrawals():
     user = get_user_from_request()
@@ -2096,7 +2096,8 @@ def get_user_withdrawals():
     try:
         withdrawals = []
         if withdrawals_collection is not None:
-           withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort([('created_at', -1)]))
+            # FIXED: Use proper sort syntax
+            withdrawals = list(withdrawals_collection.find({'user_id': str(user['_id'])}).sort('created_at', -1))
         for w in withdrawals:
             w['_id'] = str(w['_id'])
             if w.get('created_at'):
@@ -2105,7 +2106,6 @@ def get_user_withdrawals():
     except Exception as e:
         logger.error(f"Get withdrawals error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
 
 # ==================== INVESTMENT ENDPOINTS ====================
 @app.route('/api/invest', methods=['POST', 'OPTIONS'])
