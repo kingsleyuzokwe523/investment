@@ -2551,7 +2551,220 @@ def get_user_referral_info():
             'referral_bonus_percentage': 5, 'total_referrals': 0, 'total_commission': 0, 'referred_users': []
         }})), 200
 
+# ==================== USER DEPOSITS & WITHDRAWALS ENDPOINTS ====================
 
+@app.route('/api/user/deposits/all', methods=['GET', 'OPTIONS'])
+def get_user_all_deposits():
+    """Get all deposits for the authenticated user"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        deposits = []
+        
+        # Get from veloxtrades_deposits
+        if veloxtrades_deposits is not None:
+            cursor = veloxtrades_deposits.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            veloxtrades_deps = list(cursor)
+            deposits.extend(veloxtrades_deps)
+        
+        # Get from investment_deposits
+        if investment_deposits is not None:
+            cursor = investment_deposits.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            investment_deps = list(cursor)
+            existing_ids = {str(d.get('_id')) for d in deposits}
+            for d in investment_deps:
+                if str(d.get('_id')) not in existing_ids:
+                    deposits.append(d)
+        
+        # Calculate stats
+        total_amount = sum(d.get('amount', 0) for d in deposits)
+        pending_count = sum(1 for d in deposits if d.get('status') == 'pending')
+        approved_count = sum(1 for d in deposits if d.get('status') == 'approved')
+        rejected_count = sum(1 for d in deposits if d.get('status') == 'rejected')
+        
+        # Format deposits
+        formatted_deposits = []
+        for deposit in deposits:
+            formatted_deposits.append({
+                '_id': str(deposit['_id']),
+                'deposit_id': deposit.get('deposit_id', ''),
+                'amount': deposit.get('amount', 0),
+                'crypto': deposit.get('crypto', 'USDT'),
+                'transaction_hash': deposit.get('transaction_hash', ''),
+                'status': deposit.get('status', 'pending'),
+                'rejection_reason': deposit.get('rejection_reason', ''),
+                'created_at': deposit.get('created_at').isoformat() if deposit.get('created_at') else None,
+                'approved_at': deposit.get('approved_at').isoformat() if deposit.get('approved_at') else None,
+            })
+        
+        return add_cors_headers(jsonify({
+            'success': True,
+            'data': {
+                'deposits': formatted_deposits,
+                'stats': {
+                    'total': total_amount,
+                    'pending': pending_count,
+                    'approved': approved_count,
+                    'rejected': rejected_count
+                }
+            }
+        }))
+    except Exception as e:
+        logger.error(f"Error getting user deposits: {e}")
+        return add_cors_headers(jsonify({'success': False, 'message': str(e)})), 500
+
+
+@app.route('/api/user/withdrawals/all', methods=['GET', 'OPTIONS'])
+def get_user_all_withdrawals():
+    """Get all withdrawals for the authenticated user"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        withdrawals = []
+        
+        # Get from veloxtrades_withdrawals
+        if veloxtrades_withdrawals is not None:
+            cursor = veloxtrades_withdrawals.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            veloxtrades_withs = list(cursor)
+            withdrawals.extend(veloxtrades_withs)
+        
+        # Get from investment_withdrawals
+        if investment_withdrawals is not None:
+            cursor = investment_withdrawals.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            investment_withs = list(cursor)
+            existing_ids = {str(w.get('_id')) for w in withdrawals}
+            for w in investment_withs:
+                if str(w.get('_id')) not in existing_ids:
+                    withdrawals.append(w)
+        
+        # Calculate stats
+        total_amount = sum(w.get('amount', 0) for w in withdrawals)
+        pending_count = sum(1 for w in withdrawals if w.get('status') == 'pending')
+        approved_count = sum(1 for w in withdrawals if w.get('status') == 'approved')
+        rejected_count = sum(1 for w in withdrawals if w.get('status') == 'rejected')
+        
+        # Format withdrawals
+        formatted_withdrawals = []
+        for withdrawal in withdrawals:
+            formatted_withdrawals.append({
+                '_id': str(withdrawal['_id']),
+                'withdrawal_id': withdrawal.get('withdrawal_id', ''),
+                'amount': withdrawal.get('amount', 0),
+                'currency': withdrawal.get('currency', 'USDT'),
+                'wallet_address': withdrawal.get('wallet_address', ''),
+                'status': withdrawal.get('status', 'pending'),
+                'rejection_reason': withdrawal.get('rejection_reason', ''),
+                'created_at': withdrawal.get('created_at').isoformat() if withdrawal.get('created_at') else None,
+                'approved_at': withdrawal.get('approved_at').isoformat() if withdrawal.get('approved_at') else None,
+            })
+        
+        return add_cors_headers(jsonify({
+            'success': True,
+            'data': {
+                'withdrawals': formatted_withdrawals,
+                'stats': {
+                    'total': total_amount,
+                    'pending': pending_count,
+                    'approved': approved_count,
+                    'rejected': rejected_count
+                }
+            }
+        }))
+    except Exception as e:
+        logger.error(f"Error getting user withdrawals: {e}")
+        return add_cors_headers(jsonify({'success': False, 'message': str(e)})), 500
+
+
+@app.route('/api/user/investments/all', methods=['GET', 'OPTIONS'])
+def get_user_all_investments():
+    """Get all investments for the authenticated user with stats"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        investments = []
+        
+        # Get from veloxtrades_investments
+        if veloxtrades_investments is not None:
+            cursor = veloxtrades_investments.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            veloxtrades_inv = list(cursor)
+            investments.extend(veloxtrades_inv)
+        
+        # Get from investment_investments
+        if investment_investments is not None:
+            cursor = investment_investments.find({'user_id': str(user['_id'])}).sort('created_at', -1)
+            investment_inv = list(cursor)
+            existing_ids = {str(i.get('_id')) for i in investments}
+            for i in investment_inv:
+                if str(i.get('_id')) not in existing_ids:
+                    investments.append(i)
+        
+        # Calculate stats
+        active_count = sum(1 for i in investments if i.get('status') == 'active')
+        completed_count = sum(1 for i in investments if i.get('status') == 'completed')
+        pending_count = sum(1 for i in investments if i.get('status') == 'pending')
+        rejected_count = sum(1 for i in investments if i.get('status') == 'rejected')
+        
+        # Calculate total profit from completed investments
+        total_profit = sum(i.get('expected_profit', 0) for i in investments if i.get('status') == 'completed')
+        
+        # Calculate pending profit from active investments
+        pending_profit = sum(i.get('expected_profit', 0) for i in investments if i.get('status') == 'active')
+        
+        # Format investments
+        formatted_investments = []
+        for inv in investments:
+            formatted_investments.append({
+                '_id': str(inv['_id']),
+                'investment_id': inv.get('investment_id', ''),
+                'plan': inv.get('plan', ''),
+                'plan_name': inv.get('plan_name', 'Investment'),
+                'amount': inv.get('amount', 0),
+                'roi': inv.get('roi', 0),
+                'expected_profit': inv.get('expected_profit', 0),
+                'duration_hours': inv.get('duration_hours', 0),
+                'status': inv.get('status', 'pending'),
+                'start_date': inv.get('start_date').isoformat() if inv.get('start_date') else None,
+                'end_date': inv.get('end_date').isoformat() if inv.get('end_date') else None,
+                'created_at': inv.get('created_at').isoformat() if inv.get('created_at') else None,
+                'approved_at': inv.get('approved_at').isoformat() if inv.get('approved_at') else None,
+                'rejection_reason': inv.get('rejection_reason', ''),
+            })
+        
+        return add_cors_headers(jsonify({
+            'success': True,
+            'data': {
+                'investments': formatted_investments,
+                'stats': {
+                    'active': active_count,
+                    'completed': completed_count,
+                    'pending': pending_count,
+                    'rejected': rejected_count,
+                    'total_profit': total_profit,
+                    'pending_profit': pending_profit
+                }
+            }
+        }))
+    except Exception as e:
+        logger.error(f"Error getting user investments: {e}")
+        return add_cors_headers(jsonify({'success': False, 'message': str(e)})), 500
 # ==================== NOTIFICATION ENDPOINTS ====================
 @app.route('/api/notifications', methods=['GET', 'OPTIONS'])
 def get_notifications():
