@@ -2046,6 +2046,54 @@ def get_user_deposits():
     except Exception as e:
         logger.error(f"Get deposits error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/user/last-deposit', methods=['GET', 'OPTIONS'])
+def get_last_deposit():
+    """Get the most recent approved deposit amount"""
+    if request.method == "OPTIONS":
+        response = make_response()
+        return add_cors_headers(response)
+    
+    user = get_user_from_request()
+    if not user:
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+    
+    try:
+        user_id = str(user['_id'])
+        last_deposit_amount = 0
+        last_deposit_date = None
+        
+        # Search in veloxtrades_deposits
+        if veloxtrades_deposits is not None:
+            last_deposit = veloxtrades_deposits.find_one(
+                {'user_id': user_id, 'status': 'approved'},
+                sort=[('created_at', -1)]
+            )
+            if last_deposit:
+                last_deposit_amount = last_deposit.get('amount', 0)
+                last_deposit_date = last_deposit.get('created_at')
+        
+        # If not found in veloxtrades, search in investment_deposits
+        if last_deposit_amount == 0 and investment_deposits is not None:
+            last_deposit = investment_deposits.find_one(
+                {'user_id': user_id, 'status': 'approved'},
+                sort=[('created_at', -1)]
+            )
+            if last_deposit:
+                last_deposit_amount = last_deposit.get('amount', 0)
+                last_deposit_date = last_deposit.get('created_at')
+        
+        return add_cors_headers(jsonify({
+            'success': True,
+            'data': {
+                'amount': last_deposit_amount,
+                'date': last_deposit_date.isoformat() if last_deposit_date else None
+            }
+        }))
+        
+    except Exception as e:
+        logger.error(f"Error getting last deposit: {e}")
+        return add_cors_headers(jsonify({'success': False, 'message': str(e)})), 500
 # ==================== WITHDRAWAL ENDPOINTS ====================
 @app.route('/api/withdrawals', methods=['POST', 'OPTIONS'])
 def create_withdrawal():
