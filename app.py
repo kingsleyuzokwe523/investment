@@ -805,7 +805,7 @@ if SMTP_USER and SMTP_PASSWORD:
 else:
     logger.error("❌ SMTP credentials not set!")
 
-==================== EMAIL VALIDATION AT STARTUP ====================
+#==================== EMAIL VALIDATION AT STARTUP ====================
 def validate_email_configuration():
     """Validate email configuration at startup"""
     print("\n" + "=" * 50)
