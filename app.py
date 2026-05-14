@@ -113,80 +113,7 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
-# ==================== EMAIL VALIDATION AT STARTUP ====================
-def validate_email_configuration():
-    """Validate email configuration at startup"""
-    print("\n" + "=" * 50)
-    print("📧 EMAIL CONFIGURATION VALIDATION")
-    print("=" * 50)
-    
-    issues = []
-    
-    # Check SMTP credentials
-    if not SMTP_USER:
-        issues.append("❌ SMTP_USER not set in environment variables")
-    else:
-        print(f"✅ SMTP_USER: {SMTP_USER[:3]}***{SMTP_USER[-3:] if len(SMTP_USER) > 6 else ''}")
-    
-    if not SMTP_PASSWORD:
-        issues.append("❌ SMTP_PASSWORD not set in environment variables")
-    else:
-        print(f"✅ SMTP_PASSWORD: {'*' * 8} (set)")
-    
-    if not SMTP_FROM_EMAIL:
-        issues.append("❌ SMTP_FROM_EMAIL not set in environment variables")
-    else:
-        print(f"✅ SMTP_FROM_EMAIL: {SMTP_FROM_EMAIL}")
-    
-    # Validate email format
-    if SMTP_FROM_EMAIL and '@' not in SMTP_FROM_EMAIL:
-        issues.append(f"❌ SMTP_FROM_EMAIL '{SMTP_FROM_EMAIL}' is not a valid email address")
-    
-    # Test SMTP connection if credentials are present
-    if SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL:
-        print("\n🔌 Testing SMTP connection...")
-        try:
-            # Try port 587 first (most common)
-            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.quit()
-            print("✅ SMTP connection successful! Emails will work.")
-            return True, "Email configured and working"
-        except smtplib.SMTPAuthenticationError as e:
-            issues.append(f"❌ Authentication failed: Invalid email or password")
-            print(f"   Error: {e}")
-        except smtplib.SMTPException as e:
-            issues.append(f"❌ SMTP error: {str(e)[:100]}")
-        except Exception as e:
-            issues.append(f"❌ Connection failed: {str(e)[:100]}")
-            print(f"   Note: Render may be blocking outbound SMTP ports")
-    else:
-        issues.append("⚠️ Email not configured - missing credentials")
-    
-    # Print summary
-    if issues:
-        print("\n" + "-" * 40)
-        print("⚠️ EMAIL ISSUES FOUND:")
-        for issue in issues:
-            print(f"   {issue}")
-        print("\n💡 To fix email:")
-        print("   1. Add SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL to .env")
-        print("   2. Use Gmail with App Password (not regular password)")
-        print("   3. Enable 2FA on Gmail and generate App Password")
-        print("-" * 40)
-        return False, "; ".join(issues)
-    else:
-        print("\n✅ All email checks passed!")
-        return True, "Email configured successfully"
-
-# Call this after loading environment variables
-print("🔵 Validating email configuration...")
-email_valid, email_message = validate_email_configuration()
-if not email_valid:
-    print(f"⚠️ {email_message}")
-else:
-    print(f"✅ {email_message}")
+# 
 class DualDatabaseCollection:
     def __init__(self, collections, name):
         # Filter out None collections
@@ -878,7 +805,80 @@ if SMTP_USER and SMTP_PASSWORD:
 else:
     logger.error("❌ SMTP credentials not set!")
 
+==================== EMAIL VALIDATION AT STARTUP ====================
+def validate_email_configuration():
+    """Validate email configuration at startup"""
+    print("\n" + "=" * 50)
+    print("📧 EMAIL CONFIGURATION VALIDATION")
+    print("=" * 50)
+    
+    issues = []
+    
+    # Check SMTP credentials
+    if not SMTP_USER:
+        issues.append("❌ SMTP_USER not set in environment variables")
+    else:
+        print(f"✅ SMTP_USER: {SMTP_USER[:3]}***{SMTP_USER[-3:] if len(SMTP_USER) > 6 else ''}")
+    
+    if not SMTP_PASSWORD:
+        issues.append("❌ SMTP_PASSWORD not set in environment variables")
+    else:
+        print(f"✅ SMTP_PASSWORD: {'*' * 8} (set)")
+    
+    if not SMTP_FROM_EMAIL:
+        issues.append("❌ SMTP_FROM_EMAIL not set in environment variables")
+    else:
+        print(f"✅ SMTP_FROM_EMAIL: {SMTP_FROM_EMAIL}")
+    
+    # Validate email format
+    if SMTP_FROM_EMAIL and '@' not in SMTP_FROM_EMAIL:
+        issues.append(f"❌ SMTP_FROM_EMAIL '{SMTP_FROM_EMAIL}' is not a valid email address")
+    
+    # Test SMTP connection if credentials are present
+    if SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL:
+        print("\n🔌 Testing SMTP connection...")
+        try:
+            # Try port 587 first (most common)
+            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.quit()
+            print("✅ SMTP connection successful! Emails will work.")
+            return True, "Email configured and working"
+        except smtplib.SMTPAuthenticationError as e:
+            issues.append(f"❌ Authentication failed: Invalid email or password")
+            print(f"   Error: {e}")
+        except smtplib.SMTPException as e:
+            issues.append(f"❌ SMTP error: {str(e)[:100]}")
+        except Exception as e:
+            issues.append(f"❌ Connection failed: {str(e)[:100]}")
+            print(f"   Note: Render may be blocking outbound SMTP ports")
+    else:
+        issues.append("⚠️ Email not configured - missing credentials")
+    
+    # Print summary
+    if issues:
+        print("\n" + "-" * 40)
+        print("⚠️ EMAIL ISSUES FOUND:")
+        for issue in issues:
+            print(f"   {issue}")
+        print("\n💡 To fix email:")
+        print("   1. Add SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL to .env")
+        print("   2. Use Gmail with App Password (not regular password)")
+        print("   3. Enable 2FA on Gmail and generate App Password")
+        print("-" * 40)
+        return False, "; ".join(issues)
+    else:
+        print("\n✅ All email checks passed!")
+        return True, "Email configured successfully"
 
+# Call this after loading environment variables
+print("🔵 Validating email configuration...")
+email_valid, email_message = validate_email_configuration()
+if not email_valid:
+    print(f"⚠️ {email_message}")
+else:
+    print(f"✅ {email_message}")
 # ==================== ASYNC EMAIL WRAPPER ====================
 
 def send_email_async(email_func, *args, **kwargs):
