@@ -20,3 +20,5 @@ secure-smtplib==0.1.1
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+sendgrid==6.10.0
+python-http-client==3.3.7
