@@ -579,9 +579,7 @@ def get_user_from_request():
         return None
 # ==================== EMAIL CONFIGURATION ====================
 
-    except Exception as e:
-        print(f"❌ Error in send_investment_rejected_email: {e}")
-        return False
+   
 # ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -774,7 +772,7 @@ def add_referral_commission(user_id, deposit_amount):
         return False
 
 
-# ==================== GMAIL SMTP EMAIL CONFIGURATION ====================
+# ==================== SENDGRID + SMTP EMAIL CONFIGURATION ====================
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -785,461 +783,258 @@ import threading
 
 logger = logging.getLogger(__name__)
 
-# SMTP Configuration - Get from environment variables
+# Try to import SendGrid
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail, Email, To, Content
+    SENDGRID_AVAILABLE = True
+    print("✅ SendGrid SDK loaded successfully")
+except ImportError:
+    SENDGRID_AVAILABLE = False
+    print("⚠️ SendGrid SDK not installed. Run: pip install sendgrid")
+
+# SendGrid Configuration (Primary - Works on Render)
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
+SENDGRID_FROM_EMAIL = os.getenv('SENDGRID_FROM_EMAIL', 'timkelvin035@gmail.com')
+SENDGRID_FROM_NAME = os.getenv('SENDGRID_FROM_NAME', 'Veloxtrades')
+
+# SMTP Configuration (Fallback - Only if SendGrid fails)
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
-SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL')
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', 'kingsleyuzokwe523@gmail.com')
 SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Veloxtrades')
 
-EMAIL_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
-EMAIL_HOST = SMTP_HOST
-EMAIL_PORT = SMTP_PORT
-EMAIL_FROM = SMTP_FROM_EMAIL
-EMAIL_USER = SMTP_USER
+# Check configurations
+SENDGRID_CONFIGURED = bool(SENDGRID_API_KEY and SENDGRID_AVAILABLE)
+SMTP_CONFIGURED = bool(SMTP_USER and SMTP_PASSWORD)
 
-# Check configuration
-if SMTP_USER and SMTP_PASSWORD:
-    logger.info(f"✅ SMTP configured - From: {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>")
+print("\n" + "=" * 60)
+print("📧 EMAIL CONFIGURATION STATUS")
+print("=" * 60)
+
+if SENDGRID_CONFIGURED:
+    print(f"✅ SendGrid: CONFIGURED (Primary)")
+    print(f"   From: {SENDGRID_FROM_NAME} <{SENDGRID_FROM_EMAIL}>")
+    print(f"   API Key: {SENDGRID_API_KEY[:15]}...")
 else:
-    logger.error("❌ SMTP credentials not set!")
+    print(f"❌ SendGrid: NOT CONFIGURED")
+    if not SENDGRID_API_KEY:
+        print(f"   Missing: SENDGRID_API_KEY environment variable")
 
-#==================== EMAIL VALIDATION AT STARTUP ====================
-def validate_email_configuration():
-    """Validate email configuration at startup"""
-    print("\n" + "=" * 50)
-    print("📧 EMAIL CONFIGURATION VALIDATION")
-    print("=" * 50)
+if SMTP_CONFIGURED:
+    print(f"⚠️ SMTP: CONFIGURED as fallback")
+    print(f"   User: {SMTP_USER[:3]}***{SMTP_USER[-3:] if len(SMTP_USER) > 6 else ''}")
+else:
+    print(f"⚠️ SMTP: NOT CONFIGURED (optional)")
+
+print("=" * 60 + "\n")
+
+def send_email_via_sendgrid(to_email, subject, plain_body, html_body=None):
+    """Send email using SendGrid API - PRIMARY METHOD (Works on Render)"""
     
-    issues = []
+    if not SENDGRID_CONFIGURED:
+        print("⚠️ SendGrid not configured")
+        return False
     
-    # Check SMTP credentials
-    if not SMTP_USER:
-        issues.append("❌ SMTP_USER not set in environment variables")
-    else:
-        print(f"✅ SMTP_USER: {SMTP_USER[:3]}***{SMTP_USER[-3:] if len(SMTP_USER) > 6 else ''}")
+    try:
+        print(f"📧 [SendGrid] Sending to: {to_email}")
+        print(f"📧 [SendGrid] Subject: {subject}")
+        
+        # Create HTML content if not provided
+        if not html_body:
+            html_body = plain_body.replace('\n', '<br>')
+        
+        # Create message
+        message = Mail(
+            from_email=Email(SENDGRID_FROM_EMAIL, SENDGRID_FROM_NAME),
+            to_emails=To(to_email),
+            subject=subject,
+            plain_text_content=Content("text/plain", plain_body),
+            html_content=Content("text/html", html_body)
+        )
+        
+        # Send
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        
+        if response.status_code in [202, 200]:
+            logger.info(f"✅ [SendGrid] Email sent to {to_email}")
+            print(f"✅ [SendGrid] Success! Status: {response.status_code}")
+            return True
+        else:
+            logger.error(f"❌ [SendGrid] Error {response.status_code}")
+            print(f"❌ [SendGrid] HTTP error: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ [SendGrid] Exception: {str(e)}")
+        print(f"❌ [SendGrid] Error: {str(e)}")
+        return False
+
+def send_email_via_smtp(to_email, subject, plain_body, html_body=None):
+    """Send email using SMTP - FALLBACK METHOD"""
     
-    if not SMTP_PASSWORD:
-        issues.append("❌ SMTP_PASSWORD not set in environment variables")
-    else:
-        print(f"✅ SMTP_PASSWORD: {'*' * 8} (set)")
+    if not SMTP_CONFIGURED:
+        print("⚠️ SMTP not configured")
+        return False
     
-    if not SMTP_FROM_EMAIL:
-        issues.append("❌ SMTP_FROM_EMAIL not set in environment variables")
-    else:
-        print(f"✅ SMTP_FROM_EMAIL: {SMTP_FROM_EMAIL}")
+    print(f"📧 [SMTP Fallback] Sending to: {to_email}")
     
-    # Validate email format
-    if SMTP_FROM_EMAIL and '@' not in SMTP_FROM_EMAIL:
-        issues.append(f"❌ SMTP_FROM_EMAIL '{SMTP_FROM_EMAIL}' is not a valid email address")
+    port_configs = [
+        {'host': 'smtp.gmail.com', 'port': 587, 'use_tls': True, 'use_ssl': False},
+        {'host': 'smtp.gmail.com', 'port': 465, 'use_tls': False, 'use_ssl': True},
+    ]
     
-    # Test SMTP connection if credentials are present
-    if SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL:
-        print("\n🔌 Testing SMTP connection...")
+    msg = MIMEMultipart()
+    msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    
+    final_html = html_body or plain_body.replace('\n', '<br>')
+    msg.attach(MIMEText(final_html, 'html'))
+    
+    for config in port_configs:
         try:
-            # Try port 587 first (most common)
-            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
-            server.starttls()
+            print(f"📧 Trying {config['host']}:{config['port']}...")
+            
+            if config.get('use_ssl'):
+                server = smtplib.SMTP_SSL(config['host'], config['port'], timeout=15)
+            else:
+                server = smtplib.SMTP(config['host'], config['port'], timeout=15)
+            
+            if config.get('use_tls'):
+                server.starttls()
+            
             server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
             server.quit()
-            print("✅ SMTP connection successful! Emails will work.")
-            return True, "Email configured and working"
-        except smtplib.SMTPAuthenticationError as e:
-            issues.append(f"❌ Authentication failed: Invalid email or password")
-            print(f"   Error: {e}")
-        except smtplib.SMTPException as e:
-            issues.append(f"❌ SMTP error: {str(e)[:100]}")
+            
+            logger.info(f"✅ [SMTP] Email sent to {to_email}")
+            print(f"✅ [SMTP] Success!")
+            return True
+            
+        except smtplib.SMTPAuthenticationError:
+            print(f"❌ [SMTP] Authentication failed")
+            return False
         except Exception as e:
-            issues.append(f"❌ Connection failed: {str(e)[:100]}")
-            print(f"   Note: Render may be blocking outbound SMTP ports")
-    else:
-        issues.append("⚠️ Email not configured - missing credentials")
+            print(f"❌ [SMTP] Failed: {str(e)[:50]}")
+            continue
     
-    # Print summary
-    if issues:
-        print("\n" + "-" * 40)
-        print("⚠️ EMAIL ISSUES FOUND:")
-        for issue in issues:
-            print(f"   {issue}")
-        print("\n💡 To fix email:")
-        print("   1. Add SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL to .env")
-        print("   2. Use Gmail with App Password (not regular password)")
-        print("   3. Enable 2FA on Gmail and generate App Password")
-        print("-" * 40)
-        return False, "; ".join(issues)
-    else:
-        print("\n✅ All email checks passed!")
-        return True, "Email configured successfully"
-
-# Call this after loading environment variables
-print("🔵 Validating email configuration...")
-email_valid, email_message = validate_email_configuration()
-if not email_valid:
-    print(f"⚠️ {email_message}")
-else:
-    print(f"✅ {email_message}")
-# ==================== ASYNC EMAIL WRAPPER ====================
+    print(f"❌ [SMTP] All attempts failed")
+    return False
 
 def send_email_async(email_func, *args, **kwargs):
-    """Send any email in background thread - prevents worker timeout"""
+    """Send any email in background thread"""
     def send():
         try:
             print(f"📧 Async email started: {email_func.__name__}")
             result = email_func(*args, **kwargs)
             print(f"📧 Async email completed: {email_func.__name__} - {'Success' if result else 'Failed'}")
         except Exception as e:
-            print(f"❌ Async email error in {email_func.__name__}: {e}")
+            print(f"❌ Async email error: {e}")
             logger.error(f"Async email error: {e}")
     
-    # Start email in background thread (daemon=True so it doesn't block shutdown)
     thread = threading.Thread(target=send, daemon=True)
     thread.start()
-    print(f"📧 Email queued in background: {email_func.__name__}")
+    print(f"📧 Email queued: {email_func.__name__}")
     return True
-
 
 # ==================== MAIN EMAIL FUNCTION ====================
 
 def send_email(to_email, subject, plain_body, html_body=None):
-    """Send email using Gmail SMTP with validation"""
+    """Send email using SendGrid (primary) with SMTP fallback"""
     
-    # ========== VALIDATION ==========
-    # Validate recipient email
-    if not to_email or '@' not in to_email or '.' not in to_email:
-        logger.error(f"❌ Invalid recipient email: {to_email}")
+    # Validation
+    if not to_email or '@' not in to_email:
+        logger.error(f"❌ Invalid recipient: {to_email}")
         return False
     
-    # Validate SMTP credentials
-    if not SMTP_USER or not SMTP_PASSWORD:
-        logger.error("❌ SMTP credentials not configured - cannot send email")
-        print(f"   SMTP_USER: {'SET' if SMTP_USER else 'NOT SET'}")
-        print(f"   SMTP_PASSWORD: {'SET' if SMTP_PASSWORD else 'NOT SET'}")
-        return False
-    
-    # Validate sender email
-    if not SMTP_FROM_EMAIL or '@' not in SMTP_FROM_EMAIL:
-        logger.error(f"❌ Invalid sender email: {SMTP_FROM_EMAIL}")
-        return False
-    
-    # Validate subject and body
     if not subject or not plain_body:
-        logger.error("❌ Email missing subject or body")
+        logger.error("❌ Missing subject or body")
         return False
     
-    print(f"📧 ATTEMPTING TO SEND EMAIL to: {to_email}")
-    print(f"📧 Subject: {subject}")
+    print(f"\n📧 SENDING EMAIL")
+    print(f"   To: {to_email}")
+    print(f"   Subject: {subject}")
     
-    # Try different ports in order
-    port_configs = [
-        {'host': 'smtp.gmail.com', 'port': 587, 'use_tls': True, 'use_ssl': False},
-        {'host': 'smtp.gmail.com', 'port': 465, 'use_tls': False, 'use_ssl': True},
-        {'host': 'smtp.gmail.com', 'port': 25, 'use_tls': True, 'use_ssl': False},
-        {'host': 'smtp-relay.gmail.com', 'port': 587, 'use_tls': True, 'use_ssl': False},
-        {'host': 'gmail-smtp-msa.l.google.com', 'port': 465, 'use_tls': False, 'use_ssl': True},
-        {'host': 'smtp.gmail.com', 'port': 2525, 'use_tls': True, 'use_ssl': False},
-    ]
-    
-    # Create message once (same for all attempts)
-    msg = MIMEMultipart()
-    msg['From'] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    
-    # Use HTML body or convert plain text
-    final_html = html_body or plain_body.replace('\n', '<br>')
-    msg.attach(MIMEText(final_html, 'html'))
-    
-    # Try each port configuration
-    for config in port_configs:
-        try:
-            print(f"📧 Trying {config['host']}:{config['port']}...")
-            
-            # Connect with SSL or regular SMTP
-            if config.get('use_ssl'):
-                server = smtplib.SMTP_SSL(config['host'], config['port'], timeout=15)
-            else:
-                server = smtplib.SMTP(config['host'], config['port'], timeout=15)
-            
-            # Start TLS if needed (not for SSL)
-            if config.get('use_tls'):
-                server.starttls()
-            
-            print(f"📧 Logging in as {SMTP_USER}...")
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            print(f"📧 Login successful on {config['host']}:{config['port']}!")
-            
-            server.send_message(msg)
-            server.quit()
-            
-            logger.info(f"✅ Email sent to {to_email} via {config['host']}:{config['port']}")
-            print(f"📧 Message sent via {config['host']}:{config['port']}!")
+    # Try SendGrid first (PRIMARY - WILL WORK)
+    if SENDGRID_CONFIGURED:
+        print("📧 Using SendGrid...")
+        result = send_email_via_sendgrid(to_email, subject, plain_body, html_body)
+        if result:
             return True
-            
-        except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"❌ SMTP Authentication failed: {e}")
-            print(f"❌ AUTH ERROR: {e}")
-            return False  # Wrong password - don't try other ports
-            
-        except smtplib.SMTPException as e:
-            print(f"❌ SMTP error on {config['host']}:{config['port']}: {str(e)[:50]}")
-            continue
-            
-        except Exception as e:
-            print(f"❌ Connection error on {config['host']}:{config['port']}: {str(e)[:50]}")
-            continue
-    
-    # All ports failed
-    logger.error(f"❌ All SMTP attempts failed for {to_email}")
-    print(f"❌ All connection attempts failed!")
-    return False
-# ==================== TEST FUNCTION ====================
-@app.route('/api/debug-email', methods=['GET'])
-def debug_email():
-    """Debug email configuration"""
-    return jsonify({
-        'SMTP_USER': 'SET' if SMTP_USER else 'NOT SET',
-        'SMTP_PASSWORD': 'SET' if SMTP_PASSWORD else 'NOT SET',
-        'SMTP_HOST': SMTP_HOST,
-        'SMTP_PORT': SMTP_PORT,
-        'SMTP_FROM_EMAIL': SMTP_FROM_EMAIL,
-        'EMAIL_CONFIGURED': EMAIL_CONFIGURED,
-        'file_exists': os.path.exists('.env'),
-        'env_vars': {
-            k: v for k, v in os.environ.items() 
-            if k.startswith('SMTP_') or k.startswith('EMAIL_')
-        }
-    })
-@app.route('/api/test-ports-extended', methods=['GET'])
-def test_ports_extended():
-    import socket
-    results = {}
-    
-    # Test many more ports that might be open
-    ports_to_test = [
-        25,      # SMTP classic
-        465,     # SMTP SSL
-        587,     # SMTP TLS
-        2525,    # Alternate SMTP
-        8025,    # Alternate SMTP
-        5870,    # Alternate SMTP
-        26,      # Alternate SMTP
-        2526,    # Alternate SMTP
-        3535,    # Alternate SMTP
-        5555,    # Alternate SMTP
-        6667,    # Alternate SMTP
-        8080,    # HTTP alternate
-        8443,    # HTTPS alternate
-        443,     # HTTPS (should be open)
-        80,      # HTTP (should be open)
-        53,      # DNS
-        123,     # NTP
-        993,     # IMAP SSL
-        995,     # POP3 SSL
-    ]
-    
-    for port in ports_to_test:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex(('smtp.gmail.com', port))
-            sock.close()
-            results[port] = 'OPEN' if result == 0 else 'CLOSED'
-        except Exception as e:
-            results[port] = f'ERROR'
-    
-    # Also test other mail servers
-    other_servers = {
-        'mailgun.org': [25, 587, 465],
-        'sendgrid.net': [25, 587, 2525],
-        'sparkpostmail.com': [25, 587, 2525],
-        'smtp.mailgun.org': [25, 587, 465],
-    }
-    
-    server_results = {}
-    for server, ports in other_servers.items():
-        server_results[server] = {}
-        for port in ports:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2)
-                result = sock.connect_ex((server, port))
-                sock.close()
-                server_results[server][port] = 'OPEN' if result == 0 else 'CLOSED'
-            except:
-                server_results[server][port] = 'ERROR'
-    
-    # Test if ANY outbound connection works at all
-    common_websites = {
-        'google.com': 80,
-        'cloudflare.com': 80,
-        'github.com': 80,
-        'api.sendgrid.com': 443,
-    }
-    
-    web_results = {}
-    for site, port in common_websites.items():
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex((site, port))
-            sock.close()
-            web_results[site] = 'OPEN' if result == 0 else 'CLOSED'
-        except:
-            web_results[site] = 'ERROR'
-    
-    return jsonify({
-        'smtp_ports': results,
-        'other_mail_servers': server_results,
-        'general_web_connectivity': web_results,
-        'conclusion': {
-            'smtp_blocked': all(results.get(p) == 'CLOSED' for p in [25, 465, 587]),
-            'can_reach_web': any(web_results.get(site) == 'OPEN' for site in web_results),
-            'recommendation': 'Use SendGrid API - SMTP is blocked on all ports'
-        }
-    })
-@app.route('/api/test-alternative-smtp', methods=['GET'])
-def test_alternative_smtp():
-    import socket
-    results = {}
-    
-    # Try different SMTP servers (some might be allowed)
-    smtp_servers = {
-        'smtp-relay.gmail.com': [25, 587, 465],
-        'aspmx.l.google.com': [25],
-        'alt1.aspmx.l.google.com': [25],
-        'smtp.mailgun.org': [25, 587, 465],
-        'smtp.sendgrid.net': [25, 587, 2525],
-        'smtp.sparkpostmail.com': [25, 587, 2525],
-        'mail.smtp2go.com': [25, 587, 2525],
-        'smtp.brevo.com': [25, 587, 465],
-    }
-    
-    for server, ports in smtp_servers.items():
-        results[server] = {}
-        for port in ports:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(3)
-                result = sock.connect_ex((server, port))
-                sock.close()
-                results[server][port] = 'OPEN' if result == 0 else 'CLOSED'
-            except:
-                results[server][port] = 'ERROR'
-    
-    return jsonify({
-        'alternative_smtp_servers': results,
-        'note': 'If all show CLOSED, Render blocks ALL outbound SMTP'
-    })
-
-@app.route('/api/test-basic-connectivity', methods=['GET'])
-def test_basic_connectivity():
-    import socket
-    import requests
-    
-    results = {}
-    
-    # Test basic internet connectivity
-    try:
-        response = requests.get('https://www.google.com', timeout=5)
-        results['google_https'] = f'OK (status {response.status_code})'
-    except Exception as e:
-        results['google_https'] = f'FAILED: {str(e)[:50]}'
-    
-    try:
-        response = requests.get('http://www.google.com', timeout=5)
-        results['google_http'] = f'OK (status {response.status_code})'
-    except Exception as e:
-        results['google_http'] = f'FAILED: {str(e)[:50]}'
-    
-    # Test DNS resolution
-    try:
-        import socket
-        ip = socket.gethostbyname('smtp.gmail.com')
-        results['dns_resolution'] = f'OK (smtp.gmail.com = {ip})'
-    except Exception as e:
-        results['dns_resolution'] = f'FAILED: {str(e)[:50]}'
-    
-    return jsonify(results)
-def send_test_email():
-    """Send a test email to verify everything works"""
-    result = send_email(
-        to_email="kingsleyuzokwe523@gmail.com",
-        subject="✅ Veloxtrades Email Test",
-        plain_body="Hello! This is a test email from Veloxtrades. Your email system is working perfectly!",
-        html_body="""
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2 style="color: #10b981;">✅ Email System Working!</h2>
-            <p>Your Veloxtrades email notifications are now configured correctly.</p>
-            <p>You will now receive:</p>
-            <ul>
-                <li>Deposit confirmations</li>
-                <li>Investment approvals</li>
-                <li>Withdrawal updates</li>
-            </ul>
-            <p style="color: #666; font-size: 12px;">Veloxtrades Team</p>
-        </div>
-        """
-    )
-    
-    if result:
-        print("✅ Test email sent successfully to kingsleyuzokwe523@gmail.com")
+        print("⚠️ SendGrid failed, trying SMTP fallback...")
     else:
-        print("❌ Failed to send test email")
+        print("⚠️ SendGrid not configured")
     
-    return result
-@app.route('/api/test-ports', methods=['GET'])
-def test_ports():
-    import socket
-    results = {}
-    
-    ports_to_test = [25, 465, 587, 2525, 8025, 5870]
-    
-    for port in ports_to_test:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex(('smtp.gmail.com', port))
-            sock.close()
-            results[port] = 'OPEN' if result == 0 else 'CLOSED'
-        except Exception as e:
-            results[port] = f'ERROR: {str(e)[:50]}'
-    
-    return jsonify({
-        'ports': results,
-        'message': 'If ports show CLOSED, Render is blocking them'
-    })
-
-@app.route('/api/test-gmail-2525', methods=['GET'])
-def test_gmail_2525():
-    import socket
-    import smtplib
-    
-    results = {}
-    
-    # Test if port 2525 is reachable to Gmail
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        result = sock.connect_ex(('smtp.gmail.com', 2525))
-        sock.close()
-        results['port_2525_reachable'] = 'OPEN' if result == 0 else 'CLOSED'
-    except Exception as e:
-        results['port_2525_reachable'] = f'ERROR: {str(e)[:50]}'
-    
-    # Try actual SMTP connection on port 2525
-    if results['port_2525_reachable'] == 'OPEN':
-        try:
-            server = smtplib.SMTP('smtp.gmail.com', 2525, timeout=10)
-            server.starttls()
-            results['smtp_connection'] = 'Connected successfully'
-            server.quit()
-        except Exception as e:
-            results['smtp_connection'] = f'Failed: {str(e)[:100]}'
+    # Fallback to SMTP
+    if SMTP_CONFIGURED:
+        return send_email_via_smtp(to_email, subject, plain_body, html_body)
     else:
-        results['smtp_connection'] = 'Port not reachable'
-    
-    return jsonify(results)
+        logger.error("❌ No email method available")
+        return False
+
+# ==================== TEST ENDPOINTS ====================
+
+@app.route('/api/test-email', methods=['GET', 'OPTIONS'])
+def test_email():
+    """Test SendGrid email configuration"""
+    try:
+        result = send_email(
+            to_email="kingsleyuzokwe523@gmail.com",
+            subject="✅ Veloxtrades - SendGrid Working!",
+            plain_body="Your email system is working perfectly with SendGrid!",
+            html_body="""
+            <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+                <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+                    <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
+                    <p style="color: white;">SendGrid Active</p>
+                </div>
+                <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 0 0 10px 10px;">
+                    <h2 style="color: #10b981;">✅ Email System Working!</h2>
+                    <p>Your Veloxtrades email notifications are now configured with SendGrid.</p>
+                    <p>You will receive:</p>
+                    <ul>
+                        <li>Deposit confirmations</li>
+                        <li>Investment approvals</li>
+                        <li>Withdrawal updates</li>
+                    </ul>
+                    <p style="color: #666; font-size: 12px; margin-top: 20px;">Veloxtrades Team</p>
+                </div>
+            </div>
+            """
+        )
+        
+        return jsonify({
+            'success': result,
+            'message': 'Test email sent successfully!' if result else 'Failed to send test email',
+            'sendgrid_configured': SENDGRID_CONFIGURED,
+            'smtp_configured': SMTP_CONFIGURED,
+            'from_email': SENDGRID_FROM_EMAIL if SENDGRID_CONFIGURED else SMTP_FROM_EMAIL
+        })
+        
+    except Exception as e:
+        logger.error(f"Test email error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/email-status', methods=['GET', 'OPTIONS'])
+def email_status():
+    """Check email configuration status"""
+    return jsonify({
+        'success': True,
+        'sendgrid': {
+            'configured': SENDGRID_CONFIGURED,
+            'from_email': SENDGRID_FROM_EMAIL if SENDGRID_CONFIGURED else None,
+            'from_name': SENDGRID_FROM_NAME if SENDGRID_CONFIGURED else None
+        },
+        'smtp': {
+            'configured': SMTP_CONFIGURED,
+            'from_email': SMTP_FROM_EMAIL if SMTP_CONFIGURED else None
+        },
+        'primary_method': 'SendGrid' if SENDGRID_CONFIGURED else 'SMTP' if SMTP_CONFIGURED else 'None'
+    })
 # ==================== ALL EMAIL FUNCTIONS ====================
 
 def send_deposit_approved_email(user, amount, crypto, transaction_hash):
