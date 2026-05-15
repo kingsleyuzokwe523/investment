@@ -978,46 +978,6 @@ def send_email(to_email, subject, plain_body, html_body=None):
 
 # ==================== TEST ENDPOINTS ====================
 
-@app.route('/api/test-email', methods=['GET', 'OPTIONS'])
-def test_email():
-    """Test SendGrid email configuration"""
-    try:
-        result = send_email(
-            to_email="kingsleyuzokwe523@gmail.com",
-            subject="✅ Veloxtrades - SendGrid Working!",
-            plain_body="Your email system is working perfectly with SendGrid!",
-            html_body="""
-            <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-                <div style="background: #10b981; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-                    <h1 style="color: white; margin: 0;">VELOXTRADES</h1>
-                    <p style="color: white;">SendGrid Active</p>
-                </div>
-                <div style="padding: 20px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 0 0 10px 10px;">
-                    <h2 style="color: #10b981;">✅ Email System Working!</h2>
-                    <p>Your Veloxtrades email notifications are now configured with SendGrid.</p>
-                    <p>You will receive:</p>
-                    <ul>
-                        <li>Deposit confirmations</li>
-                        <li>Investment approvals</li>
-                        <li>Withdrawal updates</li>
-                    </ul>
-                    <p style="color: #666; font-size: 12px; margin-top: 20px;">Veloxtrades Team</p>
-                </div>
-            </div>
-            """
-        )
-        
-        return jsonify({
-            'success': result,
-            'message': 'Test email sent successfully!' if result else 'Failed to send test email',
-            'sendgrid_configured': SENDGRID_CONFIGURED,
-            'smtp_configured': SMTP_CONFIGURED,
-            'from_email': SENDGRID_FROM_EMAIL if SENDGRID_CONFIGURED else SMTP_FROM_EMAIL
-        })
-        
-    except Exception as e:
-        logger.error(f"Test email error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/email-status', methods=['GET', 'OPTIONS'])
 def email_status():
