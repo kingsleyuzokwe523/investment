@@ -1957,8 +1957,8 @@ def create_withdrawal():
         settings = None
         if settings_collection is not None:
             settings = settings_collection.find_one({})
-        min_withdrawal = settings.get('min_withdrawal', 50) if settings else 50
-        max_withdrawal = settings.get('max_withdrawal', 50000) if settings else 50000
+        min_withdrawal = settings.get('min_withdrawal', 0) if settings else 0
+        max_withdrawal = settings.get('max_withdrawal', 50000000) if settings else 50000000
         withdrawal_fee = settings.get('withdrawal_fee', 0) if settings else 0
         
         if amount < min_withdrawal:
